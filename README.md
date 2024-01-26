@@ -1,6 +1,6 @@
-# Task Scheduler
+# simpleWorflow
 
-Task Scheduler is a Python application that allows you to schedule and execute tasks based on time and dependencies. It can be used to automate various tasks, such as running scripts, sending notifications, and more.
+simpleWOrkflow is a Python application that allows you to schedule and execute tasks based on time and dependencies. It can be used to automate various tasks, such as running scripts, sending notifications, and more.
 
 ## Table of Contents
 
@@ -16,7 +16,7 @@ Task Scheduler is a Python application that allows you to schedule and execute t
 
 ## Overview
 
-Task Scheduler is designed to simplify the process of automating tasks in a scheduled and organized manner. It reads task configurations from a YAML file, checks the scheduled time, and executes tasks accordingly. You can set up dependencies between tasks, receive email notifications upon completion, and track task execution status.
+simpleWorkflow is designed to simplify the process of automating tasks in a scheduled and organized manner. It reads task configurations from a YAML file, checks the scheduled time, and executes tasks accordingly. You can set up dependencies between tasks, receive email notifications upon completion, and track task execution status.
 
 ## Features
 
@@ -37,7 +37,7 @@ Task Scheduler is designed to simplify the process of automating tasks in a sche
 1. Clone the repository:
 
    ```bash
-   git clone https://github.com/yourusername/task-scheduler.git
+   git clone https://github.com/joaogerd/simpleWorkflow.git
    cd task-scheduler
    ```
 2. Install the required dependencies:
@@ -52,7 +52,7 @@ Task Scheduler is designed to simplify the process of automating tasks in a sche
 
 2. Customize the task configurations in the YAML file, specifying task names, execution times, dependencies, and more.
 
-3. Configure your email settings in the `email_config` dictionary in `runCycle.py` to enable email notifications.
+3. Configure your email settings in the `email_config` dictionary in `run.py` to enable email notifications.
 
 ## Usage
 
@@ -60,14 +60,14 @@ Task Scheduler is designed to simplify the process of automating tasks in a sche
 
 2. Customize the task configurations in the YAML file, specifying task names, execution times, dependencies, and more.
 
-3. Configure your email settings in the `email_config` dictionary in `runCycle.py` to enable email notifications.
+3. Configure your email settings in the `email_config` dictionary in `run.py` to enable email notifications.
 
-4. Modify the `runCycle.py` script to fit your specific requirements, including task execution functions and email settings.
+4. Modify the `run.py` script to fit your specific requirements, including task execution functions and email settings.
 
-5. Run the `runCycle.py` script to start the task scheduler:
+5. Run the `run.py` script to start the task scheduler:
 
    ```bash
-   python runCycle.py
+   python run.py script_config.yaml
    ```
 
 6. The script will continuously check the current time and execute tasks that match the scheduled time, considering task dependencies and tracking task statuses.
