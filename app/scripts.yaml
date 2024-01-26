@@ -1,0 +1,12 @@
+- run: /bin/bash script0.sh 0 0
+- while:
+    condition: {from: 1, to: 10, increment: 1}
+    do:
+      - run: /bin/bash script1.sh 1 1
+      - run: /bin/bash script2.sh 2 2
+      - while:
+          condition: {from: 20, to: 20, increment: 10}
+          do:
+            - run: /bin/bash script2.1.sh 2 1
+            - run: /bin/bash script2.2.sh 2 2
+

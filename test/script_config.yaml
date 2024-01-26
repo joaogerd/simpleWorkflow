@@ -1,0 +1,47 @@
+- task:
+    name: Task1
+    block:
+      - while:
+          condition: {from: today, to: today+1d, increment: 6h}
+          do:
+            - run: /bin/bash script1.sh 1 %Y%m%d%H
+            - run: /bin/bash script2.sh 2 %Y%m%d%H
+            - run: /bin/bash script3.sh 3 %Y%m%d%H
+            - while:
+                condition: {from: today, to: today+1d, increment: 3h}
+                do:
+                  - run: /bin/bash script4.sh 4 %Y%m%d%H
+                  - run: /bin/bash script5.sh 5 %Y%m%d%H
+                  - run: /bin/bash script6.sh 6 %Y%m%d%H
+                  - run: /bin/bash script7.sh 7 %Y%m%d%H
+
+- task:
+    name: Task2
+    block:
+      - while:
+          condition: {from: today, to: today+1d, increment: 6h}
+          do:
+            - run: /bin/bash script8.sh 8 %Y%m%d%H
+            - run: /bin/bash script9.sh 9 %Y%m%d%H
+            - run: /bin/bash script10.sh 10 %Y%m%d%H
+    depend_on: Task1
+
+- task:
+    name: Task3
+    block:
+      - run: /bin/bash script11.sh 11 0
+    
+- task:
+    name: Task4
+    block:
+      - run: /bin/bash script11.sh 11 0
+    subtasks:
+      - name: Subtask1
+        block:
+          - run: /bin/bash sub_script1.sh 1 %Y%m%d%H
+        depend_on: Task3
+      - name: Subtask2
+        block:
+          - run: /bin/bash sub_script2.sh 2 %Y%m%d%H
+        depend_on: Subtask1
+
