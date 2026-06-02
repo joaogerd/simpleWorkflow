@@ -1,124 +1,121 @@
-# Task Scheduler
+# simpleWorkflow
 
-Task Scheduler is a Python application that allows you to schedule and execute tasks based on time and dependencies. It can be used to automate various tasks, such as running scripts, sending notifications, and more.
+simpleWorkflow is a lightweight YAML workflow runner for scientific pipelines.
 
-## Table of Contents
+The goal is to provide a simple, fast and practical layer to organize CPTEC/INPE scientific workflows before they become large shell scripts that are difficult to maintain.
 
-- [Overview](#overview)
-- [Features](#features)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Usage](#usage)
-- [Contributing](#contributing)
-- [License](#license)
-- [Contact](#contact)
+This project is not intended to replace Cylc or ecFlow in full operational environments. It is intended to cover the middle ground between ad-hoc shell scripts and large workflow systems.
 
-## Overview
+## MVP features
 
-Task Scheduler is designed to simplify the process of automating tasks in a scheduled and organized manner. It reads task configurations from a YAML file, checks the scheduled time, and executes tasks accordingly. You can set up dependencies between tasks, receive email notifications upon completion, and track task execution status.
-
-## Features
-
-- Schedule tasks based on time and dependencies.
-- Execute scripts and commands.
-- Email notifications on task completion.
-- Track task execution status.
-- Supports YAML configuration for task definitions.
-- Easy-to-use and customizable.
-
-## Requirements
-
-- Python 3.6 or higher
-- `pip` (Python package manager)
+- YAML workflow definition.
+- Dependency-aware task ordering.
+- Local shell execution.
+- CLI commands for planning, running, checking status and resetting state.
+- Persistent SQLite state for simple restart support.
+- Per-task stdout/stderr logs.
+- Context variables rendered into task commands.
+- Examples inspired by MONAN-JEDI and SMNA workflows.
 
 ## Installation
 
-1. Clone the repository:
+```bash
+git clone https://github.com/joaogerd/simpleWorkflow.git
+cd simpleWorkflow
+python -m pip install -e .
+```
 
-   ```bash
-   git clone https://github.com/yourusername/task-scheduler.git
-   cd task-scheduler
-   ```
-2. Install the required dependencies:
+## Quick start
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+Show the execution plan:
 
-## Configuration
+```bash
+simpleworkflow plan examples/hello.yaml
+```
 
-1. Create a YAML file (`script_config.yaml`) to define your tasks. You can use the provided `scripts.yaml` as a template.
+Run the example workflow:
 
-2. Customize the task configurations in the YAML file, specifying task names, execution times, dependencies, and more.
+```bash
+simpleworkflow run examples/hello.yaml
+```
 
-3. Configure your email settings in the `email_config` dictionary in `runCycle.py` to enable email notifications.
+Check task status:
 
-## Usage
+```bash
+simpleworkflow status examples/hello.yaml
+```
 
-1. Create a YAML file (`script_config.yaml`) to define your tasks. You can use the provided `scripts.yaml` as a template.
+Reset workflow state:
 
-2. Customize the task configurations in the YAML file, specifying task names, execution times, dependencies, and more.
+```bash
+simpleworkflow reset examples/hello.yaml
+```
 
-3. Configure your email settings in the `email_config` dictionary in `runCycle.py` to enable email notifications.
+Force a full rerun:
 
-4. Modify the `runCycle.py` script to fit your specific requirements, including task execution functions and email settings.
+```bash
+simpleworkflow run examples/hello.yaml --force
+```
 
-5. Run the `runCycle.py` script to start the task scheduler:
+Preview commands without executing them:
 
-   ```bash
-   python runCycle.py
-   ```
+```bash
+simpleworkflow run examples/hello.yaml --dry-run
+```
 
-6. The script will continuously check the current time and execute tasks that match the scheduled time, considering task dependencies and tracking task statuses.
+## Workflow format
 
-7. You will receive email notifications upon successful task completion or failures, depending on your email configuration.
+A minimal workflow looks like this:
 
-8. Monitor the execution and status of your tasks in the console output and email notifications.
+```yaml
+workflow:
+  name: hello_workflow
 
-9. Customize and expand the functionality as needed for your specific workflow.
+context:
+  message: "simpleWorkflow MVP is running"
 
-10. Enjoy efficient task scheduling and automation with the RunCycle framework!
+tasks:
+  - name: prepare
+    run: "echo Preparing workflow"
 
-## Example Task Configuration (script_config.yaml):
+  - name: run
+    run: "echo {message}"
+    depends_on: [prepare]
+```
 
-    ```yaml
-    - task:
-        name: Task1
-        time:
-          - "08:00"
-          - "12:00"
-          - "16:00"
-        block:
-          - run: /bin/bash script1.sh arg1 arg2
-          - run: /bin/bash script2.sh arg1 arg2
-          - run: /bin/bash script3.sh arg1 arg2
-    
-    - task:
-        name: Task2
-        cron_expression: "0 3 * * *"
-        block:
-          - run: /bin/bash script4.sh arg1 arg2
-    
-    - task:
-        name: Task3
-        time:
-          - "09:00"
-        block:
-          - run: /bin/bash script5.sh arg1 arg2
-        depend_on: Task1
-    ```
+See [`docs/workflow_format.md`](docs/workflow_format.md) for details.
 
-## Contributing
-Contributions are welcome! If you want to contribute to this project, please follow the guidelines in the CONTRIBUTING file.
+## State and logs
+
+By default, runtime files are written under `.simpleworkflow/`:
+
+```text
+.simpleworkflow/
+  state.sqlite3
+  logs/<workflow-name>/<task>.out
+  logs/<workflow-name>/<task>.err
+```
+
+Successful tasks are skipped in later runs unless `--force` is used.
+
+## Examples
+
+- `examples/hello.yaml`: minimal local workflow.
+- `examples/monan_jedi_3dvar.yaml`: MONAN-JEDI 3DVar-FGAT tutorial sequence.
+- `examples/smna_gsi_bam.yaml`: SMNA-style OBSMAKE -> GSI -> BAM -> diagnostics sequence.
+
+## Roadmap
+
+See [`docs/roadmap.md`](docs/roadmap.md).
+
+## Development
+
+Run tests with:
+
+```bash
+python -m pytest
+```
 
 ## License
-This project is licensed under the MIT License - see the LICENSE file for details.
 
-## Contact
-For questions or feedback, you can contact the project maintainer:
-
-Name: Joao Gerd
-Email: joao.gerd@inpe.br
-GitHub: github.com/joaogerd
-
+This project is licensed under the MIT License.
