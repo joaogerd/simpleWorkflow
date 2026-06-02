@@ -1,0 +1,17 @@
+workflow:
+  name: hello_workflow
+
+context:
+  message: "simpleWorkflow MVP is running"
+
+tasks:
+  - name: prepare
+    run: "echo Preparing workflow"
+
+  - name: run
+    run: "echo {message}"
+    depends_on: [prepare]
+
+  - name: finish
+    run: "echo Workflow finished"
+    depends_on: [run]
