@@ -1,0 +1,15 @@
+[project]
+name = "simpleworkflow"
+version = "0.1.0"
+description = "Lightweight YAML workflow runner for scientific pipelines."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "PyYAML>=6.0"
+]
+
+[project.scripts]
+simpleworkflow = "simpleworkflow.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
