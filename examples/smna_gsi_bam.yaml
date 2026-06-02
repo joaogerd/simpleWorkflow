@@ -1,0 +1,27 @@
+workflow:
+  name: smna_gsi_bam_cycle
+
+context:
+  cycle: "2025010100"
+  model_trunc: "299"
+  model_levels: "64"
+  model_prefix: "SMT"
+  gsi_mpi_tasks: "144"
+  model_mpi_tasks: "64"
+  forecast_hours: "09"
+
+tasks:
+  - name: obsmake
+    run: "bash SMG/run/run_obsmake.sh {cycle}"
+
+  - name: gsi
+    run: "bash SMG/run/run_gsi.sh {cycle} {model_trunc} {gsi_mpi_tasks}"
+    depends_on: [obsmake]
+
+  - name: bam
+    run: "bash SMG/run/run_bam.sh {cycle} {model_trunc} {model_levels} {model_prefix} {model_mpi_tasks} {forecast_hours}"
+    depends_on: [gsi]
+
+  - name: diagnostics
+    run: "bash SMG/run/run_diagnostics.sh {cycle}"
+    depends_on: [bam]
