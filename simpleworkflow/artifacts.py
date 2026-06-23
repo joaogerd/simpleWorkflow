@@ -18,6 +18,10 @@ class ResolvedArtifacts:
         """Return required inputs that do not exist at preflight time."""
         return tuple(path for path in self.required_inputs if not path.exists())
 
+    def missing_required_outputs(self) -> tuple[Path, ...]:
+        """Return required outputs that do not exist after a task completes."""
+        return tuple(path for path in self.required_outputs if not path.exists())
+
 
 def _render_path(value: str, context: dict[str, Any], source_dir: Path) -> Path:
     rendered = Path(value.format(**context))

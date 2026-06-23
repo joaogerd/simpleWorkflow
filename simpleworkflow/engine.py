@@ -9,6 +9,7 @@ from .executor import LocalExecutor
 from .state import WorkflowState
 
 INVALID_INPUT_EXIT_CODE = 2
+INVALID_OUTPUT_EXIT_CODE = 3
 
 
 def render_template(text: str, context: dict[str, Any]) -> str:
@@ -95,6 +96,10 @@ class WorkflowEngine:
     def _format_missing_inputs(artifacts: ResolvedArtifacts) -> str:
         return ", ".join(str(path) for path in artifacts.missing_required_inputs())
 
+    @staticmethod
+    def _format_missing_outputs(artifacts: ResolvedArtifacts) -> str:
+        return ", ".join(str(path) for path in artifacts.missing_required_outputs())
+
     def run(self) -> int:
         """Execute pending workflow tasks in dependency order."""
         task_map = {task["name"]: task for task in self.tasks}
@@ -122,8 +127,12 @@ class WorkflowEngine:
                 return INVALID_INPUT_EXIT_CODE
 
             if not self.force and self.state.get_status(self.workflow_name, task_name) == "success":
-                print(f"[SKIP] {task_name}: already successful")
-                continue
+                missing_outputs = artifacts.missing_required_outputs()
+                if not missing_outputs:
+                    print(f"[SKIP] {task_name}: already successful")
+                    continue
+                message = self._format_missing_outputs(artifacts)
+                print(f"[RERUN] {task_name}: required output(s) missing: {message}")
 
             argv = render_argv(task["argv"], self.context)
             cwd = self._task_cwd(task)
@@ -139,6 +148,18 @@ class WorkflowEngine:
             return_code = self.executor.run(task_name, argv, cwd=cwd, env=env)
 
             if return_code == 0:
+                missing_outputs = artifacts.missing_required_outputs()
+                if missing_outputs:
+                    message = self._format_missing_outputs(artifacts)
+                    print(f"[FAIL] {task_name}: missing required output(s): {message}")
+                    self.state.set_status(
+                        self.workflow_name,
+                        task_name,
+                        "invalid-output",
+                        INVALID_OUTPUT_EXIT_CODE,
+                    )
+                    exit_code = INVALID_OUTPUT_EXIT_CODE
+                    break
                 print(f"[OK] {task_name}")
                 self.state.set_status(self.workflow_name, task_name, "success", return_code)
             else:
