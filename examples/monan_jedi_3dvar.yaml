@@ -1,0 +1,46 @@
+workflow:
+  name: monan_jedi_3dvar_tutorial
+
+context:
+  site_env: configs/sites/jaci/site.env
+  render_context: configs/experiments/3dvar_fgat/render_context.single_time_3dvar.yaml
+
+tasks:
+  - name: smoke_check
+    run: "bash tests/smoke_check.sh"
+
+  - name: load_env
+    run: "bash scripts/run/3dvar_step.sh load-env --site-env {site_env} --render-context {render_context}"
+    depends_on: [smoke_check]
+
+  - name: validate_background
+    run: "bash scripts/run/3dvar_step.sh validate-background --site-env {site_env} --render-context {render_context}"
+    depends_on: [load_env]
+
+  - name: convert_obs
+    run: "bash scripts/run/3dvar_step.sh convert-obs --site-env {site_env} --render-context {render_context}"
+    depends_on: [validate_background]
+
+  - name: validate_obs
+    run: "bash scripts/run/3dvar_step.sh validate-obs --site-env {site_env} --render-context {render_context}"
+    depends_on: [convert_obs]
+
+  - name: render_yaml
+    run: "bash scripts/run/3dvar_step.sh render-yaml --site-env {site_env} --render-context {render_context}"
+    depends_on: [validate_obs]
+
+  - name: inspect_yaml
+    run: "bash scripts/run/3dvar_step.sh inspect-yaml --site-env {site_env} --render-context {render_context}"
+    depends_on: [render_yaml]
+
+  - name: validate_config
+    run: "bash scripts/run/3dvar_step.sh validate-config --site-env {site_env} --render-context {render_context}"
+    depends_on: [inspect_yaml]
+
+  - name: prepare_runtime
+    run: "bash scripts/run/3dvar_step.sh prepare-runtime --site-env {site_env} --render-context {render_context}"
+    depends_on: [validate_config]
+
+  - name: render_pbs
+    run: "bash scripts/run/3dvar_step.sh render-pbs --site-env {site_env} --render-context {render_context}"
+    depends_on: [prepare_runtime]

@@ -1,0 +1,27 @@
+workflow:
+  name: hello_workflow
+
+context:
+  python: python
+  message: simpleWorkflow Python task is running
+
+tasks:
+  - name: prepare
+    argv:
+      - '{python}'
+      - '-c'
+      - "print('Preparing workflow')"
+
+  - name: run
+    argv:
+      - '{python}'
+      - '-c'
+      - "print('{message}')"
+    depends_on: [prepare]
+
+  - name: finish
+    argv:
+      - '{python}'
+      - '-c'
+      - "print('Workflow finished')"
+    depends_on: [run]

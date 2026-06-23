@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# simpleWorkflow runtime
+.simpleworkflow/
+.test-simpleworkflow/
+
+# Logs
+*.log
+
+# Artefatos locais de empacotamento e patches temporários
+simpleworkflow.egg-info/
+simpleworkflow-python-task-contract-followup*.patch
