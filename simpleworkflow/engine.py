@@ -170,6 +170,7 @@ class WorkflowEngine:
         """Execute pending workflow tasks in dependency order."""
         recorder: RunRecorder | None = None
         task_map = {task["name"]: task for task in self.tasks}
+        planned_outputs_by_task: dict[str, set[Path]] = {}
         exit_code = 0
 
         for task_name in self.plan():
@@ -180,7 +181,24 @@ class WorkflowEngine:
                 continue
 
             artifacts = self._task_artifacts(task)
+            dependencies = task.get("depends_on", []) or []
+            if isinstance(dependencies, str):
+                dependencies = [dependencies]
+
+            planned_dependency_outputs: set[Path] = set()
+            for dependency in dependencies:
+                planned_dependency_outputs.update(
+                    planned_outputs_by_task.get(dependency, set())
+                )
+
             missing_inputs = artifacts.missing_required_inputs()
+            if self.dry_run:
+                missing_inputs = tuple(
+                    path
+                    for path in missing_inputs
+                    if path not in planned_dependency_outputs
+                )
+
             if missing_inputs:
                 message = self._format_missing_inputs(artifacts)
                 print(f"[FAIL] {task_name}: missing required input(s): {message}")
@@ -196,10 +214,18 @@ class WorkflowEngine:
             argv = render_argv(task["argv"], self.context)
             cwd = self._task_cwd(task)
             env = self._task_env(task)
+            rendered = shlex.join(argv)
+
+            if self.dry_run:
+                print(f"[PLAN] {task_name}: {rendered}")
+                planned_outputs_by_task[task_name] = (
+                    planned_dependency_outputs | set(artifacts.required_outputs)
+                )
+                continue
+
             signature = self._task_signature(
                 task_name, task, argv, cwd, env, artifacts
             )
-            rendered = shlex.join(argv)
 
             previous = self.state.get_task_state(self.workflow_name, task_name)
             if not self.force and previous and previous.status == "success":
@@ -212,10 +238,6 @@ class WorkflowEngine:
                     print(f"[RERUN] {task_name}: required output(s) missing: {message}")
                 else:
                     print(f"[RERUN] {task_name}: task signature changed")
-
-            if self.dry_run:
-                print(f"[PLAN] {task_name}: {rendered}")
-                continue
 
             print(f"[RUN] {task_name}: {rendered}")
             if recorder is None:
