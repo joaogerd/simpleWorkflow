@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -8,12 +9,17 @@ from .state import WorkflowState
 
 
 def render_template(text: str, context: dict[str, Any]) -> str:
-    """Render a command string using Python format placeholders."""
+    """Render one string from the workflow context."""
     return text.format(**context)
 
 
+def render_argv(argv: list[str], context: dict[str, Any]) -> list[str]:
+    """Render task arguments while preserving their boundary semantics."""
+    return [render_template(argument, context) for argument in argv]
+
+
 class WorkflowEngine:
-    """Small dependency-aware workflow engine."""
+    """Small dependency-aware workflow engine for explicit program arguments."""
 
     def __init__(
         self,
@@ -28,6 +34,9 @@ class WorkflowEngine:
         self.tasks = config.get("tasks", [])
         self.force = force
         self.dry_run = dry_run
+        self.source_dir = Path(
+            config.get("__simpleworkflow__", {}).get("source_dir", Path.cwd())
+        )
 
         self.workdir = Path(workdir)
         self.log_dir = self.workdir / "logs" / self.workflow_name
@@ -63,6 +72,19 @@ class WorkflowEngine:
 
         return ordered
 
+    def _task_cwd(self, task: dict[str, Any]) -> Path | None:
+        raw_cwd = task.get("cwd")
+        if raw_cwd is None:
+            return None
+        path = Path(render_template(raw_cwd, self.context))
+        return path if path.is_absolute() else self.source_dir / path
+
+    def _task_env(self, task: dict[str, Any]) -> dict[str, str]:
+        return {
+            key: render_template(value, self.context)
+            for key, value in task.get("env", {}).items()
+        }
+
     def run(self) -> int:
         """Execute pending workflow tasks in dependency order."""
         task_map = {task["name"]: task for task in self.tasks}
@@ -70,9 +92,7 @@ class WorkflowEngine:
 
         for task_name in self.plan():
             task = task_map[task_name]
-            enabled = task.get("enabled", True)
-
-            if enabled is False:
+            if task.get("enabled", True) is False:
                 print(f"[SKIP] {task_name}: disabled")
                 self.state.set_status(self.workflow_name, task_name, "skipped", 0)
                 continue
@@ -81,15 +101,18 @@ class WorkflowEngine:
                 print(f"[SKIP] {task_name}: already successful")
                 continue
 
-            command = render_template(task["run"], self.context)
+            argv = render_argv(task["argv"], self.context)
+            cwd = self._task_cwd(task)
+            env = self._task_env(task)
+            rendered = shlex.join(argv)
 
             if self.dry_run:
-                print(f"[PLAN] {task_name}: {command}")
+                print(f"[PLAN] {task_name}: {rendered}")
                 continue
 
-            print(f"[RUN] {task_name}: {command}")
+            print(f"[RUN] {task_name}: {rendered}")
             self.state.set_status(self.workflow_name, task_name, "running", None)
-            return_code = self.executor.run(task_name, command)
+            return_code = self.executor.run(task_name, argv, cwd=cwd, env=env)
 
             if return_code == 0:
                 print(f"[OK] {task_name}")
