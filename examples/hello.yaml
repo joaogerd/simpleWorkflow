@@ -2,16 +2,26 @@ workflow:
   name: hello_workflow
 
 context:
-  message: "simpleWorkflow MVP is running"
+  python: python
+  message: simpleWorkflow Python task is running
 
 tasks:
   - name: prepare
-    run: "echo Preparing workflow"
+    argv:
+      - '{python}'
+      - '-c'
+      - "print('Preparing workflow')"
 
   - name: run
-    run: "echo {message}"
+    argv:
+      - '{python}'
+      - '-c'
+      - "print('{message}')"
     depends_on: [prepare]
 
   - name: finish
-    run: "echo Workflow finished"
+    argv:
+      - '{python}'
+      - '-c'
+      - "print('Workflow finished')"
     depends_on: [run]
