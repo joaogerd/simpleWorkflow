@@ -11,3 +11,7 @@ venv/
 
 # Logs
 *.log
+
+# Artefatos locais de empacotamento e patches temporários
+simpleworkflow.egg-info/
+simpleworkflow-python-task-contract-followup*.patch
