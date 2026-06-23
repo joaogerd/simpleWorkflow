@@ -4,8 +4,11 @@ import shlex
 from pathlib import Path
 from typing import Any
 
+from .artifacts import ResolvedArtifacts, resolve_task_artifacts
 from .executor import LocalExecutor
 from .state import WorkflowState
+
+INVALID_INPUT_EXIT_CODE = 2
 
 
 def render_template(text: str, context: dict[str, Any]) -> str:
@@ -36,7 +39,7 @@ class WorkflowEngine:
         self.dry_run = dry_run
         self.source_dir = Path(
             config.get("__simpleworkflow__", {}).get("source_dir", Path.cwd())
-        )
+        ).resolve()
 
         self.workdir = Path(workdir)
         self.log_dir = self.workdir / "logs" / self.workflow_name
@@ -85,6 +88,13 @@ class WorkflowEngine:
             for key, value in task.get("env", {}).items()
         }
 
+    def _task_artifacts(self, task: dict[str, Any]) -> ResolvedArtifacts:
+        return resolve_task_artifacts(task, self.context, self.source_dir)
+
+    @staticmethod
+    def _format_missing_inputs(artifacts: ResolvedArtifacts) -> str:
+        return ", ".join(str(path) for path in artifacts.missing_required_inputs())
+
     def run(self) -> int:
         """Execute pending workflow tasks in dependency order."""
         task_map = {task["name"]: task for task in self.tasks}
@@ -96,6 +106,20 @@ class WorkflowEngine:
                 print(f"[SKIP] {task_name}: disabled")
                 self.state.set_status(self.workflow_name, task_name, "skipped", 0)
                 continue
+
+            artifacts = self._task_artifacts(task)
+            missing_inputs = artifacts.missing_required_inputs()
+            if missing_inputs:
+                message = self._format_missing_inputs(artifacts)
+                print(f"[FAIL] {task_name}: missing required input(s): {message}")
+                if not self.dry_run:
+                    self.state.set_status(
+                        self.workflow_name,
+                        task_name,
+                        "invalid-input",
+                        INVALID_INPUT_EXIT_CODE,
+                    )
+                return INVALID_INPUT_EXIT_CODE
 
             if not self.force and self.state.get_status(self.workflow_name, task_name) == "success":
                 print(f"[SKIP] {task_name}: already successful")

@@ -14,7 +14,7 @@ The former `run` field is deliberately unsupported. A single command string woul
 
 ## Artifact contract
 
-Tasks may declare scientific input and output artifacts. In this first stage the contract is validated at load time only; execution and skip semantics are unchanged.
+Tasks may declare scientific input and output artifacts. Required inputs are rendered and checked before a task is run or reused. A missing required input marks the task as `invalid-input` and stops the workflow. Optional inputs are rendered and glob-expanded, but zero matches are allowed. Required outputs are rendered now; their post-execution validation is added in the next stage.
 
 ```yaml
 tasks:
@@ -38,7 +38,7 @@ tasks:
     input_fingerprint: metadata
 ```
 
-`inputs.required` and `outputs.required` contain explicit artifact paths; glob patterns are not accepted there. `inputs.optional` accepts optional paths or glob patterns and may match zero files.
+`inputs.required` and `outputs.required` contain explicit artifact paths; glob patterns are not accepted there. `inputs.optional` accepts optional paths or glob patterns and may match zero files. Relative artifact paths are resolved from the directory containing the workflow YAML file.
 
 `input_fingerprint` controls how inputs will be fingerprinted when provenance-aware reuse is enabled. Supported values are `metadata` and `sha256`. The planned default is `metadata`, using path, size and modification time.
 
