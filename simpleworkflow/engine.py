@@ -6,6 +6,7 @@ from typing import Any
 
 from .artifacts import ResolvedArtifacts, resolve_task_artifacts
 from .executor import LocalExecutor
+from .signature import TaskSignature, compute_task_signature
 from .state import WorkflowState
 
 INVALID_INPUT_EXIT_CODE = 2
@@ -92,6 +93,29 @@ class WorkflowEngine:
     def _task_artifacts(self, task: dict[str, Any]) -> ResolvedArtifacts:
         return resolve_task_artifacts(task, self.context, self.source_dir)
 
+    def _workflow_path(self) -> Path | None:
+        source_path = self.config.get("__simpleworkflow__", {}).get("source_path")
+        return Path(source_path).resolve(strict=False) if source_path else None
+
+    def _task_signature(
+        self,
+        task_name: str,
+        task: dict[str, Any],
+        argv: list[str],
+        cwd: Path | None,
+        env: dict[str, str],
+        artifacts: ResolvedArtifacts,
+    ) -> TaskSignature:
+        return compute_task_signature(
+            workflow_path=self._workflow_path(),
+            task_name=task_name,
+            argv=argv,
+            cwd=cwd,
+            env=env,
+            artifacts=artifacts,
+            fingerprint_mode=task.get("input_fingerprint", "metadata"),
+        )
+
     @staticmethod
     def _format_missing_inputs(artifacts: ResolvedArtifacts) -> str:
         return ", ".join(str(path) for path in artifacts.missing_required_inputs())
@@ -126,25 +150,34 @@ class WorkflowEngine:
                     )
                 return INVALID_INPUT_EXIT_CODE
 
-            if not self.force and self.state.get_status(self.workflow_name, task_name) == "success":
-                missing_outputs = artifacts.missing_required_outputs()
-                if not missing_outputs:
-                    print(f"[SKIP] {task_name}: already successful")
-                    continue
-                message = self._format_missing_outputs(artifacts)
-                print(f"[RERUN] {task_name}: required output(s) missing: {message}")
-
             argv = render_argv(task["argv"], self.context)
             cwd = self._task_cwd(task)
             env = self._task_env(task)
+            signature = self._task_signature(
+                task_name, task, argv, cwd, env, artifacts
+            )
             rendered = shlex.join(argv)
+
+            previous = self.state.get_task_state(self.workflow_name, task_name)
+            if not self.force and previous and previous.status == "success":
+                missing_outputs = artifacts.missing_required_outputs()
+                if previous.signature == signature.value and not missing_outputs:
+                    print(f"[SKIP] {task_name}: already successful")
+                    continue
+                if missing_outputs:
+                    message = self._format_missing_outputs(artifacts)
+                    print(f"[RERUN] {task_name}: required output(s) missing: {message}")
+                else:
+                    print(f"[RERUN] {task_name}: task signature changed")
 
             if self.dry_run:
                 print(f"[PLAN] {task_name}: {rendered}")
                 continue
 
             print(f"[RUN] {task_name}: {rendered}")
-            self.state.set_status(self.workflow_name, task_name, "running", None)
+            self.state.set_status(
+                self.workflow_name, task_name, "running", None, signature.value
+            )
             return_code = self.executor.run(task_name, argv, cwd=cwd, env=env)
 
             if return_code == 0:
@@ -157,14 +190,19 @@ class WorkflowEngine:
                         task_name,
                         "invalid-output",
                         INVALID_OUTPUT_EXIT_CODE,
+                        signature.value,
                     )
                     exit_code = INVALID_OUTPUT_EXIT_CODE
                     break
                 print(f"[OK] {task_name}")
-                self.state.set_status(self.workflow_name, task_name, "success", return_code)
+                self.state.set_status(
+                    self.workflow_name, task_name, "success", return_code, signature.value
+                )
             else:
                 print(f"[FAIL] {task_name}: return code {return_code}")
-                self.state.set_status(self.workflow_name, task_name, "failed", return_code)
+                self.state.set_status(
+                    self.workflow_name, task_name, "failed", return_code, signature.value
+                )
                 exit_code = return_code
                 break
 

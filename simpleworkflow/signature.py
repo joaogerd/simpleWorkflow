@@ -68,7 +68,10 @@ def _fingerprint_paths(paths: tuple[Path, ...], mode: str) -> list[dict[str, Any
     return [fingerprint_artifact(path, mode) for path in paths]
 
 
-def _workflow_digest(workflow_path: Path) -> str:
+def _workflow_digest(workflow_path: Path | None) -> str | None:
+    """Return the workflow file digest, or None for an in-memory configuration."""
+    if workflow_path is None:
+        return None
     resolved = workflow_path.resolve(strict=False)
     if not resolved.is_file():
         raise FileNotFoundError(f"Workflow file not found for signature: {resolved}")
@@ -77,7 +80,7 @@ def _workflow_digest(workflow_path: Path) -> str:
 
 def compute_task_signature(
     *,
-    workflow_path: Path,
+    workflow_path: Path | None,
     task_name: str,
     argv: list[str],
     cwd: Path | None,

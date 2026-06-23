@@ -1,8 +1,18 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+
+
+@dataclass(frozen=True)
+class TaskState:
+    """Latest persisted result for one workflow task."""
+
+    status: str
+    return_code: int | None
+    signature: str | None
 
 
 class WorkflowState:
@@ -22,20 +32,35 @@ class WorkflowState:
                 task TEXT NOT NULL,
                 status TEXT NOT NULL,
                 return_code INTEGER,
+                signature TEXT,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (workflow, task)
             )
             """
         )
+        columns = {
+            row[1]
+            for row in self.connection.execute("PRAGMA table_info(task_state)")
+        }
+        if "signature" not in columns:
+            self.connection.execute("ALTER TABLE task_state ADD COLUMN signature TEXT")
         self.connection.commit()
 
-    def get_status(self, workflow: str, task: str) -> str | None:
+    def get_task_state(self, workflow: str, task: str) -> TaskState | None:
         cursor = self.connection.execute(
-            "SELECT status FROM task_state WHERE workflow = ? AND task = ?",
+            """
+            SELECT status, return_code, signature
+            FROM task_state
+            WHERE workflow = ? AND task = ?
+            """,
             (workflow, task),
         )
         row = cursor.fetchone()
-        return row[0] if row else None
+        return TaskState(*row) if row else None
+
+    def get_status(self, workflow: str, task: str) -> str | None:
+        task_state = self.get_task_state(workflow, task)
+        return task_state.status if task_state else None
 
     def set_status(
         self,
@@ -43,18 +68,22 @@ class WorkflowState:
         task: str,
         status: str,
         return_code: int | None = None,
+        signature: str | None = None,
     ) -> None:
         self.connection.execute(
             """
-            INSERT INTO task_state (workflow, task, status, return_code, updated_at)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO task_state (
+                workflow, task, status, return_code, signature, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(workflow, task)
             DO UPDATE SET
                 status = excluded.status,
                 return_code = excluded.return_code,
+                signature = excluded.signature,
                 updated_at = CURRENT_TIMESTAMP
             """,
-            (workflow, task, status, return_code),
+            (workflow, task, status, return_code, signature),
         )
         self.connection.commit()
 
