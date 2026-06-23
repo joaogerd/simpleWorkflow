@@ -1,21 +1,18 @@
 # simpleWorkflow
 
-simpleWorkflow is a lightweight YAML workflow runner for scientific pipelines.
+simpleWorkflow is a lightweight YAML workflow runner for scientific pipelines. It provides dependency ordering, persistent task state and per-task logs without requiring a full workflow platform.
 
-The goal is to provide a simple, fast and practical layer to organize CPTEC/INPE scientific workflows before they become large shell scripts that are difficult to maintain.
-
-This project is not intended to replace Cylc or ecFlow in full operational environments. It is intended to cover the middle ground between ad-hoc shell scripts and large workflow systems.
+It is not intended to replace Cylc or ecFlow in large operational systems. It covers the middle ground between ad-hoc scripts and larger workflow systems.
 
 ## MVP features
 
-- YAML workflow definition.
-- Dependency-aware task ordering.
-- Local shell execution.
-- CLI commands for planning, running, checking status and resetting state.
-- Persistent SQLite state for simple restart support.
-- Per-task stdout/stderr logs.
-- Context variables rendered into task commands.
-- Examples inspired by MONAN-JEDI and SMNA workflows.
+- YAML workflow definition;
+- dependency-aware task ordering;
+- local execution from explicit program argument vectors;
+- CLI commands for planning, running, status and reset;
+- persistent SQLite state for restart support;
+- per-task stdout and stderr logs;
+- context variables rendered into task arguments, working directories and environment values.
 
 ## Installation
 
@@ -27,67 +24,30 @@ python -m pip install -e .
 
 ## Quick start
 
-Show the execution plan:
-
 ```bash
 simpleworkflow plan examples/hello.yaml
-```
-
-Run the example workflow:
-
-```bash
 simpleworkflow run examples/hello.yaml
-```
-
-Check task status:
-
-```bash
 simpleworkflow status examples/hello.yaml
-```
-
-Reset workflow state:
-
-```bash
 simpleworkflow reset examples/hello.yaml
 ```
 
-Force a full rerun:
-
-```bash
-simpleworkflow run examples/hello.yaml --force
-```
-
-Preview commands without executing them:
-
-```bash
-simpleworkflow run examples/hello.yaml --dry-run
-```
+Use `--force` to rerun successful tasks and `--dry-run` to preview the resolved argument vectors.
 
 ## Workflow format
 
-A minimal workflow looks like this:
+A task uses `argv`, never a shell command string. The following task runs the `printf` executable with three explicit arguments:
 
 ```yaml
-workflow:
-  name: hello_workflow
-
-context:
-  message: "simpleWorkflow MVP is running"
-
 tasks:
   - name: prepare
-    run: "echo Preparing workflow"
-
-  - name: run
-    run: "echo {message}"
-    depends_on: [prepare]
+    argv: [printf, '%s\n', Preparing workflow]
 ```
 
-See [`docs/workflow_format.md`](docs/workflow_format.md) for details.
+See [`docs/workflow_format.md`](docs/workflow_format.md) for the full contract.
 
 ## State and logs
 
-By default, runtime files are written under `.simpleworkflow/`:
+Runtime files are written under `.simpleworkflow/` by default:
 
 ```text
 .simpleworkflow/
@@ -96,21 +56,7 @@ By default, runtime files are written under `.simpleworkflow/`:
   logs/<workflow-name>/<task>.err
 ```
 
-Successful tasks are skipped in later runs unless `--force` is used.
-
-## Examples
-
-- `examples/hello.yaml`: minimal local workflow.
-- `examples/monan_jedi_3dvar.yaml`: MONAN-JEDI 3DVar-FGAT tutorial sequence.
-- `examples/smna_gsi_bam.yaml`: SMNA-style OBSMAKE -> GSI -> BAM -> diagnostics sequence.
-
-## Roadmap
-
-See [`docs/roadmap.md`](docs/roadmap.md).
-
 ## Development
-
-Run tests with:
 
 ```bash
 python -m pytest
