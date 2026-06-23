@@ -23,8 +23,10 @@ class WritingExecutor:
         *,
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
+        stdout_path: Path | None = None,
+        stderr_path: Path | None = None,
     ) -> int:
-        del task_name, argv, cwd, env
+        del task_name, argv, cwd, env, stdout_path, stderr_path
         self.calls += 1
         self.destination.write_text(self.source.read_text(encoding="utf-8"), encoding="utf-8")
         return 0
