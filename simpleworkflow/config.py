@@ -5,6 +5,9 @@ from typing import Any
 
 import yaml
 
+SUPPORTED_INPUT_FINGERPRINTS = {"metadata", "sha256"}
+_GLOB_MARKERS = ("*", "?", "[")
+
 
 def _validate_string_list(value: Any, field: str, task_name: str) -> None:
     if not isinstance(value, list) or not value:
@@ -14,6 +17,41 @@ def _validate_string_list(value: Any, field: str, task_name: str) -> None:
     if any(not isinstance(item, str) or not item for item in value):
         raise ValueError(
             f"Task '{task_name}' field '{field}' must contain only non-empty strings."
+        )
+
+
+def _validate_artifact_paths(
+    value: Any, field: str, task_name: str, *, allow_globs: bool
+) -> None:
+    if not isinstance(value, list):
+        raise ValueError(f"Task '{task_name}' field '{field}' must be a list of strings.")
+    if any(not isinstance(item, str) or not item for item in value):
+        raise ValueError(
+            f"Task '{task_name}' field '{field}' must contain only non-empty strings."
+        )
+    if not allow_globs and any(marker in item for item in value for marker in _GLOB_MARKERS):
+        raise ValueError(
+            f"Task '{task_name}' field '{field}' must contain explicit paths, not glob patterns."
+        )
+
+
+def _validate_artifact_group(value: Any, field: str, task_name: str) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"Task '{task_name}' field '{field}' must be a mapping.")
+
+    allowed_keys = {"required", "optional"} if field == "inputs" else {"required"}
+    unknown_keys = set(value) - allowed_keys
+    if unknown_keys:
+        unknown = ", ".join(sorted(unknown_keys))
+        raise ValueError(f"Task '{task_name}' field '{field}' has unsupported keys: {unknown}.")
+
+    if "required" in value:
+        _validate_artifact_paths(
+            value["required"], f"{field}.required", task_name, allow_globs=False
+        )
+    if field == "inputs" and "optional" in value:
+        _validate_artifact_paths(
+            value["optional"], f"{field}.optional", task_name, allow_globs=True
         )
 
 
@@ -59,6 +97,18 @@ def _validate_task(task: Any) -> None:
             raise ValueError(
                 f"Task '{name}' field 'env' must map string names to string values."
             )
+
+    if "inputs" in task:
+        _validate_artifact_group(task["inputs"], "inputs", name)
+    if "outputs" in task:
+        _validate_artifact_group(task["outputs"], "outputs", name)
+
+    fingerprint = task.get("input_fingerprint")
+    if fingerprint is not None and fingerprint not in SUPPORTED_INPUT_FINGERPRINTS:
+        supported = ", ".join(sorted(SUPPORTED_INPUT_FINGERPRINTS))
+        raise ValueError(
+            f"Task '{name}' field 'input_fingerprint' must be one of: {supported}."
+        )
 
 
 def load_workflow(path: str | Path) -> dict[str, Any]:

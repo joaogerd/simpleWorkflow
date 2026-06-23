@@ -49,3 +49,56 @@ def test_rejects_unknown_executor(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="unsupported executor"):
         load_workflow(workflow)
+
+
+def test_loads_declarative_artifact_contract(tmp_path: Path) -> None:
+    workflow = write(
+        tmp_path / "workflow.yaml",
+        """
+workflow: {name: test}
+tasks:
+  - name: run_3dvar
+    argv: [bash, wrappers/jaci/run_mpas_jedi.sh]
+    inputs:
+      required:
+        - wrappers/jaci/run_mpas_jedi.sh
+        - "{case_dir}/background.nc"
+      optional:
+        - "{case_dir}/obs/*.nc4"
+    outputs:
+      required:
+        - "{case_dir}/analysis.nc"
+    input_fingerprint: metadata
+""",
+    )
+    config = load_workflow(workflow)
+    task = config["tasks"][0]
+    assert task["inputs"]["required"][0] == "wrappers/jaci/run_mpas_jedi.sh"
+    assert task["outputs"]["required"] == ["{case_dir}/analysis.nc"]
+    assert task["input_fingerprint"] == "metadata"
+
+
+@pytest.mark.parametrize(
+    "field_snippet, message",
+    [
+        ("inputs: []", "field 'inputs' must be a mapping"),
+        ("outputs: []", "field 'outputs' must be a mapping"),
+        ("inputs: {required: ['obs/*.nc4']}", "must contain explicit paths"),
+        ("outputs: {optional: ['x']}", "unsupported keys"),
+        ("input_fingerprint: md5", "input_fingerprint"),
+    ],
+)
+def test_rejects_invalid_artifact_contract(
+    tmp_path: Path, field_snippet: str, message: str
+) -> None:
+    workflow = write(
+        tmp_path / "workflow.yaml",
+        f"""
+tasks:
+  - name: task
+    argv: [python]
+    {field_snippet}
+""",
+    )
+    with pytest.raises(ValueError, match=message):
+        load_workflow(workflow)

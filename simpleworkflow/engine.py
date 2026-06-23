@@ -4,8 +4,15 @@ import shlex
 from pathlib import Path
 from typing import Any
 
+from .artifacts import ResolvedArtifacts, resolve_task_artifacts
 from .executor import LocalExecutor
+from .provenance import build_attempt_metadata
+from .runs import AttemptPaths, RunRecorder
+from .signature import TaskSignature, compute_task_signature
 from .state import WorkflowState
+
+INVALID_INPUT_EXIT_CODE = 2
+INVALID_OUTPUT_EXIT_CODE = 3
 
 
 def render_template(text: str, context: dict[str, Any]) -> str:
@@ -36,7 +43,7 @@ class WorkflowEngine:
         self.dry_run = dry_run
         self.source_dir = Path(
             config.get("__simpleworkflow__", {}).get("source_dir", Path.cwd())
-        )
+        ).resolve()
 
         self.workdir = Path(workdir)
         self.log_dir = self.workdir / "logs" / self.workflow_name
@@ -85,8 +92,83 @@ class WorkflowEngine:
             for key, value in task.get("env", {}).items()
         }
 
+    def _task_artifacts(self, task: dict[str, Any]) -> ResolvedArtifacts:
+        return resolve_task_artifacts(task, self.context, self.source_dir)
+
+    def _workflow_path(self) -> Path | None:
+        source_path = self.config.get("__simpleworkflow__", {}).get("source_path")
+        return Path(source_path).resolve(strict=False) if source_path else None
+
+    def _task_signature(
+        self,
+        task_name: str,
+        task: dict[str, Any],
+        argv: list[str],
+        cwd: Path | None,
+        env: dict[str, str],
+        artifacts: ResolvedArtifacts,
+    ) -> TaskSignature:
+        return compute_task_signature(
+            workflow_path=self._workflow_path(),
+            task_name=task_name,
+            argv=argv,
+            cwd=cwd,
+            env=env,
+            artifacts=artifacts,
+            fingerprint_mode=task.get("input_fingerprint", "metadata"),
+        )
+
+    @staticmethod
+    def _format_missing_inputs(artifacts: ResolvedArtifacts) -> str:
+        return ", ".join(str(path) for path in artifacts.missing_required_inputs())
+
+    @staticmethod
+    def _format_missing_outputs(artifacts: ResolvedArtifacts) -> str:
+        return ", ".join(str(path) for path in artifacts.missing_required_outputs())
+
+    @staticmethod
+    def _output_failure_reason(artifacts: ResolvedArtifacts) -> str:
+        return f"missing required output(s): {WorkflowEngine._format_missing_outputs(artifacts)}"
+
+    @staticmethod
+    def _process_failure_reason(return_code: int) -> str:
+        return f"process exited with return code {return_code}"
+
+    def _record_attempt(
+        self,
+        recorder: RunRecorder | None,
+        attempt: AttemptPaths | None,
+        *,
+        argv: list[str],
+        cwd: Path | None,
+        env: dict[str, str],
+        artifacts: ResolvedArtifacts,
+        signature: TaskSignature,
+        status: str,
+        return_code: int,
+        process_return_code: int | None = None,
+        reason: str | None = None,
+    ) -> None:
+        if recorder is None or attempt is None:
+            return
+        recorder.write_metadata(
+            attempt,
+            build_attempt_metadata(
+                argv=argv,
+                cwd=cwd,
+                env=env,
+                artifacts=artifacts,
+                signature=signature,
+                status=status,
+                return_code=return_code,
+                process_return_code=process_return_code,
+                reason=reason,
+            ),
+        )
+
     def run(self) -> int:
         """Execute pending workflow tasks in dependency order."""
+        recorder: RunRecorder | None = None
         task_map = {task["name"]: task for task in self.tasks}
         exit_code = 0
 
@@ -97,29 +179,122 @@ class WorkflowEngine:
                 self.state.set_status(self.workflow_name, task_name, "skipped", 0)
                 continue
 
-            if not self.force and self.state.get_status(self.workflow_name, task_name) == "success":
-                print(f"[SKIP] {task_name}: already successful")
-                continue
+            artifacts = self._task_artifacts(task)
+            missing_inputs = artifacts.missing_required_inputs()
+            if missing_inputs:
+                message = self._format_missing_inputs(artifacts)
+                print(f"[FAIL] {task_name}: missing required input(s): {message}")
+                if not self.dry_run:
+                    self.state.set_status(
+                        self.workflow_name,
+                        task_name,
+                        "invalid-input",
+                        INVALID_INPUT_EXIT_CODE,
+                    )
+                return INVALID_INPUT_EXIT_CODE
 
             argv = render_argv(task["argv"], self.context)
             cwd = self._task_cwd(task)
             env = self._task_env(task)
+            signature = self._task_signature(
+                task_name, task, argv, cwd, env, artifacts
+            )
             rendered = shlex.join(argv)
+
+            previous = self.state.get_task_state(self.workflow_name, task_name)
+            if not self.force and previous and previous.status == "success":
+                missing_outputs = artifacts.missing_required_outputs()
+                if previous.signature == signature.value and not missing_outputs:
+                    print(f"[SKIP] {task_name}: already successful")
+                    continue
+                if missing_outputs:
+                    message = self._format_missing_outputs(artifacts)
+                    print(f"[RERUN] {task_name}: required output(s) missing: {message}")
+                else:
+                    print(f"[RERUN] {task_name}: task signature changed")
 
             if self.dry_run:
                 print(f"[PLAN] {task_name}: {rendered}")
                 continue
 
             print(f"[RUN] {task_name}: {rendered}")
-            self.state.set_status(self.workflow_name, task_name, "running", None)
-            return_code = self.executor.run(task_name, argv, cwd=cwd, env=env)
+            if recorder is None:
+                recorder = RunRecorder(self.workdir, self.workflow_name)
+            attempt = recorder.begin_attempt(task_name)
+            self.state.set_status(
+                self.workflow_name, task_name, "running", None, signature.value
+            )
+            return_code = self.executor.run(
+                task_name,
+                argv,
+                cwd=cwd,
+                env=env,
+                stdout_path=attempt.stdout_path if attempt is not None else None,
+                stderr_path=attempt.stderr_path if attempt is not None else None,
+            )
 
             if return_code == 0:
+                missing_outputs = artifacts.missing_required_outputs()
+                if missing_outputs:
+                    reason = self._output_failure_reason(artifacts)
+                    print(f"[FAIL] {task_name}: {reason}")
+                    self.state.set_status(
+                        self.workflow_name,
+                        task_name,
+                        "invalid-output",
+                        INVALID_OUTPUT_EXIT_CODE,
+                        signature.value,
+                    )
+                    self._record_attempt(
+                        recorder,
+                        attempt,
+                        argv=argv,
+                        cwd=cwd,
+                        env=env,
+                        artifacts=artifacts,
+                        signature=signature,
+                        status="invalid-output",
+                        return_code=INVALID_OUTPUT_EXIT_CODE,
+                        process_return_code=return_code,
+                        reason=reason,
+                    )
+                    exit_code = INVALID_OUTPUT_EXIT_CODE
+                    break
                 print(f"[OK] {task_name}")
-                self.state.set_status(self.workflow_name, task_name, "success", return_code)
+                self.state.set_status(
+                    self.workflow_name, task_name, "success", return_code, signature.value
+                )
+                self._record_attempt(
+                    recorder,
+                    attempt,
+                    argv=argv,
+                    cwd=cwd,
+                    env=env,
+                    artifacts=artifacts,
+                    signature=signature,
+                    status="success",
+                    return_code=return_code,
+                    process_return_code=return_code,
+                )
             else:
+                reason = self._process_failure_reason(return_code)
                 print(f"[FAIL] {task_name}: return code {return_code}")
-                self.state.set_status(self.workflow_name, task_name, "failed", return_code)
+                self.state.set_status(
+                    self.workflow_name, task_name, "failed", return_code, signature.value
+                )
+                self._record_attempt(
+                    recorder,
+                    attempt,
+                    argv=argv,
+                    cwd=cwd,
+                    env=env,
+                    artifacts=artifacts,
+                    signature=signature,
+                    status="failed",
+                    return_code=return_code,
+                    process_return_code=return_code,
+                    reason=reason,
+                )
                 exit_code = return_code
                 break
 

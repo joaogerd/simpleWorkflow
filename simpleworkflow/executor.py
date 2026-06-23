@@ -20,17 +20,31 @@ class LocalExecutor:
         *,
         cwd: str | Path | None = None,
         env: Mapping[str, str] | None = None,
+        stdout_path: str | Path | None = None,
+        stderr_path: str | Path | None = None,
     ) -> int:
         """Run a task without a shell and return its process exit status."""
-        safe_name = task_name.replace("/", "_").replace(" ", "_")
-        stdout_path = self.log_dir / f"{safe_name}.out"
-        stderr_path = self.log_dir / f"{safe_name}.err"
+        if (stdout_path is None) != (stderr_path is None):
+            raise ValueError("stdout_path and stderr_path must be provided together.")
+
+        if stdout_path is None:
+            safe_name = task_name.replace("/", "_").replace(" ", "_")
+            stdout_file = self.log_dir / f"{safe_name}.out"
+            stderr_file = self.log_dir / f"{safe_name}.err"
+            log_mode = "w"
+        else:
+            stdout_file = Path(stdout_path)
+            stderr_file = Path(stderr_path)
+            stdout_file.parent.mkdir(parents=True, exist_ok=True)
+            stderr_file.parent.mkdir(parents=True, exist_ok=True)
+            log_mode = "a"
+
         execution_env = os.environ.copy()
         if env:
             execution_env.update(env)
 
-        with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open(
-            "w", encoding="utf-8"
+        with stdout_file.open(log_mode, encoding="utf-8") as stdout, stderr_file.open(
+            log_mode, encoding="utf-8"
         ) as stderr:
             try:
                 process = subprocess.run(
