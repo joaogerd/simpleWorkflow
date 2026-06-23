@@ -168,7 +168,7 @@ class WorkflowEngine:
 
     def run(self) -> int:
         """Execute pending workflow tasks in dependency order."""
-        recorder = None if self.dry_run else RunRecorder(self.workdir, self.workflow_name)
+        recorder: RunRecorder | None = None
         task_map = {task["name"]: task for task in self.tasks}
         exit_code = 0
 
@@ -218,7 +218,9 @@ class WorkflowEngine:
                 continue
 
             print(f"[RUN] {task_name}: {rendered}")
-            attempt = recorder.begin_attempt(task_name) if recorder is not None else None
+            if recorder is None:
+                recorder = RunRecorder(self.workdir, self.workflow_name)
+            attempt = recorder.begin_attempt(task_name)
             self.state.set_status(
                 self.workflow_name, task_name, "running", None, signature.value
             )
