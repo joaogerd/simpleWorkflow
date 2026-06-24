@@ -1,0 +1,22 @@
+workflow:
+  name: cycle_example
+
+context:
+  python: python3
+  output_dir: outputs/cycle_example
+
+cycle:
+  start: 2018-04-15T00:00:00Z
+  end: 2018-04-15T18:00:00Z
+  step: PT6H
+
+tasks:
+  - name: record_cycle
+    argv:
+      - '{python}'
+      - '-c'
+      - "from pathlib import Path; directory = Path('{output_dir}'); directory.mkdir(parents=True, exist_ok=True); Path(directory / '{cycle_id}.txt').write_text('{cycle_time}\\n', encoding='utf-8')"
+    cwd: '.'
+    outputs:
+      required:
+        - '{output_dir}/{cycle_id}.txt'
