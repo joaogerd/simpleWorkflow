@@ -19,6 +19,7 @@ dev = [
 
 [project.scripts]
 simpleworkflow = "simpleworkflow.cli:main"
+swf = "simpleworkflow.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["simpleworkflow*"]
