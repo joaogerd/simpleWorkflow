@@ -46,6 +46,46 @@ tasks:
 
 `context` is a mapping used to render string elements of `argv`, `cwd`, `env`, `inputs`, and `outputs` using Python format placeholders.
 
+## Cycles
+
+A workflow can declare an inclusive ISO-8601 cycle range. The same task DAG is executed sequentially for each cycle, with independent workflow state and logs.
+
+```yaml
+cycle:
+  start: "2018-04-15T00:00:00Z"
+  end: "2018-04-15T18:00:00Z"
+  step: PT6H
+```
+
+For each cycle, simpleWorkflow adds these fields to the task context:
+
+```text
+{cycle_time}       2018-04-15T00:00:00Z
+{cycle_id}         20180415T000000Z
+{cycle_yyyymmddhh} 2018041500
+{cycle_year}       2018
+{cycle_month}      04
+{cycle_day}        15
+{cycle_hour}       00
+```
+
+Cycle execution is sequential and fail-fast. A successful task in one cycle is never reused as the successful task of another cycle. The effective workflow state and log namespace include the cycle identifier.
+
+CLI selection takes precedence over YAML:
+
+```bash
+# One explicit cycle
+simpleworkflow run workflow.yaml --cycle-time 2018-04-15T06:00:00Z
+
+# Override the configured range
+simpleworkflow run workflow.yaml \
+  --from 2018-04-16T00:00:00Z \
+  --to 2018-04-16T18:00:00Z \
+  --step PT6H
+```
+
+`--cycle-time` may be repeated to select multiple specific cycles, but cannot be combined with `--from`, `--to`, or `--step`.
+
 ## State and logs
 
 Task status is stored in SQLite under `.simpleworkflow/state.sqlite3` by default. Successful tasks are skipped on subsequent runs unless `--force` is used. Standard output and standard error are stored under `.simpleworkflow/logs/<workflow-name>/`.
