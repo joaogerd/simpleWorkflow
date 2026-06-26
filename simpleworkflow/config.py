@@ -5,6 +5,8 @@ from typing import Any
 
 import yaml
 
+from .cycles import validate_cycle_mapping
+
 SUPPORTED_INPUT_FINGERPRINTS = {"metadata", "sha256"}
 _GLOB_MARKERS = ("*", "?", "[")
 
@@ -131,6 +133,8 @@ def load_workflow(path: str | Path) -> dict[str, Any]:
         raise ValueError("'context' must be a mapping.")
     if not isinstance(data["tasks"], list):
         raise ValueError("'tasks' must be a list.")
+
+    validate_cycle_mapping(data.get("cycle"))
 
     seen_names: set[str] = set()
     for task in data["tasks"]:

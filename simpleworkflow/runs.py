@@ -5,7 +5,7 @@ import json
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -14,11 +14,11 @@ RUN_SCHEMA_VERSION = 1
 
 def _utc_timestamp() -> str:
     """Return an ISO-8601 UTC timestamp suitable for provenance records."""
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _default_run_id() -> str:
-    now = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+    now = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     return f"{now}-{uuid.uuid4().hex[:12]}"
 
 

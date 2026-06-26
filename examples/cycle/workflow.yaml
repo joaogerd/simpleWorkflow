@@ -1,0 +1,17 @@
+workflow:
+  name: hourly_cycle_example
+
+cycle:
+  start: "2018-04-15T00:00:00Z"
+  end: "2018-04-15T12:00:00Z"
+  step: PT6H
+
+context:
+  python: python
+
+tasks:
+  - name: show_cycle
+    argv:
+      - "{python}"
+      - -c
+      - "print('cycle={cycle_time} id={cycle_id}')"
