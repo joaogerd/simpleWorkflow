@@ -15,15 +15,17 @@ from simpleworkflow.cycles import CycleConfigurationError, resolve_cycle_context
 def _write_cycle_workflow(path: Path, output_dir: Path) -> Path:
     code = (
         "from pathlib import Path; "
-        "Path(r'{output_dir}/cycle_{cycle_yyyymmddhh}.txt').write_text('{cycle_time}')"
+        "root = Path(r'{output_dir}'); "
+        "root.mkdir(parents=True, exist_ok=True); "
+        "(root / 'cycle_{cycle_yyyymmddhh}.txt').write_text('{cycle_time}')"
     )
     path.write_text(
         f"""
 workflow:
   name: cycle_test
 cycle:
-  start: 2018-04-15T00:00:00Z
-  end: 2018-04-15T12:00:00Z
+  start: "2018-04-15T00:00:00Z"
+  end: "2018-04-15T12:00:00Z"
   step: PT6H
 context:
   python: {json.dumps(sys.executable)}
@@ -102,7 +104,7 @@ def test_range_options_override_yaml_cycle_fields() -> None:
 def test_cycle_config_requires_complete_mapping(tmp_path: Path) -> None:
     workflow = tmp_path / "workflow.yaml"
     workflow.write_text(
-        "cycle: {start: 2018-04-15T00:00:00Z, step: PT6H}\ntasks: []\n",
+        'cycle: {start: "2018-04-15T00:00:00Z", step: PT6H}\ntasks: []\n',
         encoding="utf-8",
     )
     with pytest.raises(CycleConfigurationError, match="missing required field"):
