@@ -104,43 +104,54 @@ def _cycle_heading(cycle: CycleContext | None) -> str:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_workflow(args.workflow)
-    engines = list(_cycle_engines(config, args))
 
     if args.command == "plan":
         index = 1
-        for cycle, engine in engines:
-            heading = _cycle_heading(cycle)
-            if heading:
-                print(heading)
-            for task_name in engine.plan():
-                print(f"{index:02d}. {task_name}")
-                index += 1
+        for cycle, engine in _cycle_engines(config, args):
+            try:
+                heading = _cycle_heading(cycle)
+                if heading:
+                    print(heading)
+                for task_name in engine.plan():
+                    print(f"{index:02d}. {task_name}")
+                    index += 1
+            finally:
+                engine.state.close()
         return 0
 
     if args.command == "run":
-        for cycle, engine in engines:
-            heading = _cycle_heading(cycle)
-            if heading:
-                print(heading)
-            result = engine.run()
-            if result != 0:
-                return result
+        for cycle, engine in _cycle_engines(config, args):
+            try:
+                heading = _cycle_heading(cycle)
+                if heading:
+                    print(heading)
+                result = engine.run()
+                if result != 0:
+                    return result
+            finally:
+                engine.state.close()
         return 0
 
     if args.command == "status":
-        for cycle, engine in engines:
-            heading = _cycle_heading(cycle)
-            if heading:
-                print(heading)
-            engine.status()
+        for cycle, engine in _cycle_engines(config, args):
+            try:
+                heading = _cycle_heading(cycle)
+                if heading:
+                    print(heading)
+                engine.status()
+            finally:
+                engine.state.close()
         return 0
 
     if args.command == "reset":
-        for cycle, engine in engines:
-            heading = _cycle_heading(cycle)
-            if heading:
-                print(heading)
-            engine.reset()
+        for cycle, engine in _cycle_engines(config, args):
+            try:
+                heading = _cycle_heading(cycle)
+                if heading:
+                    print(heading)
+                engine.reset()
+            finally:
+                engine.state.close()
         print("Workflow state reset.")
         return 0
 
