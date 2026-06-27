@@ -11,6 +11,9 @@ from .cycles import validate_cycle_mapping
 SUPPORTED_EXECUTORS = {"local", "pbs"}
 SUPPORTED_INPUT_FINGERPRINTS = {"metadata", "sha256"}
 _GLOB_MARKERS = ("*", "?", "[")
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_TEMPLATE = re.compile(r"\{[^{}]+\}")
+_WALLTIME = re.compile(r"^\d{1,3}:\d{2}:\d{2}$")
 _TASK_FIELDS = {
     "name",
     "argv",
@@ -37,7 +40,10 @@ _PBS_FIELDS = {
     "block",
     "inherit_environment",
 }
-_WALLTIME = re.compile(r"^\d{1,3}:\d{2}:\d{2}$")
+
+
+def _contains_template(value: Any) -> bool:
+    return isinstance(value, str) and _TEMPLATE.search(value) is not None
 
 
 def _validate_string_list(value: Any, field: str, task_name: str) -> None:
@@ -94,8 +100,13 @@ def _validate_artifact_group(value: Any, field: str, task_name: str) -> None:
 
 
 def _validate_positive_integer(value: Any, field: str, task_name: str) -> None:
+    if _contains_template(value):
+        return
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-        raise ValueError(f"Task '{task_name}' field 'pbs.{field}' must be a positive integer.")
+        raise ValueError(
+            f"Task '{task_name}' field 'pbs.{field}' must be a positive integer "
+            "or a context placeholder."
+        )
 
 
 def _validate_pbs(task: dict[str, Any], task_name: str) -> None:
@@ -114,10 +125,16 @@ def _validate_pbs(task: dict[str, Any], task_name: str) -> None:
         if field in pbs and (not isinstance(pbs[field], str) or not pbs[field]):
             raise ValueError(f"Task '{task_name}' field 'pbs.{field}' must be a non-empty string.")
     if "walltime" in pbs and (
-        not isinstance(pbs["walltime"], str) or not _WALLTIME.fullmatch(pbs["walltime"])
+        not isinstance(pbs["walltime"], str)
+        or not pbs["walltime"]
+        or (
+            not _WALLTIME.fullmatch(pbs["walltime"])
+            and not _contains_template(pbs["walltime"])
+        )
     ):
         raise ValueError(
-            f"Task '{task_name}' field 'pbs.walltime' must use HHH:MM:SS format."
+            f"Task '{task_name}' field 'pbs.walltime' must use HHH:MM:SS format "
+            "or a context placeholder."
         )
     for field in ("select", "ncpus", "mpiprocs", "omp_threads"):
         if field in pbs:
@@ -176,6 +193,12 @@ def _validate_task(task: Any) -> None:
         ):
             raise ValueError(
                 f"Task '{name}' field 'env' must map string names to string values."
+            )
+        invalid_keys = [key for key in environment if not _ENV_NAME.fullmatch(key)]
+        if invalid_keys:
+            names = ", ".join(sorted(invalid_keys))
+            raise ValueError(
+                f"Task '{name}' field 'env' contains invalid environment variable name(s): {names}."
             )
 
     if "inputs" in task:
