@@ -54,6 +54,7 @@ ignore = ["E501"]
 [tool.mypy]
 python_version = "3.10"
 files = [
+  "simpleworkflow/console.py",
   "simpleworkflow/engine.py",
   "simpleworkflow/executor.py",
   "simpleworkflow/pbs.py",
