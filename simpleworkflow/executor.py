@@ -36,6 +36,7 @@ class TaskExecutor(Protocol):
         stderr_path: str | Path | None = None,
     ) -> ExecutionResult:
         """Execute one rendered task and return its outcome."""
+        ...
 
 
 class LocalExecutor:
