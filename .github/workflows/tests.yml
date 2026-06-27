@@ -21,6 +21,17 @@ jobs:
       - name: Type check execution core
         run: python -m mypy
 
+  mypy-diagnostic:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print mypy diagnostic
+        run: |
+          git clone --quiet --depth 1 --branch feature/consolidate-mvp-and-pbs \
+            https://github.com/joaogerd/simpleWorkflow.git repo
+          cd repo
+          python -m pip install --quiet -e ".[dev]"
+          python -m mypy
+
   test:
     runs-on: ubuntu-latest
     strategy:
