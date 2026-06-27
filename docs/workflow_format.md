@@ -1,20 +1,61 @@
 # Workflow format
 
-simpleWorkflow defines dependency-aware tasks that execute explicit program argument vectors. It does not invoke a shell.
+`simpleWorkflow` defines dependency-aware tasks that execute explicit program
+argument vectors. It does not parse a shell command language.
+
+## Minimal workflow
+
+```yaml
+workflow:
+  name: example
+
+context:
+  python: python
+
+tasks:
+  - name: prepare
+    argv: ["{python}", "-c", "print('preparing')"]
+
+  - name: run
+    argv: ["{python}", "-c", "print('running')"]
+    depends_on: [prepare]
+```
+
+Every task requires a unique `name` and a non-empty `argv` list. Each `argv`
+item is one exact process argument and supports context placeholders such as
+`{python}` and `{case_name}`.
 
 ## Task fields
 
-Each task must define a unique `name` and a non-empty `argv` list. Each item of `argv` is one exact process argument and supports context placeholders such as `{python}` or `{case_name}`.
+Only the following fields are accepted. Unknown fields fail validation early so
+misspellings do not silently alter an experiment.
 
-Optional execution fields are `depends_on`, `enabled`, `cwd`, `env`, and `executor`.
+| Field | Meaning |
+| --- | --- |
+| `name` | Unique task identifier. |
+| `argv` | Required list of explicit program arguments. |
+| `depends_on` | One task name or a list of upstream task names. |
+| `enabled` | Optional boolean; disabled tasks are recorded as skipped. |
+| `cwd` | Optional working directory, relative to the workflow YAML when not absolute. |
+| `env` | Optional mapping of task-specific string environment variables. |
+| `executor` | `local` (default) or `pbs`. |
+| `pbs` | Required PBS settings when `executor: pbs`; see [PBS execution](pbs.md). |
+| `inputs` | Declared input artifact contract. |
+| `outputs` | Declared output artifact contract. |
+| `input_fingerprint` | `metadata` (default) or `sha256`. |
 
-`cwd` is the task working directory. Relative paths are interpreted from the directory containing the workflow YAML file. `env` is a mapping of task-specific environment values. The only supported executor at this stage is `local`.
-
-The former `run` field is deliberately unsupported. A single command string would require shell parsing and permit implicit redirection, pipelines and environment expansion.
+The historical `run` field is deliberately unsupported. A single command string
+would require shell parsing and could introduce implicit redirection, pipelines
+or expansion rules. A workflow may still run a controlled wrapper script by
+using it explicitly in `argv`.
 
 ## Artifact contract
 
-Tasks may declare scientific input and output artifacts. Required inputs are rendered and checked before a task is run or reused. A missing required input marks the task as `invalid-input` and stops the workflow. Optional inputs are rendered and glob-expanded, but zero matches are allowed. Required outputs are rendered now; their post-execution validation is added in the next stage.
+Tasks may declare scientific input and output artifacts. Required inputs are
+rendered and checked before a task is run or reused. A missing required input
+marks the task as `invalid-input` and stops the workflow. Required outputs are
+checked after successful execution; missing outputs mark the task as
+`invalid-output`.
 
 ```yaml
 tasks:
@@ -38,17 +79,26 @@ tasks:
     input_fingerprint: metadata
 ```
 
-`inputs.required` and `outputs.required` contain explicit artifact paths; glob patterns are not accepted there. `inputs.optional` accepts optional paths or glob patterns and may match zero files. Relative artifact paths are resolved from the directory containing the workflow YAML file.
+`inputs.required` and `outputs.required` contain explicit paths; glob patterns
+are not accepted. `inputs.optional` accepts optional paths or glob patterns and
+may match zero files. Relative artifact paths are resolved from the directory
+containing the workflow YAML file.
 
-`input_fingerprint` controls how inputs will be fingerprinted when provenance-aware reuse is enabled. Supported values are `metadata` and `sha256`. The planned default is `metadata`, using path, size and modification time.
+`input_fingerprint: metadata` records path, size and modification time.
+`input_fingerprint: sha256` adds a SHA-256 digest and is appropriate for smaller,
+critical file inputs.
 
 ## Context
 
-`context` is a mapping used to render string elements of `argv`, `cwd`, `env`, `inputs`, and `outputs` using Python format placeholders.
+`context` is a mapping used to render string elements of `argv`, `cwd`, `env`,
+PBS values, inputs and outputs using Python-format placeholders. Referencing an
+unknown placeholder fails with an explicit error before execution.
 
 ## Cycles
 
-A workflow can declare an inclusive ISO-8601 cycle range. The same task DAG is executed sequentially for each cycle, with independent workflow state and logs.
+A workflow can declare an inclusive ISO-8601 cycle range. The same task DAG is
+executed sequentially for each cycle, with independent workflow state, logs and
+provenance.
 
 ```yaml
 cycle:
@@ -57,7 +107,7 @@ cycle:
   step: PT6H
 ```
 
-For each cycle, simpleWorkflow adds these fields to the task context:
+For every cycle, these context values are added:
 
 ```text
 {cycle_time}       2018-04-15T00:00:00Z
@@ -69,23 +119,29 @@ For each cycle, simpleWorkflow adds these fields to the task context:
 {cycle_hour}       00
 ```
 
-Cycle execution is sequential and fail-fast. A successful task in one cycle is never reused as the successful task of another cycle. The effective workflow state and log namespace include the cycle identifier.
+Cycle execution is sequential and fail-fast. A successful task in one cycle is
+never reused as the success state of another cycle. The effective workflow name
+and state namespace include the cycle identifier.
 
-CLI selection takes precedence over YAML:
+CLI selection overrides YAML:
 
 ```bash
 # One explicit cycle
-simpleworkflow run workflow.yaml --cycle-time 2018-04-15T06:00:00Z
+swf run workflow.yaml --cycle-time 2018-04-15T06:00:00Z
 
-# Override the configured range
-simpleworkflow run workflow.yaml \
+# Override a configured range
+swf run workflow.yaml \
   --from 2018-04-16T00:00:00Z \
   --to 2018-04-16T18:00:00Z \
   --step PT6H
 ```
 
-`--cycle-time` may be repeated to select multiple specific cycles, but cannot be combined with `--from`, `--to`, or `--step`.
+`--cycle-time` may be repeated for multiple specific cycles, but cannot be
+combined with `--from`, `--to` or `--step`.
 
 ## State and logs
 
-Task status is stored in SQLite under `.simpleworkflow/state.sqlite3` by default. Successful tasks are skipped on subsequent runs unless `--force` is used. Standard output and standard error are stored under `.simpleworkflow/logs/<workflow-name>/`.
+Task state is stored in `.simpleworkflow/state.sqlite3` by default. Successful
+tasks are skipped only when the previous signature still matches and declared
+outputs still exist. Every executed task receives immutable logs and provenance
+under `.simpleworkflow/runs/<run-id>/`.
