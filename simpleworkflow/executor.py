@@ -66,6 +66,7 @@ class LocalExecutor:
             stderr_file = self.log_dir / f"{safe_name}.err"
             log_mode = "w"
         else:
+            assert stderr_path is not None
             stdout_file = Path(stdout_path)
             stderr_file = Path(stderr_path)
             stdout_file.parent.mkdir(parents=True, exist_ok=True)
