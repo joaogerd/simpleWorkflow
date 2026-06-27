@@ -6,7 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 from .config import load_workflow
-from .console import ColorMode, TerminalReporter
+from .console import TerminalReporter
 from .cycles import CycleContext, resolve_cycle_contexts
 from .engine import WorkflowEngine
 
@@ -168,5 +168,4 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+if __name__ == "__main__":n    raise SystemExit(main())
