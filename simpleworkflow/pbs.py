@@ -11,7 +11,9 @@ from typing import Any
 
 from .executor import ExecutionResult
 
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _JOB_ID = re.compile(r"(?m)^\s*([0-9]+(?:\.[A-Za-z0-9_.-]+)?)\s*$")
+_WALLTIME = re.compile(r"^\d{1,3}:\d{2}:\d{2}$")
 
 
 class PbsExecutor:
@@ -36,6 +38,26 @@ class PbsExecutor:
         with path.open(mode, encoding="utf-8") as stream:
             stream.write(content)
 
+    @staticmethod
+    def _positive_integer(value: Any, field: str) -> int:
+        """Normalize a rendered PBS count and reject invalid resource values."""
+        if isinstance(value, bool):
+            raise ValueError(f"PBS field '{field}' must be a positive integer.")
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"PBS field '{field}' must be a positive integer.") from error
+        if normalized <= 0 or str(normalized) != str(value).strip():
+            raise ValueError(f"PBS field '{field}' must be a positive integer.")
+        return normalized
+
+    @staticmethod
+    def _walltime(value: Any) -> str:
+        """Validate a rendered PBS walltime value."""
+        if not isinstance(value, str) or not _WALLTIME.fullmatch(value):
+            raise ValueError("PBS field 'walltime' must use HHH:MM:SS format.")
+        return value
+
     def _build_script(
         self,
         *,
@@ -57,20 +79,20 @@ class PbsExecutor:
         if project:
             lines.append(f"#PBS -A {project}")
 
-        walltime = self.options.get("walltime")
-        if walltime:
-            lines.append(f"#PBS -l walltime={walltime}")
+        if "walltime" in self.options:
+            lines.append(f"#PBS -l walltime={self._walltime(self.options['walltime'])}")
 
         has_select = any(
             key in self.options for key in ("select", "ncpus", "mpiprocs")
         )
         if has_select:
-            select = int(self.options.get("select", 1))
+            select = self._positive_integer(self.options.get("select", 1), "select")
             resources = [f"select={select}"]
             for key in ("ncpus", "mpiprocs"):
-                value = self.options.get(key)
-                if value is not None:
-                    resources.append(f"{key}={value}")
+                if key in self.options:
+                    resources.append(
+                        f"{key}={self._positive_integer(self.options[key], key)}"
+                    )
             lines.append(f"#PBS -l {':'.join(resources)}")
 
         lines.extend(
@@ -85,10 +107,14 @@ class PbsExecutor:
         lines.append(f"cd {shlex.quote(str(resolved_cwd))}")
 
         task_env = dict(env or {})
-        omp_threads = self.options.get("omp_threads")
-        if omp_threads is not None:
+        if "omp_threads" in self.options:
+            omp_threads = self._positive_integer(
+                self.options["omp_threads"], "omp_threads"
+            )
             task_env.setdefault("OMP_NUM_THREADS", str(omp_threads))
         for key, value in sorted(task_env.items()):
+            if not _ENV_NAME.fullmatch(key):
+                raise ValueError(f"Invalid PBS environment variable name: {key!r}")
             lines.append(f"export {key}={shlex.quote(value)}")
 
         lines.append(f"exec {shlex.join(list(argv))}")
