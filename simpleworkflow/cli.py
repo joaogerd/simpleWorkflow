@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 from .config import load_workflow
+from .console import ColorMode, TerminalReporter
 from .cycles import CycleContext, resolve_cycle_contexts
 from .engine import WorkflowEngine
 
@@ -38,6 +39,15 @@ def _add_cycle_options(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_display_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--color",
+        choices=("auto", "always", "never"),
+        default="auto",
+        help="Terminal color mode: auto (default), always or never.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="simpleworkflow",
@@ -51,6 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
         command_parser.add_argument("workflow")
         command_parser.add_argument("--workdir", default=".simpleworkflow")
         _add_cycle_options(command_parser)
+        _add_display_options(command_parser)
 
         if command == "run":
             command_parser.add_argument("--force", action="store_true")
@@ -62,6 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _cycle_engines(
     config: dict[str, Any],
     args: argparse.Namespace,
+    reporter: TerminalReporter,
 ) -> Iterable[tuple[CycleContext | None, WorkflowEngine]]:
     cycles = resolve_cycle_contexts(
         config.get("cycle"),
@@ -76,6 +88,7 @@ def _cycle_engines(
             workdir=args.workdir,
             force=getattr(args, "force", False),
             dry_run=getattr(args, "dry_run", False),
+            reporter=reporter,
         )
         return
 
@@ -95,37 +108,37 @@ def _cycle_engines(
             workdir=args.workdir,
             force=getattr(args, "force", False),
             dry_run=getattr(args, "dry_run", False),
+            reporter=reporter,
         )
 
 
-def _cycle_heading(cycle: CycleContext | None) -> str:
-    return f"[CYCLE {cycle.cycle_time}]" if cycle is not None else ""
+def _heading(command: str, config: dict[str, Any], cycle: CycleContext | None) -> str:
+    workflow_name = config.get("workflow", {}).get("name", "workflow")
+    title = f"{command.title()} · {workflow_name}"
+    return f"{title} · {cycle.cycle_time}" if cycle is not None else title
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_workflow(args.workflow)
+    reporter = TerminalReporter(color=args.color)
 
     if args.command == "plan":
         index = 1
-        for cycle, engine in _cycle_engines(config, args):
+        for cycle, engine in _cycle_engines(config, args, reporter):
             try:
-                heading = _cycle_heading(cycle)
-                if heading:
-                    print(heading)
+                reporter.heading(_heading("plan", config, cycle))
                 for task_name in engine.plan():
-                    print(f"{index:02d}. {task_name}")
+                    reporter.plan_item(index, task_name)
                     index += 1
             finally:
                 engine.state.close()
         return 0
 
     if args.command == "run":
-        for cycle, engine in _cycle_engines(config, args):
+        for cycle, engine in _cycle_engines(config, args, reporter):
             try:
-                heading = _cycle_heading(cycle)
-                if heading:
-                    print(heading)
+                reporter.heading(_heading("run", config, cycle))
                 result = engine.run()
                 if result != 0:
                     return result
@@ -134,26 +147,22 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "status":
-        for cycle, engine in _cycle_engines(config, args):
+        for cycle, engine in _cycle_engines(config, args, reporter):
             try:
-                heading = _cycle_heading(cycle)
-                if heading:
-                    print(heading)
+                reporter.heading(_heading("status", config, cycle))
                 engine.status()
             finally:
                 engine.state.close()
         return 0
 
     if args.command == "reset":
-        for cycle, engine in _cycle_engines(config, args):
+        for cycle, engine in _cycle_engines(config, args, reporter):
             try:
-                heading = _cycle_heading(cycle)
-                if heading:
-                    print(heading)
+                reporter.heading(_heading("reset", config, cycle))
                 engine.reset()
             finally:
                 engine.state.close()
-        print("Workflow state reset.")
+        reporter.note("Workflow state reset.")
         return 0
 
     return 2
