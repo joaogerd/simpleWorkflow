@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .artifacts import ResolvedArtifacts, resolve_task_artifacts
+from .console import TerminalReporter, WorkflowReporter
 from .executor import ExecutionResult, LocalExecutor, TaskExecutor
 from .pbs import PbsExecutor
 from .provenance import build_attempt_metadata
@@ -53,6 +54,7 @@ class WorkflowEngine:
         workdir: str | Path = ".simpleworkflow",
         force: bool = False,
         dry_run: bool = False,
+        reporter: WorkflowReporter | None = None,
     ):
         self.config = config
         self.workflow_name = config.get("workflow", {}).get("name", "workflow")
@@ -60,6 +62,7 @@ class WorkflowEngine:
         self.tasks = config.get("tasks", [])
         self.force = force
         self.dry_run = dry_run
+        self.reporter = reporter or TerminalReporter()
         self.source_dir = Path(
             config.get("__simpleworkflow__", {}).get("source_dir", Path.cwd())
         ).resolve()
@@ -216,8 +219,9 @@ class WorkflowEngine:
 
         for task_name in self.plan():
             task = task_map[task_name]
+            executor_name = str(task.get("executor", "local"))
             if task.get("enabled", True) is False:
-                print(f"[SKIP] {task_name}: disabled")
+                self.reporter.event("skip", task_name, "disabled", executor=executor_name)
                 self.state.set_status(self.workflow_name, task_name, "skipped", 0)
                 continue
 
@@ -239,8 +243,8 @@ class WorkflowEngine:
                 )
 
             if missing_inputs:
-                message = self._format_missing_inputs(artifacts)
-                print(f"[FAIL] {task_name}: missing required input(s): {message}")
+                message = f"missing required input(s): {self._format_missing_inputs(artifacts)}"
+                self.reporter.event("fail", task_name, message, executor=executor_name)
                 if not self.dry_run:
                     self.state.set_status(
                         self.workflow_name,
@@ -256,7 +260,7 @@ class WorkflowEngine:
             rendered = shlex.join(argv)
 
             if self.dry_run:
-                print(f"[PLAN] {task_name}: {rendered}")
+                self.reporter.event("plan", task_name, rendered, executor=executor_name)
                 planned_outputs_by_task[task_name] = (
                     planned_dependency_outputs | set(artifacts.required_outputs)
                 )
@@ -268,15 +272,31 @@ class WorkflowEngine:
             if not self.force and previous and previous.status == "success":
                 missing_outputs = artifacts.missing_required_outputs()
                 if previous.signature == signature.value and not missing_outputs:
-                    print(f"[SKIP] {task_name}: already successful")
+                    self.reporter.event(
+                        "skip",
+                        task_name,
+                        "already successful",
+                        executor=executor_name,
+                    )
                     continue
                 if missing_outputs:
-                    message = self._format_missing_outputs(artifacts)
-                    print(f"[RERUN] {task_name}: required output(s) missing: {message}")
+                    message = (
+                        "required output(s) missing: "
+                        f"{self._format_missing_outputs(artifacts)}"
+                    )
+                    self.reporter.event("rerun", task_name, message, executor=executor_name)
                 else:
-                    print(f"[RERUN] {task_name}: task signature changed")
+                    self.reporter.event(
+                        "rerun",
+                        task_name,
+                        "task signature changed",
+                        executor=executor_name,
+                    )
 
-            print(f"[RUN] {task_name}: {rendered}")
+            run_message = rendered
+            if executor_name == "pbs":
+                run_message = f"waiting for scheduler completion · {rendered}"
+            self.reporter.event("run", task_name, run_message, executor=executor_name)
             if recorder is None:
                 recorder = RunRecorder(self.workdir, self.workflow_name)
             attempt = recorder.begin_attempt(task_name)
@@ -300,7 +320,7 @@ class WorkflowEngine:
                 missing_outputs = artifacts.missing_required_outputs()
                 if missing_outputs:
                     reason = self._output_failure_reason(artifacts)
-                    print(f"[FAIL] {task_name}: {reason}")
+                    self.reporter.event("fail", task_name, reason, executor=executor_name)
                     self.state.set_status(
                         self.workflow_name,
                         task_name,
@@ -324,7 +344,7 @@ class WorkflowEngine:
                     )
                     exit_code = INVALID_OUTPUT_EXIT_CODE
                     break
-                print(f"[OK] {task_name}")
+                self.reporter.event("ok", task_name, executor=executor_name)
                 self.state.set_status(
                     self.workflow_name, task_name, "success", return_code, signature.value
                 )
@@ -343,7 +363,12 @@ class WorkflowEngine:
                 )
             else:
                 reason = self._process_failure_reason(return_code)
-                print(f"[FAIL] {task_name}: return code {return_code}")
+                self.reporter.event(
+                    "fail",
+                    task_name,
+                    f"return code {return_code}",
+                    executor=executor_name,
+                )
                 self.state.set_status(
                     self.workflow_name, task_name, "failed", return_code, signature.value
                 )
@@ -367,10 +392,12 @@ class WorkflowEngine:
         return exit_code
 
     def status(self) -> None:
-        """Print current task status."""
-        for task_name in self.plan():
-            status = self.state.get_status(self.workflow_name, task_name) or "pending"
-            print(f"{task_name}: {status}")
+        """Render current task states in dependency order."""
+        entries = [
+            (task_name, self.state.get_status(self.workflow_name, task_name) or "pending")
+            for task_name in self.plan()
+        ]
+        self.reporter.status_table(entries)
 
     def reset(self) -> None:
         """Reset all persisted state for this workflow."""

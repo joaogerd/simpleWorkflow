@@ -18,7 +18,8 @@ reproducible workflow that can be installed and understood quickly.
 - required input/output artifact validation;
 - per-attempt logs and provenance records;
 - ISO-8601 cycle expansion for scientific cases;
-- local execution and a small blocking PBS backend.
+- local execution and a small blocking PBS backend;
+- friendly, color-aware progress output with no runtime dependency.
 
 ## Deliberate limits
 
@@ -51,6 +52,26 @@ swf reset examples/hello.yaml
 
 Use `--force` to rerun successful tasks and `--dry-run` to inspect rendered
 argument vectors without launching processes.
+
+## Terminal output
+
+The CLI prints compact lifecycle events such as `PLAN`, `RUN`, `OK`, `FAIL`,
+`SKIP` and `RERUN`. Interactive terminals receive color and symbols by default;
+redirected output stays plain so logs and scripts remain stable.
+
+```bash
+# Default: color only when stdout is interactive.
+swf run workflow.yaml
+
+# Demonstrations or terminals that do not advertise color.
+swf run workflow.yaml --color always
+
+# CI logs, shell parsing or plain text output.
+swf status workflow.yaml --color never
+```
+
+`--color` accepts `auto`, `always` and `never`. Setting `NO_COLOR` also disables
+automatic color. The terminal renderer uses only Python's standard library.
 
 ## Workflow format
 
@@ -124,8 +145,8 @@ environment, workflow file and declared input fingerprints.
 ## Development
 
 ```bash
-python -m ruff check .
-python -m mypy simpleworkflow
+python -m ruff check simpleworkflow
+python -m mypy
 python -m pytest --cov=simpleworkflow
 ```
 
