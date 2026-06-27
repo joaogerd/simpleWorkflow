@@ -49,6 +49,7 @@ exclude = ["app", "unittests", "test"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
 
 [tool.mypy]
 python_version = "3.10"
