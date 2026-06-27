@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import shlex
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from .artifacts import ResolvedArtifacts, resolve_task_artifacts
-from .executor import LocalExecutor
+from .executor import ExecutionResult, LocalExecutor, TaskExecutor
+from .pbs import PbsExecutor
 from .provenance import build_attempt_metadata
 from .runs import AttemptPaths, RunRecorder
 from .signature import TaskSignature, compute_task_signature
@@ -16,13 +18,30 @@ INVALID_OUTPUT_EXIT_CODE = 3
 
 
 def render_template(text: str, context: dict[str, Any]) -> str:
-    """Render one string from the workflow context."""
-    return text.format(**context)
+    """Render one string from the workflow context with a useful error."""
+    try:
+        return text.format(**context)
+    except KeyError as error:
+        missing = error.args[0]
+        raise ValueError(f"Unknown context placeholder {{{missing}}} in {text!r}.") from error
+    except ValueError as error:
+        raise ValueError(f"Invalid context template {text!r}: {error}") from error
 
 
 def render_argv(argv: list[str], context: dict[str, Any]) -> list[str]:
     """Render task arguments while preserving their boundary semantics."""
     return [render_template(argument, context) for argument in argv]
+
+
+def _render_value(value: Any, context: dict[str, Any]) -> Any:
+    """Render strings recursively in a small executor configuration mapping."""
+    if isinstance(value, str):
+        return render_template(value, context)
+    if isinstance(value, list):
+        return [_render_value(item, context) for item in value]
+    if isinstance(value, dict):
+        return {key: _render_value(item, context) for key, item in value.items()}
+    return value
 
 
 class WorkflowEngine:
@@ -48,7 +67,7 @@ class WorkflowEngine:
         self.workdir = Path(workdir)
         self.log_dir = self.workdir / "logs" / self.workflow_name
         self.state = WorkflowState(self.workdir / "state.sqlite3")
-        self.executor = LocalExecutor(self.log_dir)
+        self.executor: TaskExecutor = LocalExecutor(self.log_dir)
 
     def plan(self) -> list[str]:
         """Return a dependency-resolved task order."""
@@ -92,6 +111,17 @@ class WorkflowEngine:
             for key, value in task.get("env", {}).items()
         }
 
+    def _task_executor(self, task: dict[str, Any]) -> TaskExecutor:
+        executor = task.get("executor", "local")
+        if executor == "local":
+            return self.executor
+        if executor == "pbs":
+            options = _render_value(task["pbs"], self.context)
+            if not isinstance(options, Mapping):
+                raise ValueError("Rendered PBS options must be a mapping.")
+            return PbsExecutor(options)
+        raise ValueError(f"Unsupported executor {executor!r}.")
+
     def _task_artifacts(self, task: dict[str, Any]) -> ResolvedArtifacts:
         return resolve_task_artifacts(task, self.context, self.source_dir)
 
@@ -134,6 +164,15 @@ class WorkflowEngine:
     def _process_failure_reason(return_code: int) -> str:
         return f"process exited with return code {return_code}"
 
+    @staticmethod
+    def _normalize_execution_result(result: ExecutionResult | int) -> ExecutionResult:
+        """Accept legacy integer test doubles while enforcing the new backend contract."""
+        if isinstance(result, ExecutionResult):
+            return result
+        if isinstance(result, int):
+            return ExecutionResult(return_code=result)
+        raise TypeError("Task executor must return ExecutionResult or an integer return code.")
+
     def _record_attempt(
         self,
         recorder: RunRecorder | None,
@@ -146,6 +185,7 @@ class WorkflowEngine:
         signature: TaskSignature,
         status: str,
         return_code: int,
+        execution: Mapping[str, Any] | None = None,
         process_return_code: int | None = None,
         reason: str | None = None,
     ) -> None:
@@ -161,6 +201,7 @@ class WorkflowEngine:
                 signature=signature,
                 status=status,
                 return_code=return_code,
+                execution=execution,
                 process_return_code=process_return_code,
                 reason=reason,
             ),
@@ -194,9 +235,7 @@ class WorkflowEngine:
             missing_inputs = artifacts.missing_required_inputs()
             if self.dry_run:
                 missing_inputs = tuple(
-                    path
-                    for path in missing_inputs
-                    if path not in planned_dependency_outputs
+                    path for path in missing_inputs if path not in planned_dependency_outputs
                 )
 
             if missing_inputs:
@@ -223,9 +262,7 @@ class WorkflowEngine:
                 )
                 continue
 
-            signature = self._task_signature(
-                task_name, task, argv, cwd, env, artifacts
-            )
+            signature = self._task_signature(task_name, task, argv, cwd, env, artifacts)
 
             previous = self.state.get_task_state(self.workflow_name, task_name)
             if not self.force and previous and previous.status == "success":
@@ -246,14 +283,18 @@ class WorkflowEngine:
             self.state.set_status(
                 self.workflow_name, task_name, "running", None, signature.value
             )
-            return_code = self.executor.run(
-                task_name,
-                argv,
-                cwd=cwd,
-                env=env,
-                stdout_path=attempt.stdout_path if attempt is not None else None,
-                stderr_path=attempt.stderr_path if attempt is not None else None,
+            execution_result = self._normalize_execution_result(
+                self._task_executor(task).run(
+                    task_name,
+                    argv,
+                    cwd=cwd,
+                    env=env,
+                    stdout_path=attempt.stdout_path,
+                    stderr_path=attempt.stderr_path,
+                )
             )
+            return_code = execution_result.return_code
+            execution = execution_result.metadata
 
             if return_code == 0:
                 missing_outputs = artifacts.missing_required_outputs()
@@ -277,6 +318,7 @@ class WorkflowEngine:
                         signature=signature,
                         status="invalid-output",
                         return_code=INVALID_OUTPUT_EXIT_CODE,
+                        execution=execution,
                         process_return_code=return_code,
                         reason=reason,
                     )
@@ -296,6 +338,7 @@ class WorkflowEngine:
                     signature=signature,
                     status="success",
                     return_code=return_code,
+                    execution=execution,
                     process_return_code=return_code,
                 )
             else:
@@ -314,6 +357,7 @@ class WorkflowEngine:
                     signature=signature,
                     status="failed",
                     return_code=return_code,
+                    execution=execution,
                     process_return_code=return_code,
                     reason=reason,
                 )
