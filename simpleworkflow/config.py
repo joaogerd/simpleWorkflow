@@ -78,7 +78,10 @@ def _validate_artifact_group(value: Any, field: str, task_name: str) -> None:
         raise ValueError(f"Task '{task_name}' field '{field}' must be a mapping.")
 
     allowed_keys = {"required", "optional"} if field == "inputs" else {"required"}
-    _reject_unknown_keys(value, allowed_keys, f"Task '{task_name}' field '{field}'")
+    unknown_keys = set(value) - allowed_keys
+    if unknown_keys:
+        unknown = ", ".join(sorted(unknown_keys))
+        raise ValueError(f"Task '{task_name}' field '{field}' has unsupported keys: {unknown}.")
 
     if "required" in value:
         _validate_artifact_paths(
@@ -131,7 +134,6 @@ def _validate_pbs(task: dict[str, Any], task_name: str) -> None:
 def _validate_task(task: Any) -> None:
     if not isinstance(task, dict):
         raise ValueError("Each task must be a mapping.")
-    _reject_unknown_keys(task, _TASK_FIELDS, "Task")
 
     name = task.get("name")
     if not isinstance(name, str) or not name:
@@ -142,6 +144,8 @@ def _validate_task(task: Any) -> None:
             f"Task '{name}' uses unsupported field 'run'. "
             "Define 'argv' as a list of program arguments."
         )
+    _reject_unknown_keys(task, _TASK_FIELDS, "Task")
+
     if "argv" not in task:
         raise ValueError(f"Task '{name}' must define 'argv'.")
     _validate_string_list(task["argv"], "argv", name)
