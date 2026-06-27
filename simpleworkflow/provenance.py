@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .artifacts import ResolvedArtifacts
 from .signature import TaskSignature
@@ -22,14 +23,15 @@ def build_attempt_metadata(
     signature: TaskSignature,
     status: str,
     return_code: int,
+    execution: Mapping[str, Any] | None = None,
     process_return_code: int | None = None,
     reason: str | None = None,
 ) -> dict[str, Any]:
     """Build the stable provenance payload for one completed task attempt.
 
-    The returned mapping includes only task-declared environment variables. It never
-    captures the inherited process environment, which may contain credentials or
-    machine-specific transient values.
+    The mapping includes only task-declared environment variables. It never
+    captures the inherited process environment, which may contain credentials
+    or machine-specific transient values.
     """
     metadata: dict[str, Any] = {
         "provenance_schema_version": PROVENANCE_SCHEMA_VERSION,
@@ -54,6 +56,8 @@ def build_attempt_metadata(
             },
         },
     }
+    if execution:
+        metadata["execution"] = dict(execution)
     if process_return_code is not None:
         metadata["process_return_code"] = process_return_code
     if reason is not None:
