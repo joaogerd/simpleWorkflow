@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -7,8 +8,42 @@ import yaml
 
 from .cycles import validate_cycle_mapping
 
+SUPPORTED_EXECUTORS = {"local", "pbs"}
 SUPPORTED_INPUT_FINGERPRINTS = {"metadata", "sha256"}
 _GLOB_MARKERS = ("*", "?", "[")
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_TEMPLATE = re.compile(r"\{[^{}]+\}")
+_WALLTIME = re.compile(r"^\d{1,3}:\d{2}:\d{2}$")
+_TASK_FIELDS = {
+    "name",
+    "argv",
+    "depends_on",
+    "enabled",
+    "cwd",
+    "env",
+    "executor",
+    "pbs",
+    "inputs",
+    "outputs",
+    "input_fingerprint",
+}
+_PBS_FIELDS = {
+    "queue",
+    "project",
+    "walltime",
+    "select",
+    "ncpus",
+    "mpiprocs",
+    "omp_threads",
+    "job_name",
+    "qsub",
+    "block",
+    "inherit_environment",
+}
+
+
+def _contains_template(value: Any) -> bool:
+    return isinstance(value, str) and _TEMPLATE.search(value) is not None
 
 
 def _validate_string_list(value: Any, field: str, task_name: str) -> None:
@@ -20,6 +55,13 @@ def _validate_string_list(value: Any, field: str, task_name: str) -> None:
         raise ValueError(
             f"Task '{task_name}' field '{field}' must contain only non-empty strings."
         )
+
+
+def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
+    unknown = set(value) - allowed
+    if unknown:
+        names = ", ".join(sorted(unknown))
+        raise ValueError(f"{label} has unsupported field(s): {names}.")
 
 
 def _validate_artifact_paths(
@@ -57,6 +99,55 @@ def _validate_artifact_group(value: Any, field: str, task_name: str) -> None:
         )
 
 
+def _validate_positive_integer(value: Any, field: str, task_name: str) -> None:
+    if _contains_template(value):
+        return
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ValueError(
+            f"Task '{task_name}' field 'pbs.{field}' must be a positive integer "
+            "or a context placeholder."
+        )
+
+
+def _validate_pbs(task: dict[str, Any], task_name: str) -> None:
+    pbs = task.get("pbs")
+    if task.get("executor", "local") == "pbs" and pbs is None:
+        raise ValueError(f"Task '{task_name}' executor 'pbs' requires a 'pbs' mapping.")
+    if pbs is None:
+        return
+    if task.get("executor", "local") != "pbs":
+        raise ValueError(f"Task '{task_name}' field 'pbs' requires executor 'pbs'.")
+    if not isinstance(pbs, dict):
+        raise ValueError(f"Task '{task_name}' field 'pbs' must be a mapping.")
+    _reject_unknown_keys(pbs, _PBS_FIELDS, f"Task '{task_name}' field 'pbs'")
+
+    for field in ("queue", "project", "job_name", "qsub"):
+        if field in pbs and (not isinstance(pbs[field], str) or not pbs[field]):
+            raise ValueError(f"Task '{task_name}' field 'pbs.{field}' must be a non-empty string.")
+    if "walltime" in pbs and (
+        not isinstance(pbs["walltime"], str)
+        or not pbs["walltime"]
+        or (
+            not _WALLTIME.fullmatch(pbs["walltime"])
+            and not _contains_template(pbs["walltime"])
+        )
+    ):
+        raise ValueError(
+            f"Task '{task_name}' field 'pbs.walltime' must use HHH:MM:SS format "
+            "or a context placeholder."
+        )
+    for field in ("select", "ncpus", "mpiprocs", "omp_threads"):
+        if field in pbs:
+            _validate_positive_integer(pbs[field], field, task_name)
+    for field in ("block", "inherit_environment"):
+        if field in pbs and not isinstance(pbs[field], bool):
+            raise ValueError(f"Task '{task_name}' field 'pbs.{field}' must be a boolean.")
+    if pbs.get("block", True) is not True:
+        raise ValueError(
+            f"Task '{task_name}' field 'pbs.block' must be true; non-blocking PBS is unsupported."
+        )
+
+
 def _validate_task(task: Any) -> None:
     if not isinstance(task, dict):
         raise ValueError("Each task must be a mapping.")
@@ -70,6 +161,8 @@ def _validate_task(task: Any) -> None:
             f"Task '{name}' uses unsupported field 'run'. "
             "Define 'argv' as a list of program arguments."
         )
+    _reject_unknown_keys(task, _TASK_FIELDS, "Task")
+
     if "argv" not in task:
         raise ValueError(f"Task '{name}' must define 'argv'.")
     _validate_string_list(task["argv"], "argv", name)
@@ -84,8 +177,10 @@ def _validate_task(task: Any) -> None:
 
     if "enabled" in task and not isinstance(task["enabled"], bool):
         raise ValueError(f"Task '{name}' field 'enabled' must be a boolean.")
-    if "executor" in task and task["executor"] != "local":
-        raise ValueError(f"Task '{name}' requests unsupported executor {task['executor']!r}.")
+    executor = task.get("executor", "local")
+    if executor not in SUPPORTED_EXECUTORS:
+        supported = ", ".join(sorted(SUPPORTED_EXECUTORS))
+        raise ValueError(f"Task '{name}' requests unsupported executor {executor!r}; use: {supported}.")
     if "cwd" in task and not isinstance(task["cwd"], str):
         raise ValueError(f"Task '{name}' field 'cwd' must be a string.")
     if "env" in task:
@@ -99,6 +194,12 @@ def _validate_task(task: Any) -> None:
             raise ValueError(
                 f"Task '{name}' field 'env' must map string names to string values."
             )
+        invalid_keys = [key for key in environment if not _ENV_NAME.fullmatch(key)]
+        if invalid_keys:
+            names = ", ".join(sorted(invalid_keys))
+            raise ValueError(
+                f"Task '{name}' field 'env' contains invalid environment variable name(s): {names}."
+            )
 
     if "inputs" in task:
         _validate_artifact_group(task["inputs"], "inputs", name)
@@ -111,10 +212,11 @@ def _validate_task(task: Any) -> None:
         raise ValueError(
             f"Task '{name}' field 'input_fingerprint' must be one of: {supported}."
         )
+    _validate_pbs(task, name)
 
 
 def load_workflow(path: str | Path) -> dict[str, Any]:
-    """Load and validate a Python-only simpleWorkflow YAML file."""
+    """Load and strictly validate one simpleWorkflow YAML configuration."""
     workflow_path = Path(path).resolve()
     if not workflow_path.exists():
         raise FileNotFoundError(f"Workflow file not found: {workflow_path}")
@@ -124,13 +226,21 @@ def load_workflow(path: str | Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("Workflow file must contain a YAML mapping at the top level.")
 
+    _reject_unknown_keys(data, {"workflow", "context", "tasks", "cycle"}, "Workflow")
     data.setdefault("workflow", {})
     data.setdefault("context", {})
     data.setdefault("tasks", [])
     if not isinstance(data["workflow"], dict):
         raise ValueError("'workflow' must be a mapping.")
+    _reject_unknown_keys(data["workflow"], {"name"}, "'workflow'")
+    if "name" in data["workflow"] and (
+        not isinstance(data["workflow"]["name"], str) or not data["workflow"]["name"]
+    ):
+        raise ValueError("'workflow.name' must be a non-empty string.")
     if not isinstance(data["context"], dict):
         raise ValueError("'context' must be a mapping.")
+    if any(not isinstance(key, str) or not key for key in data["context"]):
+        raise ValueError("'context' keys must be non-empty strings.")
     if not isinstance(data["tasks"], list):
         raise ValueError("'tasks' must be a list.")
 

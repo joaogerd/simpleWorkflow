@@ -1,0 +1,23 @@
+workflow:
+  name: pbs_hello
+
+context:
+  python: python
+  message: "simpleWorkflow PBS task is running"
+
+tasks:
+  - name: hello_from_pbs
+    executor: pbs
+    argv:
+      - "{python}"
+      - -c
+      - "print('{message}')"
+    pbs:
+      queue: workq
+      walltime: "00:05:00"
+      select: 1
+      ncpus: 1
+      mpiprocs: 1
+      omp_threads: 1
+      inherit_environment: true
+      block: true
