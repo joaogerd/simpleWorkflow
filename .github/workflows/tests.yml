@@ -18,8 +18,8 @@ jobs:
           python -m pip install -e ".[dev]"
       - name: Lint package
         run: python -m ruff check simpleworkflow
-      - name: Type check package
-        run: python -m mypy simpleworkflow
+      - name: Type check execution core
+        run: python -m mypy
 
   test:
     runs-on: ubuntu-latest
