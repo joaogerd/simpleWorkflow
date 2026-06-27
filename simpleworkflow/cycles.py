@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable
+from typing import Any
 
 
 class CycleConfigurationError(ValueError):
@@ -134,9 +135,7 @@ def resolve_cycle_contexts(
         if value is None
     ]
     if missing:
-        raise CycleConfigurationError(
-            "Cycle range requires " + ", ".join(missing) + "."
-        )
+        raise CycleConfigurationError("Cycle range requires " + ", ".join(missing) + ".")
 
     first = parse_cycle_time(raw_start, label="cycle start")
     last = parse_cycle_time(raw_end, label="cycle end")
