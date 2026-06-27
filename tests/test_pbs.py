@@ -42,6 +42,11 @@ def test_pbs_executor_waits_for_job_and_records_rendered_script(tmp_path: Path) 
             "python": sys.executable,
             "cwd": str(execution_dir),
             "qsub": str(qsub),
+            "walltime": "00:05:00",
+            "select": "1",
+            "ncpus": "2",
+            "mpiprocs": "2",
+            "omp_threads": "1",
         },
         "tasks": [
             {
@@ -57,11 +62,11 @@ def test_pbs_executor_waits_for_job_and_records_rendered_script(tmp_path: Path) 
                 "pbs": {
                     "qsub": "{qsub}",
                     "queue": "testq",
-                    "walltime": "00:05:00",
-                    "select": 1,
-                    "ncpus": 2,
-                    "mpiprocs": 2,
-                    "omp_threads": 1,
+                    "walltime": "{walltime}",
+                    "select": "{select}",
+                    "ncpus": "{ncpus}",
+                    "mpiprocs": "{mpiprocs}",
+                    "omp_threads": "{omp_threads}",
                     "inherit_environment": True,
                     "block": True,
                 },
@@ -83,6 +88,7 @@ def test_pbs_executor_waits_for_job_and_records_rendered_script(tmp_path: Path) 
     script = attempt / "job.pbs"
     script_content = script.read_text(encoding="utf-8")
     assert "#PBS -q testq" in script_content
+    assert "#PBS -l walltime=00:05:00" in script_content
     assert "#PBS -l select=1:ncpus=2:mpiprocs=2" in script_content
     assert "export OMP_NUM_THREADS=1" in script_content
 
