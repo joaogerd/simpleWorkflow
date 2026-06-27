@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterable
 from copy import deepcopy
-from typing import Iterable
+from typing import Any
 
 from .config import load_workflow
 from .cycles import CycleContext, resolve_cycle_contexts
@@ -59,7 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _cycle_engines(
-    config: dict,
+    config: dict[str, Any],
     args: argparse.Namespace,
 ) -> Iterable[tuple[CycleContext | None, WorkflowEngine]]:
     cycles = resolve_cycle_contexts(
