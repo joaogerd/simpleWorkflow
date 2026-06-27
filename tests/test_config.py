@@ -45,7 +45,7 @@ def test_rejects_missing_or_invalid_argv(tmp_path: Path) -> None:
 def test_rejects_unknown_executor(tmp_path: Path) -> None:
     workflow = write(
         tmp_path / "workflow.yaml",
-        "tasks: [{name: task, argv: [python], executor: pbs}]\n",
+        "tasks: [{name: task, argv: [python], executor: slurm}]\n",
     )
     with pytest.raises(ValueError, match="unsupported executor"):
         load_workflow(workflow)
