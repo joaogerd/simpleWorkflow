@@ -27,6 +27,26 @@ tasks:
     assert config["__simpleworkflow__"]["source_dir"] == str(tmp_path)
 
 
+def test_loads_parallelism_and_retry_policy(tmp_path: Path) -> None:
+    workflow = write(
+        tmp_path / "workflow.yaml",
+        """
+workflow:
+  name: test
+  max_parallel_tasks: 2
+tasks:
+  - name: task
+    argv: [python]
+    retry:
+      attempts: 3
+      delay: PT2M
+""",
+    )
+    config = load_workflow(workflow)
+    assert config["workflow"]["max_parallel_tasks"] == 2
+    assert config["tasks"][0]["retry"] == {"attempts": 3, "delay": "PT2M"}
+
+
 def test_rejects_shell_run_field(tmp_path: Path) -> None:
     workflow = write(tmp_path / "workflow.yaml", "tasks: [{name: task, run: 'echo no'}]\n")
     with pytest.raises(ValueError, match="unsupported field 'run'"):
@@ -100,5 +120,22 @@ tasks:
     {field_snippet}
 """,
     )
+    with pytest.raises(ValueError, match=message):
+        load_workflow(workflow)
+
+
+@pytest.mark.parametrize(
+    "snippet, message",
+    [
+        ("workflow: {max_parallel_tasks: 0}", "max_parallel_tasks"),
+        ("tasks: [{name: task, argv: [python], retry: []}]", "retry"),
+        ("tasks: [{name: task, argv: [python], retry: {attempts: 0}}]", "retry.attempts"),
+        ("tasks: [{name: task, argv: [python], retry: {delay: bad}}]", "retry.delay"),
+    ],
+)
+def test_rejects_invalid_parallelism_and_retry(
+    tmp_path: Path, snippet: str, message: str
+) -> None:
+    workflow = write(tmp_path / "workflow.yaml", snippet + "\n")
     with pytest.raises(ValueError, match=message):
         load_workflow(workflow)
