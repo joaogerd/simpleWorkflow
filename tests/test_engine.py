@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 from simpleworkflow.engine import WorkflowEngine
@@ -129,3 +130,75 @@ def test_success_state_is_invalidated_when_required_input_disappears(tmp_path: P
 
     assert engine.run() == 2
     assert engine.state.get_status("stale-input", "task") == "invalid-input"
+
+
+def test_retry_reruns_transient_failure(tmp_path: Path) -> None:
+    marker = tmp_path / "attempts.txt"
+    result = tmp_path / "result.txt"
+    script = (
+        "from pathlib import Path\n"
+        f"marker = Path({str(marker)!r})\n"
+        f"result = Path({str(result)!r})\n"
+        "attempts = int(marker.read_text()) if marker.exists() else 0\n"
+        "marker.write_text(str(attempts + 1))\n"
+        "if attempts == 0:\n"
+        "    raise SystemExit(7)\n"
+        "result.write_text('ok')\n"
+    )
+    config = {
+        "workflow": {"name": "retry-test"},
+        "context": {"python": sys.executable},
+        "tasks": [
+            {
+                "name": "flaky",
+                "argv": ["{python}", "-c", script],
+                "outputs": {"required": [str(result)]},
+                "retry": {"attempts": 2, "delay": "PT0S"},
+            }
+        ],
+        "__simpleworkflow__": {"source_dir": str(tmp_path)},
+    }
+
+    engine = WorkflowEngine(config=config, workdir=tmp_path / ".simpleworkflow")
+    assert engine.run() == 0
+    assert marker.read_text(encoding="utf-8") == "2"
+    assert result.read_text(encoding="utf-8") == "ok"
+
+
+def test_parallel_runs_independent_tasks_before_downstream(tmp_path: Path) -> None:
+    start = time.monotonic()
+    result = tmp_path / "done.txt"
+    sleep_and_write_a = (
+        "import time; from pathlib import Path; "
+        f"time.sleep(0.3); Path({str(tmp_path / 'a.txt')!r}).write_text('a')"
+    )
+    sleep_and_write_b = (
+        "import time; from pathlib import Path; "
+        f"time.sleep(0.3); Path({str(tmp_path / 'b.txt')!r}).write_text('b')"
+    )
+    combine = (
+        "from pathlib import Path; "
+        f"Path({str(result)!r}).write_text("
+        f"Path({str(tmp_path / 'a.txt')!r}).read_text() + Path({str(tmp_path / 'b.txt')!r}).read_text())"
+    )
+    config = {
+        "workflow": {"name": "parallel-test", "max_parallel_tasks": 2},
+        "context": {"python": sys.executable},
+        "tasks": [
+            {"name": "a", "argv": ["{python}", "-c", sleep_and_write_a]},
+            {"name": "b", "argv": ["{python}", "-c", sleep_and_write_b]},
+            {
+                "name": "combine",
+                "argv": ["{python}", "-c", combine],
+                "depends_on": ["a", "b"],
+                "outputs": {"required": [str(result)]},
+            },
+        ],
+        "__simpleworkflow__": {"source_dir": str(tmp_path)},
+    }
+
+    engine = WorkflowEngine(config=config, workdir=tmp_path / ".simpleworkflow")
+    assert engine.run() == 0
+    assert result.read_text(encoding="utf-8") == "ab"
+    assert time.monotonic() - start < 0.55
+}
