@@ -201,4 +201,3 @@ def test_parallel_runs_independent_tasks_before_downstream(tmp_path: Path) -> No
     assert engine.run() == 0
     assert result.read_text(encoding="utf-8") == "ab"
     assert time.monotonic() - start < 0.55
-}
