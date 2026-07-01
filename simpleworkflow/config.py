@@ -14,6 +14,10 @@ _GLOB_MARKERS = ("*", "?", "[")
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _TEMPLATE = re.compile(r"\{[^{}]+\}")
 _WALLTIME = re.compile(r"^\d{1,3}:\d{2}:\d{2}$")
+_DURATION = re.compile(
+    r"^P(?:(?P<weeks>\d+)W)?(?:(?P<days>\d+)D)?"
+    r"(?:T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?)?$"
+)
 _TASK_FIELDS = {
     "name",
     "argv",
@@ -26,6 +30,7 @@ _TASK_FIELDS = {
     "inputs",
     "outputs",
     "input_fingerprint",
+    "retry",
 }
 _PBS_FIELDS = {
     "queue",
@@ -40,6 +45,7 @@ _PBS_FIELDS = {
     "block",
     "inherit_environment",
 }
+_RETRY_FIELDS = {"attempts", "delay"}
 
 
 def _contains_template(value: Any) -> bool:
@@ -107,6 +113,30 @@ def _validate_positive_integer(value: Any, field: str, task_name: str) -> None:
             f"Task '{task_name}' field 'pbs.{field}' must be a positive integer "
             "or a context placeholder."
         )
+
+
+def _validate_iso_duration(value: Any, field: str, task_name: str) -> None:
+    if _contains_template(value):
+        return
+    if not isinstance(value, str) or not value or _DURATION.fullmatch(value) is None:
+        raise ValueError(
+            f"Task '{task_name}' field '{field}' must be an ISO-8601 duration such as PT30S or PT2M."
+        )
+
+
+def _validate_retry(task: dict[str, Any], task_name: str) -> None:
+    retry = task.get("retry")
+    if retry is None:
+        return
+    if not isinstance(retry, dict):
+        raise ValueError(f"Task '{task_name}' field 'retry' must be a mapping.")
+    _reject_unknown_keys(retry, _RETRY_FIELDS, f"Task '{task_name}' field 'retry'")
+    if "attempts" in retry:
+        attempts = retry["attempts"]
+        if not isinstance(attempts, int) or isinstance(attempts, bool) or attempts <= 0:
+            raise ValueError(f"Task '{task_name}' field 'retry.attempts' must be a positive integer.")
+    if "delay" in retry:
+        _validate_iso_duration(retry["delay"], "retry.delay", task_name)
 
 
 def _validate_pbs(task: dict[str, Any], task_name: str) -> None:
@@ -212,6 +242,7 @@ def _validate_task(task: Any) -> None:
         raise ValueError(
             f"Task '{name}' field 'input_fingerprint' must be one of: {supported}."
         )
+    _validate_retry(task, name)
     _validate_pbs(task, name)
 
 
@@ -232,11 +263,15 @@ def load_workflow(path: str | Path) -> dict[str, Any]:
     data.setdefault("tasks", [])
     if not isinstance(data["workflow"], dict):
         raise ValueError("'workflow' must be a mapping.")
-    _reject_unknown_keys(data["workflow"], {"name"}, "'workflow'")
+    _reject_unknown_keys(data["workflow"], {"name", "max_parallel_tasks"}, "'workflow'")
     if "name" in data["workflow"] and (
         not isinstance(data["workflow"]["name"], str) or not data["workflow"]["name"]
     ):
         raise ValueError("'workflow.name' must be a non-empty string.")
+    if "max_parallel_tasks" in data["workflow"]:
+        value = data["workflow"]["max_parallel_tasks"]
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise ValueError("'workflow.max_parallel_tasks' must be a positive integer.")
     if not isinstance(data["context"], dict):
         raise ValueError("'context' must be a mapping.")
     if any(not isinstance(key, str) or not key for key in data["context"]):

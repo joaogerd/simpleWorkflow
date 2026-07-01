@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal, Protocol, TextIO
@@ -37,6 +38,7 @@ _EVENT_STYLES = {
     "ok": EventStyle("✔", "OK", "green"),
     "fail": EventStyle("✘", "FAIL", "red"),
     "skip": EventStyle("↷", "SKIP", "yellow"),
+    "retry": EventStyle("↻", "RETRY", "yellow"),
     "rerun": EventStyle("↻", "RERUN", "yellow"),
     "pending": EventStyle("○", "PENDING", None),
     "running": EventStyle("▶", "RUNNING", "blue"),
@@ -81,6 +83,7 @@ class TerminalReporter:
         self.stream = stream or sys.stdout
         self.color = color
         self._use_color = self._resolve_color()
+        self._lock = threading.Lock()
 
     def _resolve_color(self) -> bool:
         if self.color == "always":
@@ -105,7 +108,8 @@ class TerminalReporter:
         return f"{_DIM}{text}{_RESET}"
 
     def _write(self, text: str = "") -> None:
-        print(text, file=self.stream, flush=True)
+        with self._lock:
+            print(text, file=self.stream, flush=True)
 
     def heading(self, title: str) -> None:
         """Render a compact section heading."""

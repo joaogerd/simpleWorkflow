@@ -12,13 +12,14 @@ reproducible workflow that can be installed and understood quickly.
 ## What it provides
 
 - YAML task definitions with explicit `argv` arguments, never shell command strings;
-- dependency-aware, sequential execution;
+- dependency-aware execution with optional bounded parallelism;
 - `plan`, `run`, `status` and `reset` commands;
 - persistent SQLite task state and safe restart/reuse;
 - required input/output artifact validation;
 - per-attempt logs and provenance records;
 - ISO-8601 cycle expansion for scientific cases;
 - local execution and a small blocking PBS backend;
+- simple per-task retry policies for transient failures;
 - friendly, color-aware progress output with no runtime dependency.
 
 ## Deliberate limits
@@ -56,8 +57,8 @@ argument vectors without launching processes.
 ## Terminal output
 
 The CLI prints compact lifecycle events such as `PLAN`, `RUN`, `OK`, `FAIL`,
-`SKIP` and `RERUN`. Interactive terminals receive color and symbols by default;
-redirected output stays plain so logs and scripts remain stable.
+`SKIP`, `RETRY` and `RERUN`. Interactive terminals receive color and symbols by
+default; redirected output stays plain so logs and scripts remain stable.
 
 ```bash
 # Default: color only when stdout is interactive.
@@ -93,6 +94,46 @@ tasks:
 Task arguments, working directories, environment values and artifact paths can
 use context placeholders such as `{python}`, `{case_name}` and
 `{cycle_yyyymmddhh}`. See [the workflow format](docs/workflow_format.md).
+
+## Bounded parallel execution
+
+Sequential execution remains the default. To run independent DAG tasks at the
+same time, set a small workflow-level limit:
+
+```yaml
+workflow:
+  name: preprocess_and_run
+  max_parallel_tasks: 2
+
+tasks:
+  - name: preprocess_obs
+    argv: [python, preprocess_obs.py]
+
+  - name: preprocess_background
+    argv: [python, preprocess_background.py]
+
+  - name: run_analysis
+    depends_on: [preprocess_obs, preprocess_background]
+    argv: [python, run_analysis.py]
+```
+
+Only ready tasks are submitted. If a task fails, new submissions stop and tasks
+already running are allowed to finish.
+
+## Retry
+
+A task can retry transient failures without changing the workflow model:
+
+```yaml
+- name: fetch_input
+  argv: [python, fetch_input.py]
+  retry:
+    attempts: 3
+    delay: PT2M
+```
+
+Retries apply to non-zero process return codes and missing required outputs.
+Missing required inputs fail immediately.
 
 ## PBS execution
 

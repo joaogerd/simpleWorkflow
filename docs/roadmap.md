@@ -33,16 +33,27 @@ Implemented:
 - validation that rejects non-blocking PBS submission;
 - Ruff, mypy and coverage-oriented development configuration.
 
-The remaining work for this version is operational validation on JACI with a
-small job and then one MONAN-JEDI smoke case.
+## 0.3.0 — lightweight resilience and bounded parallelism
+
+Implemented on the feature branch:
+
+- optional `workflow.max_parallel_tasks`, defaulting to sequential execution;
+- bounded DAG parallelism for tasks whose dependencies are complete;
+- simple per-task `retry.attempts` and `retry.delay` for transient failures;
+- serialized SQLite state, run-attempt allocation and terminal reporting for
+  lightweight threaded execution;
+- documentation and an example workflow for parallel retry usage.
+
+The remaining work before merging is running the full local test suite and then
+validating a small JACI/PBS smoke workflow with `max_parallel_tasks` greater than
+one.
 
 ## Next, only when needed
 
 - a similarly small SLURM blocking backend;
-- optional retry and timeout policy for transient site failures;
+- timeout policy for transient site hangs;
 - selective execution of a subset of the DAG;
-- clearer blocked/upstream-failure task states;
-- a friendly, color-aware terminal renderer for plan, run and status output.
+- clearer blocked/upstream-failure task states.
 
-Parallel DAG execution, scheduler polling daemons, web dashboards, remote
-controllers and generalized event processing are intentionally out of scope.
+Scheduler polling daemons, web dashboards, remote controllers and generalized
+event processing are intentionally out of scope.
