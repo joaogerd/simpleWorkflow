@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import shlex
+import time
 from collections.abc import Mapping
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .artifacts import ResolvedArtifacts, resolve_task_artifacts
 from .console import TerminalReporter, WorkflowReporter
+from .cycles import parse_iso_duration
 from .executor import ExecutionResult, LocalExecutor, TaskExecutor
 from .pbs import PbsExecutor
 from .provenance import build_attempt_metadata
@@ -16,6 +20,15 @@ from .state import WorkflowState
 
 INVALID_INPUT_EXIT_CODE = 2
 INVALID_OUTPUT_EXIT_CODE = 3
+
+
+@dataclass(frozen=True)
+class TaskRunOutcome:
+    """Final outcome for one task execution attempt sequence."""
+
+    task_name: str
+    success: bool
+    exit_code: int
 
 
 def render_template(text: str, context: dict[str, Any]) -> str:
@@ -80,9 +93,7 @@ class WorkflowEngine:
         while remaining:
             progressed = False
             for name, task in list(remaining.items()):
-                dependencies = task.get("depends_on", []) or []
-                if isinstance(dependencies, str):
-                    dependencies = [dependencies]
+                dependencies = self._task_dependencies(task)
 
                 missing = [dep for dep in dependencies if dep not in remaining and dep not in ordered]
                 if missing:
@@ -100,6 +111,13 @@ class WorkflowEngine:
                 raise ValueError(f"Cyclic or unresolved task dependencies: {unresolved}")
 
         return ordered
+
+    @staticmethod
+    def _task_dependencies(task: dict[str, Any]) -> list[str]:
+        dependencies = task.get("depends_on", []) or []
+        if isinstance(dependencies, str):
+            return [dependencies]
+        return list(dependencies)
 
     def _task_cwd(self, task: dict[str, Any]) -> Path | None:
         raw_cwd = task.get("cwd")
@@ -176,6 +194,21 @@ class WorkflowEngine:
             return ExecutionResult(return_code=result)
         raise TypeError("Task executor must return ExecutionResult or an integer return code.")
 
+    def _workflow_parallelism(self) -> int:
+        return int(self.config.get("workflow", {}).get("max_parallel_tasks", 1))
+
+    def _task_attempts(self, task: dict[str, Any]) -> int:
+        retry = task.get("retry", {}) or {}
+        return int(retry.get("attempts", 1))
+
+    def _task_retry_delay(self, task: dict[str, Any]) -> float:
+        retry = task.get("retry", {}) or {}
+        raw_delay = retry.get("delay")
+        if raw_delay is None:
+            return 0.0
+        rendered = render_template(str(raw_delay), self.context)
+        return parse_iso_duration(rendered, label="retry.delay").total_seconds()
+
     def _record_attempt(
         self,
         recorder: RunRecorder | None,
@@ -212,91 +245,183 @@ class WorkflowEngine:
 
     def run(self) -> int:
         """Execute pending workflow tasks in dependency order."""
+        if self.dry_run or self._workflow_parallelism() == 1:
+            return self._run_sequential()
+        return self._run_parallel(self._workflow_parallelism())
+
+    def _run_sequential(self) -> int:
+        """Execute tasks one at a time, preserving the original simple behavior."""
         recorder: RunRecorder | None = None
         task_map = {task["name"]: task for task in self.tasks}
         planned_outputs_by_task: dict[str, set[Path]] = {}
-        exit_code = 0
 
         for task_name in self.plan():
             task = task_map[task_name]
-            executor_name = str(task.get("executor", "local"))
-            if task.get("enabled", True) is False:
-                self.reporter.event("skip", task_name, "disabled", executor=executor_name)
-                self.state.set_status(self.workflow_name, task_name, "skipped", 0)
-                continue
-
-            artifacts = self._task_artifacts(task)
-            dependencies = task.get("depends_on", []) or []
-            if isinstance(dependencies, str):
-                dependencies = [dependencies]
-
-            planned_dependency_outputs: set[Path] = set()
-            for dependency in dependencies:
-                planned_dependency_outputs.update(
-                    planned_outputs_by_task.get(dependency, set())
-                )
-
-            missing_inputs = artifacts.missing_required_inputs()
+            if recorder is None and not self.dry_run:
+                recorder = RunRecorder(self.workdir, self.workflow_name)
+            outcome = self._run_one_task(
+                task_name,
+                task,
+                recorder=recorder,
+                planned_outputs_by_task=planned_outputs_by_task,
+            )
             if self.dry_run:
-                missing_inputs = tuple(
-                    path for path in missing_inputs if path not in planned_dependency_outputs
-                )
-
-            if missing_inputs:
-                message = f"missing required input(s): {self._format_missing_inputs(artifacts)}"
-                self.reporter.event("fail", task_name, message, executor=executor_name)
-                if not self.dry_run:
-                    self.state.set_status(
-                        self.workflow_name,
-                        task_name,
-                        "invalid-input",
-                        INVALID_INPUT_EXIT_CODE,
+                artifacts = self._task_artifacts(task)
+                planned_dependency_outputs = set()
+                for dependency in self._task_dependencies(task):
+                    planned_dependency_outputs.update(
+                        planned_outputs_by_task.get(dependency, set())
                     )
-                return INVALID_INPUT_EXIT_CODE
-
-            argv = render_argv(task["argv"], self.context)
-            cwd = self._task_cwd(task)
-            env = self._task_env(task)
-            rendered = shlex.join(argv)
-
-            if self.dry_run:
-                self.reporter.event("plan", task_name, rendered, executor=executor_name)
                 planned_outputs_by_task[task_name] = (
                     planned_dependency_outputs | set(artifacts.required_outputs)
                 )
-                continue
+            if not outcome.success:
+                return outcome.exit_code
+        return 0
 
-            signature = self._task_signature(task_name, task, argv, cwd, env, artifacts)
+    def _run_parallel(self, max_parallel_tasks: int) -> int:
+        """Execute ready DAG tasks concurrently, bounded by max_parallel_tasks."""
+        task_map = {task["name"]: task for task in self.tasks}
+        ordered = self.plan()
+        pending = set(ordered)
+        completed: set[str] = set()
+        running: dict[Future[TaskRunOutcome], str] = {}
+        recorder: RunRecorder | None = None
+        stop_submitting = False
+        exit_code = 0
 
-            previous = self.state.get_task_state(self.workflow_name, task_name)
-            if not self.force and previous and previous.status == "success":
-                missing_outputs = artifacts.missing_required_outputs()
-                if previous.signature == signature.value and not missing_outputs:
-                    self.reporter.event(
-                        "skip",
+        def ready_tasks() -> list[str]:
+            return [
+                task_name
+                for task_name in ordered
+                if task_name in pending
+                and all(dependency in completed for dependency in self._task_dependencies(task_map[task_name]))
+            ]
+
+        with ThreadPoolExecutor(max_workers=max_parallel_tasks) as pool:
+            while pending or running:
+                while not stop_submitting and len(running) < max_parallel_tasks:
+                    ready = [task_name for task_name in ready_tasks() if task_name not in running.values()]
+                    if not ready:
+                        break
+                    task_name = ready[0]
+                    pending.remove(task_name)
+                    if recorder is None:
+                        recorder = RunRecorder(self.workdir, self.workflow_name)
+                    future = pool.submit(
+                        self._run_one_task,
                         task_name,
-                        "already successful",
-                        executor=executor_name,
+                        task_map[task_name],
+                        recorder=recorder,
+                        planned_outputs_by_task=None,
                     )
-                    continue
-                if missing_outputs:
-                    message = (
-                        "required output(s) missing: "
-                        f"{self._format_missing_outputs(artifacts)}"
-                    )
-                    self.reporter.event("rerun", task_name, message, executor=executor_name)
-                else:
-                    self.reporter.event(
-                        "rerun",
-                        task_name,
-                        "task signature changed",
-                        executor=executor_name,
-                    )
+                    running[future] = task_name
 
+                if not running:
+                    if pending and not stop_submitting:
+                        unresolved = ", ".join(sorted(pending))
+                        raise ValueError(f"Cyclic or blocked task dependencies: {unresolved}")
+                    break
+
+                done, _ = wait(set(running), return_when=FIRST_COMPLETED)
+                for future in done:
+                    task_name = running.pop(future)
+                    try:
+                        outcome = future.result()
+                    except Exception as error:
+                        self.reporter.event("fail", task_name, str(error))
+                        outcome = TaskRunOutcome(task_name, False, 1)
+                    completed.add(task_name)
+                    if not outcome.success:
+                        exit_code = outcome.exit_code
+                        stop_submitting = True
+
+        return exit_code
+
+    def _run_one_task(
+        self,
+        task_name: str,
+        task: dict[str, Any],
+        *,
+        recorder: RunRecorder | None,
+        planned_outputs_by_task: dict[str, set[Path]] | None,
+    ) -> TaskRunOutcome:
+        """Run one task, including validation, reuse, retry and provenance."""
+        executor_name = str(task.get("executor", "local"))
+        if task.get("enabled", True) is False:
+            self.reporter.event("skip", task_name, "disabled", executor=executor_name)
+            if not self.dry_run:
+                self.state.set_status(self.workflow_name, task_name, "skipped", 0)
+            return TaskRunOutcome(task_name, True, 0)
+
+        artifacts = self._task_artifacts(task)
+        missing_inputs = artifacts.missing_required_inputs()
+        if self.dry_run and planned_outputs_by_task is not None:
+            planned_dependency_outputs: set[Path] = set()
+            for dependency in self._task_dependencies(task):
+                planned_dependency_outputs.update(planned_outputs_by_task.get(dependency, set()))
+            missing_inputs = tuple(
+                path for path in missing_inputs if path not in planned_dependency_outputs
+            )
+
+        if missing_inputs:
+            message = f"missing required input(s): {self._format_missing_inputs(artifacts)}"
+            self.reporter.event("fail", task_name, message, executor=executor_name)
+            if not self.dry_run:
+                self.state.set_status(
+                    self.workflow_name,
+                    task_name,
+                    "invalid-input",
+                    INVALID_INPUT_EXIT_CODE,
+                )
+            return TaskRunOutcome(task_name, False, INVALID_INPUT_EXIT_CODE)
+
+        argv = render_argv(task["argv"], self.context)
+        cwd = self._task_cwd(task)
+        env = self._task_env(task)
+        rendered = shlex.join(argv)
+
+        if self.dry_run:
+            self.reporter.event("plan", task_name, rendered, executor=executor_name)
+            return TaskRunOutcome(task_name, True, 0)
+
+        signature = self._task_signature(task_name, task, argv, cwd, env, artifacts)
+        previous = self.state.get_task_state(self.workflow_name, task_name)
+        if not self.force and previous and previous.status == "success":
+            missing_outputs = artifacts.missing_required_outputs()
+            if previous.signature == signature.value and not missing_outputs:
+                self.reporter.event(
+                    "skip",
+                    task_name,
+                    "already successful",
+                    executor=executor_name,
+                )
+                return TaskRunOutcome(task_name, True, 0)
+            if missing_outputs:
+                message = (
+                    "required output(s) missing: "
+                    f"{self._format_missing_outputs(artifacts)}"
+                )
+                self.reporter.event("rerun", task_name, message, executor=executor_name)
+            else:
+                self.reporter.event(
+                    "rerun",
+                    task_name,
+                    "task signature changed",
+                    executor=executor_name,
+                )
+
+        attempts = self._task_attempts(task)
+        retry_delay = self._task_retry_delay(task)
+
+        for attempt_number in range(1, attempts + 1):
             run_message = rendered
             if executor_name == "pbs":
                 run_message = f"waiting for scheduler completion · {rendered}"
+            if attempts > 1:
+                run_message = f"attempt {attempt_number}/{attempts} · {run_message}"
             self.reporter.event("run", task_name, run_message, executor=executor_name)
+
             if recorder is None:
                 recorder = RunRecorder(self.workdir, self.workflow_name)
             attempt = recorder.begin_attempt(task_name)
@@ -313,19 +438,18 @@ class WorkflowEngine:
                     stderr_path=attempt.stderr_path,
                 )
             )
-            return_code = execution_result.return_code
+            process_return_code = execution_result.return_code
             execution = execution_result.metadata
 
-            if return_code == 0:
+            if process_return_code == 0:
                 missing_outputs = artifacts.missing_required_outputs()
-                if missing_outputs:
-                    reason = self._output_failure_reason(artifacts)
-                    self.reporter.event("fail", task_name, reason, executor=executor_name)
+                if not missing_outputs:
+                    self.reporter.event("ok", task_name, executor=executor_name)
                     self.state.set_status(
                         self.workflow_name,
                         task_name,
-                        "invalid-output",
-                        INVALID_OUTPUT_EXIT_CODE,
+                        "success",
+                        process_return_code,
                         signature.value,
                     )
                     self._record_attempt(
@@ -336,60 +460,62 @@ class WorkflowEngine:
                         env=env,
                         artifacts=artifacts,
                         signature=signature,
-                        status="invalid-output",
-                        return_code=INVALID_OUTPUT_EXIT_CODE,
+                        status="success",
+                        return_code=process_return_code,
                         execution=execution,
-                        process_return_code=return_code,
-                        reason=reason,
+                        process_return_code=process_return_code,
                     )
-                    exit_code = INVALID_OUTPUT_EXIT_CODE
-                    break
-                self.reporter.event("ok", task_name, executor=executor_name)
-                self.state.set_status(
-                    self.workflow_name, task_name, "success", return_code, signature.value
-                )
-                self._record_attempt(
-                    recorder,
-                    attempt,
-                    argv=argv,
-                    cwd=cwd,
-                    env=env,
-                    artifacts=artifacts,
-                    signature=signature,
-                    status="success",
-                    return_code=return_code,
-                    execution=execution,
-                    process_return_code=return_code,
-                )
+                    return TaskRunOutcome(task_name, True, 0)
+
+                reason = self._output_failure_reason(artifacts)
+                final_return_code = INVALID_OUTPUT_EXIT_CODE
+                final_status = "invalid-output"
             else:
-                reason = self._process_failure_reason(return_code)
+                reason = self._process_failure_reason(process_return_code)
+                final_return_code = process_return_code
+                final_status = "failed"
+
+            is_last_attempt = attempt_number == attempts
+            if is_last_attempt:
                 self.reporter.event(
                     "fail",
                     task_name,
-                    f"return code {return_code}",
+                    reason,
                     executor=executor_name,
                 )
                 self.state.set_status(
-                    self.workflow_name, task_name, "failed", return_code, signature.value
+                    self.workflow_name,
+                    task_name,
+                    final_status,
+                    final_return_code,
+                    signature.value,
                 )
-                self._record_attempt(
-                    recorder,
-                    attempt,
-                    argv=argv,
-                    cwd=cwd,
-                    env=env,
-                    artifacts=artifacts,
-                    signature=signature,
-                    status="failed",
-                    return_code=return_code,
-                    execution=execution,
-                    process_return_code=return_code,
-                    reason=reason,
+            else:
+                self.reporter.event(
+                    "retry",
+                    task_name,
+                    f"{reason}; next attempt in {retry_delay:g}s",
+                    executor=executor_name,
                 )
-                exit_code = return_code
-                break
 
-        return exit_code
+            self._record_attempt(
+                recorder,
+                attempt,
+                argv=argv,
+                cwd=cwd,
+                env=env,
+                artifacts=artifacts,
+                signature=signature,
+                status=final_status,
+                return_code=final_return_code,
+                execution=execution,
+                process_return_code=process_return_code,
+                reason=reason,
+            )
+            if not is_last_attempt and retry_delay > 0:
+                time.sleep(retry_delay)
+
+        return TaskRunOutcome(task_name, False, final_return_code)
 
     def status(self) -> None:
         """Render current task states in dependency order."""
