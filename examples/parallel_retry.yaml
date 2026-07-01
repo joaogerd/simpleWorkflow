@@ -1,0 +1,40 @@
+workflow:
+  name: parallel_retry_example
+  max_parallel_tasks: 2
+
+context:
+  python: python
+
+tasks:
+  - name: prepare_obs
+    argv:
+      - "{python}"
+      - -c
+      - "from pathlib import Path; Path('obs.ready').write_text('obs')"
+    outputs:
+      required: [obs.ready]
+    retry:
+      attempts: 2
+      delay: PT30S
+
+  - name: prepare_background
+    argv:
+      - "{python}"
+      - -c
+      - "from pathlib import Path; Path('background.ready').write_text('background')"
+    outputs:
+      required: [background.ready]
+    retry:
+      attempts: 2
+      delay: PT30S
+
+  - name: run_analysis
+    depends_on: [prepare_obs, prepare_background]
+    argv:
+      - "{python}"
+      - -c
+      - "from pathlib import Path; Path('analysis.ready').write_text(Path('obs.ready').read_text() + '+' + Path('background.ready').read_text())"
+    inputs:
+      required: [obs.ready, background.ready]
+    outputs:
+      required: [analysis.ready]
