@@ -25,6 +25,23 @@ Every task requires a unique `name` and a non-empty `argv` list. Each `argv`
 item is one exact process argument and supports context placeholders such as
 `{python}` and `{case_name}`.
 
+## Workflow fields
+
+| Field | Meaning |
+| --- | --- |
+| `name` | Optional workflow name used for state, logs and provenance. |
+| `max_parallel_tasks` | Optional positive integer. Defaults to `1`, preserving sequential execution. |
+
+`max_parallel_tasks` enables bounded DAG parallelism. Only tasks whose
+`depends_on` requirements are already complete are submitted. If one task fails,
+new submissions stop and already-running tasks are allowed to finish.
+
+```yaml
+workflow:
+  name: light_parallel_example
+  max_parallel_tasks: 4
+```
+
 ## Task fields
 
 Only the following fields are accepted. Unknown fields fail validation early so
@@ -43,11 +60,30 @@ misspellings do not silently alter an experiment.
 | `inputs` | Declared input artifact contract. |
 | `outputs` | Declared output artifact contract. |
 | `input_fingerprint` | `metadata` (default) or `sha256`. |
+| `retry` | Optional retry policy for transient failures. |
 
 The historical `run` field is deliberately unsupported. A single command string
 would require shell parsing and could introduce implicit redirection, pipelines
 or expansion rules. A workflow may still run a controlled wrapper script by
 using it explicitly in `argv`.
+
+## Retry policy
+
+Retries are optional and local to one task. The default is one attempt and no
+retry. Delays use ISO-8601 durations, such as `PT30S`, `PT2M` or `PT1H`.
+
+```yaml
+tasks:
+  - name: download_input
+    argv: ["python", "download_input.py"]
+    retry:
+      attempts: 3
+      delay: PT2M
+```
+
+A retry is attempted when the process exits with a non-zero return code or when
+a required output is still missing after a zero return code. Missing required
+inputs are treated as configuration/data problems and are not retried.
 
 ## Artifact contract
 
@@ -91,8 +127,8 @@ critical file inputs.
 ## Context
 
 `context` is a mapping used to render string elements of `argv`, `cwd`, `env`,
-PBS values, inputs and outputs using Python-format placeholders. Referencing an
-unknown placeholder fails with an explicit error before execution.
+PBS values, retry delay, inputs and outputs using Python-format placeholders.
+Referencing an unknown placeholder fails with an explicit error before execution.
 
 ## Cycles
 
@@ -119,9 +155,10 @@ For every cycle, these context values are added:
 {cycle_hour}       00
 ```
 
-Cycle execution is sequential and fail-fast. A successful task in one cycle is
-never reused as the success state of another cycle. The effective workflow name
-and state namespace include the cycle identifier.
+Cycle execution is sequential by cycle and fail-fast. Inside each cycle, the
+workflow DAG may still use `max_parallel_tasks`. A successful task in one cycle
+is never reused as the success state of another cycle. The effective workflow
+name and state namespace include the cycle identifier.
 
 CLI selection overrides YAML:
 
