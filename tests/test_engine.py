@@ -153,7 +153,7 @@ def test_retry_reruns_transient_failure(tmp_path: Path) -> None:
                 "name": "flaky",
                 "argv": ["{python}", "-c", script],
                 "outputs": {"required": [str(result)]},
-                "retry": {"attempts": 2, "delay": "PT0S"},
+                "retry": {"attempts": 2},
             }
         ],
         "__simpleworkflow__": {"source_dir": str(tmp_path)},
