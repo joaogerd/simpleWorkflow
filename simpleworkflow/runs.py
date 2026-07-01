@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -58,6 +59,7 @@ class RunRecorder:
         self.directory = self.root / self.run_id
         self.directory.mkdir(parents=True, exist_ok=False)
         self._attempt_numbers: dict[str, int] = {}
+        self._lock = threading.Lock()
 
         self._write_exclusive_json(
             self.directory / "run.json",
@@ -71,20 +73,21 @@ class RunRecorder:
 
     def begin_attempt(self, task_name: str) -> AttemptPaths:
         """Allocate an empty, non-reusable directory for the next task attempt."""
-        attempt = self._attempt_numbers.get(task_name, 0) + 1
-        self._attempt_numbers[task_name] = attempt
+        with self._lock:
+            attempt = self._attempt_numbers.get(task_name, 0) + 1
+            self._attempt_numbers[task_name] = attempt
 
-        directory = (
-            self.directory
-            / "tasks"
-            / _task_directory_name(task_name)
-            / f"attempt-{attempt:03d}"
-        )
-        directory.mkdir(parents=True, exist_ok=False)
-        stdout_path = directory / "stdout.log"
-        stderr_path = directory / "stderr.log"
-        stdout_path.touch(exist_ok=False)
-        stderr_path.touch(exist_ok=False)
+            directory = (
+                self.directory
+                / "tasks"
+                / _task_directory_name(task_name)
+                / f"attempt-{attempt:03d}"
+            )
+            directory.mkdir(parents=True, exist_ok=False)
+            stdout_path = directory / "stdout.log"
+            stderr_path = directory / "stderr.log"
+            stdout_path.touch(exist_ok=False)
+            stderr_path.touch(exist_ok=False)
         return AttemptPaths(
             run_id=self.run_id,
             task_name=task_name,
