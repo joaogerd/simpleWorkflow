@@ -46,7 +46,7 @@ class CycleContext:
         }
 
 
-def parse_cycle_time(value: str, *, label: str = "cycle time") -> CycleContext:
+def parse_cycle_time(value: Any, *, label: str = "cycle time") -> CycleContext:
     """Parse one timezone-aware ISO-8601 timestamp as UTC."""
     if not isinstance(value, str) or not value:
         raise CycleConfigurationError(f"{label} must be a non-empty ISO-8601 timestamp.")
@@ -60,7 +60,7 @@ def parse_cycle_time(value: str, *, label: str = "cycle time") -> CycleContext:
     return CycleContext(parsed.astimezone(timezone.utc))
 
 
-def parse_iso_duration(value: str, *, label: str = "cycle step") -> timedelta:
+def parse_iso_duration(value: Any, *, label: str = "cycle step") -> timedelta:
     """Parse a positive ISO-8601 duration containing weeks through seconds."""
     if not isinstance(value, str) or not value:
         raise CycleConfigurationError(f"{label} must be a non-empty ISO-8601 duration.")
@@ -143,11 +143,11 @@ def resolve_cycle_contexts(
     if first.value > last.value:
         raise CycleConfigurationError("cycle start must not be later than cycle end.")
 
-    result: list[CycleContext] = []
+    cycles: list[CycleContext] = []
     current = first.value
     while current <= last.value:
-        result.append(CycleContext(current))
-        if len(result) > 100_000:
+        cycles.append(CycleContext(current))
+        if len(cycles) > 100_000:
             raise CycleConfigurationError("cycle expansion exceeds 100000 cycles.")
         current += interval
-    return result
+    return cycles
