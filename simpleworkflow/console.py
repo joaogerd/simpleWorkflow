@@ -113,11 +113,12 @@ class TerminalReporter:
         elif color == "never":
             force_terminal = False
         else:
-            force_terminal = None
+            force_terminal = bool(getattr(self.stream, "isatty", lambda: False)())
 
         self.console = Console(
             file=self.stream,
             force_terminal=force_terminal,
+            color_system="standard" if force_terminal else None,
             no_color=color == "never" or bool(os.environ.get("NO_COLOR")),
             highlight=False,
             soft_wrap=False,

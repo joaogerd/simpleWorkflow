@@ -156,6 +156,8 @@ def test_textual_monitor_mounts_with_minimal_layout(tmp_path: Path) -> None:
             assert app.query_one("#problems-table") is not None
             assert app.query_one("#open-logs") is not None
             assert app.query_one("#log-toolbar") is not None
+            assert app.query_one("#shortcut-line") is not None
+            assert app.query_one("#task-filter") is not None
 
     asyncio.run(scenario())
 
@@ -261,5 +263,67 @@ def test_logs_can_be_opened_and_selected_by_click(tmp_path: Path) -> None:
             await pilot.click("#log-stdout")
             await pilot.pause()
             assert app.selected_log_name == "stdout.log"
+
+            views.active = "monitor"
+            await pilot.press("v")
+            await pilot.pause()
+            assert views.active == "logs"
+
+    asyncio.run(scenario())
+
+
+def test_filter_and_problems_link_to_failure_log(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: dated_tui_test\n", encoding="utf-8")
+
+    state = WorkflowState(tmp_path / "state.sqlite3")
+    state.set_status("dated_tui_test", "jedi00_prepare", "success", 0)
+    state.set_status("dated_tui_test", "obs06_prepare", "failed", 7)
+    state.close()
+
+    recorder = RunRecorder(tmp_path, "dated_tui_test", run_id="failure-run")
+    attempt = recorder.begin_attempt("obs06_prepare")
+    attempt.stderr_path.write_text("setup detail\nroot cause message\n", encoding="utf-8")
+    recorder.write_metadata(
+        attempt,
+        {
+            "status": "failed",
+            "return_code": 7,
+            "execution": {"executor": "local"},
+        },
+    )
+
+    app = WorkflowTui(
+        config=_dated_config(),
+        workflow_path=workflow,
+        workdir=tmp_path,
+        refresh_seconds=5.0,
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            problems = app.query_one("#problems-table")
+            assert problems.row_count == 1
+            assert "root cause message" in str(problems.get_row_at(0)[-1])
+
+            await pilot.press("/")
+            await pilot.pause()
+            field = app.query_one("#task-filter")
+            assert field.display
+            await pilot.press("o", "b", "s")
+            await pilot.pause()
+            assert app.task_filter == "obs"
+            assert set(app.task_nodes) == {"obs06_prepare"}
+            await pilot.press("enter")
+
+            app.query_one("#views").active = "problems"
+            problems.focus()
+            problems.move_cursor(row=0)
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.query_one("#views").active == "logs"
+            assert app.selected_task == "obs06_prepare"
+            assert app.selected_log_name == "stderr.log"
 
     asyncio.run(scenario())

@@ -18,9 +18,11 @@ from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
     DataTable,
+    Input,
     Label,
     RichLog,
     Static,
+    Tab,
     TabbedContent,
     TabPane,
     Tree,
@@ -61,6 +63,8 @@ Click cycle    Select that cycle
 Tab            Next view
 Shift+← / →    Previous / next month
 r              Refresh now
+v              View selected task logs
+/              Filter tasks
 c              Clear displayed log
 ?              Help
 q              Quit
@@ -69,7 +73,8 @@ q              Quit
 Select a task, then click Logs in the inspector or the Logs tab.
 Inside Logs, click a file name to switch between available output/error logs.
 
-[dim]Monitoring is read-only and never changes workflow state.[/dim]
+[dim]Operational actions are intentionally unavailable until scheduler job IDs
+can be recorded while a task is still running.[/dim]
 
 [bold]Esc[/bold] close help"""
 
@@ -84,6 +89,7 @@ class AttemptSnapshot:
     stderr_path: Path
     pbs_stdout_path: Path
     pbs_stderr_path: Path
+    started_at: str | None = None
 
     @property
     def execution(self) -> dict[str, Any]:
@@ -101,6 +107,16 @@ class AttemptSnapshot:
     def executor(self) -> str | None:
         value = self.execution.get("executor")
         return str(value) if value else None
+
+    @property
+    def finished_at(self) -> str | None:
+        value = self.metadata.get("finished_at") if self.metadata else None
+        return str(value) if value else None
+
+    @property
+    def duration_seconds(self) -> float | None:
+        value = self.metadata.get("duration_seconds") if self.metadata else None
+        return float(value) if isinstance(value, (int, float)) else None
 
     def preferred_log_paths(self) -> list[Path]:
         paths: list[Path] = []
@@ -165,6 +181,16 @@ def _latest_attempt(workdir: Path, task_name: str) -> AttemptSnapshot | None:
             except (OSError, json.JSONDecodeError):
                 metadata = None
 
+        started_at_path = attempt / "started_at"
+        started_at = None
+        if started_at_path.is_file():
+            try:
+                started_at = started_at_path.read_text(encoding="utf-8").strip() or None
+            except OSError:
+                started_at = None
+        if metadata and metadata.get("started_at"):
+            started_at = str(metadata["started_at"])
+
         return AttemptSnapshot(
             directory=attempt,
             metadata=metadata,
@@ -172,6 +198,7 @@ def _latest_attempt(workdir: Path, task_name: str) -> AttemptSnapshot | None:
             stderr_path=attempt / "stderr.log",
             pbs_stdout_path=attempt / "pbs.stdout.log",
             pbs_stderr_path=attempt / "pbs.stderr.log",
+            started_at=started_at,
         )
     return None
 
@@ -338,6 +365,17 @@ class WorkflowTui(App[None]):
         padding-top: 1;
     }
 
+    #task-filter {
+        height: 1;
+        min-height: 1;
+        margin: 0;
+        padding: 0 1;
+        border: none;
+        background: #171a21;
+        color: #d7dae0;
+        display: none;
+    }
+
     #left {
         width: 38%;
         min-width: 36;
@@ -440,6 +478,14 @@ class WorkflowTui(App[None]):
         padding: 1 2;
         background: #0d0f13;
     }
+
+    #shortcut-line {
+        height: 1;
+        padding: 0 1;
+        background: #111318;
+        color: #697180;
+        border-top: solid #252b35;
+    }
     """
 
     BINDINGS = [
@@ -453,6 +499,9 @@ class WorkflowTui(App[None]):
         ("3", "select_cycle('12')", "12Z"),
         ("4", "select_cycle('18')", "18Z"),
         ("r", "refresh_now", "Refresh"),
+        ("v", "open_logs", "View logs"),
+        ("slash", "show_filter", "Filter"),
+        Binding("escape", "clear_filter", "Clear filter", priority=True),
         ("c", "clear_log", "Clear log"),
         Binding("tab", "next_view", "Views", priority=True),
         ("question_mark", "show_help", "Help"),
@@ -485,6 +534,7 @@ class WorkflowTui(App[None]):
         self.selected_hour: str | None = None
         self.selected_task: str | None = None
         self.selected_log_name: str | None = None
+        self.task_filter = ""
         self.task_nodes: dict[str, Any] = {}
         self._last_log_signature: tuple[str, int, int] | None = None
         self._choose_initial_selection()
@@ -510,6 +560,7 @@ class WorkflowTui(App[None]):
                 with Horizontal(id="monitor-main"):
                     with Vertical(id="left"):
                         yield Label("WORKFLOW", classes="pane-title")
+                        yield Input(placeholder="Filter tasks…", id="task-filter")
                         yield Tree(self.workflow_name, id="task-tree")
                     with Vertical(id="right"):
                         yield Label("INSPECTOR", classes="pane-title")
@@ -533,6 +584,10 @@ class WorkflowTui(App[None]):
                     wrap=False,
                     max_lines=1500,
                 )
+        yield Static(
+            "[q] Quit   [←/→] Day   [Tab] Views   [/] Filter   [v] Logs   [?] Help",
+            id="shortcut-line",
+        )
 
     def on_mount(self) -> None:
         self._configure_tables()
@@ -577,7 +632,7 @@ class WorkflowTui(App[None]):
         cycles = self.query_one("#cycles-table", DataTable)
         cycles.add_columns("Etapa", "00Z", "06Z", "12Z", "18Z")
         problems = self.query_one("#problems-table", DataTable)
-        problems.add_columns("Data", "Ciclo", "Etapa", "Tarefa", "Estado")
+        problems.add_columns("Data", "Ciclo", "Etapa", "Tarefa", "Estado", "Mensagem")
 
     @staticmethod
     def _status_markup(status: str) -> str:
@@ -660,6 +715,15 @@ class WorkflowTui(App[None]):
 
         self._normalize_selected_hour()
         visible_tasks = self._tasks_for_cycle(self.selected_date, self.selected_hour)
+        if self.task_filter:
+            needle = self.task_filter.casefold()
+            visible_tasks = [
+                name
+                for name in visible_tasks
+                if needle in name.casefold()
+                or needle in TerminalReporter._humanize_task(name).action.casefold()
+                or needle in (TerminalReporter._humanize_task(name).component or "").casefold()
+            ]
         groups: OrderedDict[str, list[str]] = OrderedDict()
         for task_name in visible_tasks:
             groups.setdefault(self._component(task_name), []).append(task_name)
@@ -709,6 +773,17 @@ class WorkflowTui(App[None]):
             self._last_log_signature = None
             self._refresh_logs(force=True)
 
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "task-filter":
+            self.task_filter = event.value.strip()
+            self._rebuild_tree()
+            self._refresh_inspector()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "task-filter":
+            event.input.display = False
+            self.query_one("#task-tree", Tree).focus()
+
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
         if event.data_table.id != "cycles-table":
             return
@@ -720,6 +795,28 @@ class WorkflowTui(App[None]):
             return
         self.action_select_cycle(hour)
         self.query_one("#views", TabbedContent).active = "monitor"
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.data_table.id != "problems-table":
+            return
+        task_name = str(event.row_key.value)
+        if task_name not in self.task_map:
+            return
+        self.selected_task = task_name
+        cycle = self.task_cycles.get(task_name)
+        if cycle is not None:
+            self.selected_date = cycle.day
+            self.selected_hour = cycle.hour
+        attempt = _latest_attempt(self.workdir, task_name)
+        if attempt is not None:
+            available = {path.name for path in attempt.preferred_log_paths()}
+            self.selected_log_name = next(
+                (name for name in ("pbs.stderr.log", "stderr.log") if name in available),
+                None,
+            )
+        self._rebuild_tree()
+        self.query_one("#views", TabbedContent).active = "logs"
+        self._refresh_logs(force=True)
 
     def action_previous_day(self) -> None:
         if self.selected_date is not None:
@@ -764,6 +861,21 @@ class WorkflowTui(App[None]):
             return
         self.query_one("#views", TabbedContent).active = "logs"
         self._refresh_logs(force=True)
+
+    def action_show_filter(self) -> None:
+        field = self.query_one("#task-filter", Input)
+        field.display = True
+        field.focus()
+
+    def action_clear_filter(self) -> None:
+        field = self.query_one("#task-filter", Input)
+        if not field.display and not self.task_filter:
+            return
+        field.value = ""
+        field.display = False
+        self.task_filter = ""
+        self._rebuild_tree()
+        self.query_one("#task-tree", Tree).focus()
 
     def action_next_view(self) -> None:
         views = self.query_one("#views", TabbedContent)
@@ -810,7 +922,13 @@ class WorkflowTui(App[None]):
             f"[bold #9fb9ff]{escape(self.workflow_name)}[/bold #9fb9ff]\n"
             f"[dim]{completed}/{len(self.plan)}[/dim] [green]✓[/green]   |   "
             f"[cyan]{counts['running']} ●[/cyan]   |   "
-            f"[red]{failed} ✘[/red]   |   [dim]up: {now}[/dim]"
+            f"[red]{failed} ✘[/red]   |   "
+            f"[green]● live[/green] [dim]{self.refresh_seconds:g}s · updated {now}[/dim]"
+        )
+
+        problems_tab = self.query_one("#--content-tab-problems", Tab)
+        problems_tab.label = (
+            f"Problemas [bold red]{failed} ✘[/bold red]" if failed else "Problemas"
         )
 
         self._refresh_date_bar()
@@ -963,9 +1081,24 @@ class WorkflowTui(App[None]):
                 display.component or "TASK",
                 display.action,
                 self._status_markup(state),
+                self._problem_message(task_name),
+                key=task_name,
             )
         if table.row_count == 0:
-            table.add_row("—", "—", "—", "No failures recorded", "✔")
+            table.add_row("—", "—", "—", "No failures recorded", "✔", "—")
+
+    def _problem_message(self, task_name: str) -> str:
+        attempt = _latest_attempt(self.workdir, task_name)
+        if attempt is None:
+            return "No failure detail recorded"
+        if attempt.metadata and attempt.metadata.get("reason"):
+            return str(attempt.metadata["reason"])
+        for path in (attempt.pbs_stderr_path, attempt.stderr_path):
+            text = _tail(path, max_lines=20)
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            if lines:
+                return lines[-1][-160:]
+        return "See task logs"
 
     def _refresh_inspector(self) -> None:
         inspector = self.query_one("#inspector", Static)
@@ -1001,6 +1134,17 @@ class WorkflowTui(App[None]):
             state_text += f" [dim]({return_code})[/dim]"
 
         path = str(attempt.directory) if attempt is not None else "—"
+        started_at = attempt.started_at if attempt else None
+        finished_at = attempt.finished_at if attempt else None
+        duration = attempt.duration_seconds if attempt else None
+        if duration is None and started_at and status == "running":
+            try:
+                started = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+                duration = (datetime.now(started.tzinfo) - started).total_seconds()
+            except ValueError:
+                duration = None
+        elapsed = self._format_duration(duration)
+        resources = self._task_resources(self.task_map[self.selected_task])
         inspector.update(
             "[dim #7883a6]Task[/dim #7883a6]        "
             f"[bold]{escape(task_title)}[/bold]\n\n"
@@ -1010,9 +1154,56 @@ class WorkflowTui(App[None]):
             f"{state_text}\n\n\n"
             "[dim #7883a6]PBS ID[/dim #7883a6]      "
             f"{escape(job_id) if job_id else '—'}\n\n\n"
+            "[dim #7883a6]Elapsed[/dim #7883a6]     "
+            f"{elapsed}\n\n"
+            "[dim #7883a6]Started[/dim #7883a6]     "
+            f"{self._display_timestamp(started_at)}\n"
+            "[dim #7883a6]Finished[/dim #7883a6]    "
+            f"{self._display_timestamp(finished_at)}\n\n"
+            "[dim #7883a6]Resources[/dim #7883a6]   "
+            f"{escape(resources)}\n\n"
             "[dim #7883a6]Path[/dim #7883a6]        "
             f"[cyan]{escape(path)}[/cyan]"
         )
+
+    @staticmethod
+    def _display_timestamp(value: str | None) -> str:
+        if not value:
+            return "—"
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return escape(value)
+        return parsed.strftime("%d/%m/%Y %H:%M:%S")
+
+    @staticmethod
+    def _format_duration(seconds: float | None) -> str:
+        if seconds is None:
+            return "—"
+        total = max(0, int(seconds))
+        hours, remainder = divmod(total, 3600)
+        minutes, secs = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+    @staticmethod
+    def _task_resources(task: dict[str, Any]) -> str:
+        if task.get("executor", "local") != "pbs":
+            return "local"
+        pbs = task.get("pbs")
+        if not isinstance(pbs, dict):
+            return "PBS"
+        parts: list[str] = []
+        if pbs.get("queue"):
+            parts.append(f"queue {pbs['queue']}")
+        if pbs.get("select"):
+            parts.append(f"{pbs['select']} node(s)")
+        if pbs.get("ncpus"):
+            parts.append(f"{pbs['ncpus']} CPUs/node")
+        if pbs.get("mpiprocs"):
+            parts.append(f"{pbs['mpiprocs']} MPI ranks/node")
+        if pbs.get("walltime"):
+            parts.append(f"walltime {pbs['walltime']}")
+        return " · ".join(parts) or "PBS"
 
     def _refresh_log_toolbar(self, paths: list[Path]) -> None:
         available = {path.name for path in paths}

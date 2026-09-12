@@ -123,14 +123,21 @@ The task inspector includes a small **Logs** action whenever runtime logs are
 available. Clicking it opens the Logs view. That view exposes each available
 file (`pbs.stdout.log`, `stdout.log`, `pbs.stderr.log`, `stderr.log`) as a
 clickable selector, so output and error streams can be inspected separately.
+Press `v` to open the same live-updating view for the selected task.
 
-Help is intentionally not a permanent tab or footer. Press `?` to open a compact
-on-demand help overlay.
+Press `/` to filter the selected cycle's task tree by component, action or
+internal task name. A single compact shortcut line remains visible; press `?`
+for the complete on-demand help overlay.
 
 The selected task inspector is refreshed from the real `state.sqlite3` database
 and newest immutable runtime attempt. It shows state, return code context, Job ID
-when available, and the attempt path. The Logs view tails persisted files rather
-than simulating scientific output.
+when available, elapsed time, start/end timestamps, requested PBS resources and
+the attempt path. The top summary includes a live-refresh indicator and the last
+refresh time. The Logs view tails persisted files rather than simulating
+scientific output.
+
+The **Problemas** tab displays a failure count and the recorded reason or last
+useful `stderr` line. Selecting a problem opens that task's error log directly.
 
 Generic workflows without explicit cycle timestamps continue to work in a
 non-dated monitor mode.

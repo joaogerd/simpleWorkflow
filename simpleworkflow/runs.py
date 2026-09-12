@@ -40,6 +40,7 @@ class AttemptPaths:
     stdout_path: Path
     stderr_path: Path
     metadata_path: Path
+    started_at: str
 
 
 class RunRecorder:
@@ -74,6 +75,7 @@ class RunRecorder:
         attempt = self._attempt_numbers.get(task_name, 0) + 1
         self._attempt_numbers[task_name] = attempt
 
+        started_at = _utc_timestamp()
         directory = (
             self.directory
             / "tasks"
@@ -85,6 +87,7 @@ class RunRecorder:
         stderr_path = directory / "stderr.log"
         stdout_path.touch(exist_ok=False)
         stderr_path.touch(exist_ok=False)
+        (directory / "started_at").write_text(started_at + "\n", encoding="utf-8")
         return AttemptPaths(
             run_id=self.run_id,
             task_name=task_name,
@@ -93,12 +96,16 @@ class RunRecorder:
             stdout_path=stdout_path,
             stderr_path=stderr_path,
             metadata_path=directory / "metadata.json",
+            started_at=started_at,
         )
 
     def write_metadata(
         self, attempt: AttemptPaths, payload: Mapping[str, Any]
     ) -> None:
         """Write one final metadata record; a second write is deliberately rejected."""
+        finished_at = _utc_timestamp()
+        started = datetime.fromisoformat(attempt.started_at.replace("Z", "+00:00"))
+        finished = datetime.fromisoformat(finished_at.replace("Z", "+00:00"))
         record = {
             "schema_version": RUN_SCHEMA_VERSION,
             "run_id": attempt.run_id,
@@ -106,6 +113,9 @@ class RunRecorder:
             "task": attempt.task_name,
             "attempt": attempt.attempt,
             "recorded_at": _utc_timestamp(),
+            "started_at": attempt.started_at,
+            "finished_at": finished_at,
+            "duration_seconds": (finished - started).total_seconds(),
             "logs": {
                 "stdout": attempt.stdout_path.name,
                 "stderr": attempt.stderr_path.name,
