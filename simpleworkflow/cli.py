@@ -52,6 +52,11 @@ def _add_display_options(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Show internal task names, executors and rendered commands.",
     )
+    parser.add_argument(
+        "--plain",
+        action="store_true",
+        help="Disable the live Rich dashboard and use stable linear output.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -153,7 +158,7 @@ def _show_header(
         workdir=str(args.workdir),
         cycle_time=cycle.cycle_time if cycle is not None else None,
         mode=_mode(args),
-        task_count=len(plan),
+        task_names=plan,
     )
     return plan
 
@@ -161,10 +166,13 @@ def _show_header(
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_workflow(args.workflow)
-    reporter = TerminalReporter(color=args.color, verbose=args.verbose)
+    reporter = TerminalReporter(
+        color=args.color,
+        verbose=args.verbose,
+        plain=args.plain,
+    )
 
     if args.command == "plan":
-        index = 1
         for cycle, engine in _cycle_engines(config, args, reporter):
             try:
                 plan = _show_header(
@@ -175,11 +183,9 @@ def main(argv: list[str] | None = None) -> int:
                     cycle=cycle,
                     engine=engine,
                 )
-                reporter.note("Execution order")
-                for task_name in plan:
-                    reporter.plan_item(index, task_name)
-                    index += 1
+                reporter.plan_view(plan)
             finally:
+                reporter.close()
                 engine.state.close()
         return 0
 
@@ -187,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
         for cycle, engine in _cycle_engines(config, args, reporter):
             started = time.monotonic()
             try:
-                _show_header(
+                plan = _show_header(
                     reporter,
                     command="run",
                     config=config,
@@ -195,6 +201,11 @@ def main(argv: list[str] | None = None) -> int:
                     cycle=cycle,
                     engine=engine,
                 )
+                if getattr(args, "dry_run", False):
+                    reporter.plan_view(plan)
+                else:
+                    reporter.begin_run(_status_entries(engine))
+
                 result = engine.run()
                 if getattr(args, "dry_run", False):
                     elapsed = TerminalReporter._format_elapsed(time.monotonic() - started)
@@ -210,6 +221,7 @@ def main(argv: list[str] | None = None) -> int:
                 if result != 0:
                     return result
             finally:
+                reporter.close()
                 engine.state.close()
         return 0
 
@@ -226,6 +238,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 engine.status()
             finally:
+                reporter.close()
                 engine.state.close()
         return 0
 
@@ -241,9 +254,10 @@ def main(argv: list[str] | None = None) -> int:
                     engine=engine,
                 )
                 engine.reset()
+                reporter.note("Workflow state reset.")
             finally:
+                reporter.close()
                 engine.state.close()
-        reporter.note("Workflow state reset.")
         return 0
 
     return 2
