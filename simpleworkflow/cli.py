@@ -130,6 +130,29 @@ def _heading(command: str, config: dict[str, Any], cycle: CycleContext | None) -
     return f"{title} · {cycle.cycle_time}" if cycle is not None else title
 
 
+def _reconcile_after_interrupt(engine: WorkflowEngine) -> None:
+    """Recover task state conservatively after an interactive interruption."""
+    running_pbs = {
+        task["name"]
+        for task in engine.tasks
+        if task.get("executor", "local") == "pbs"
+        and engine.state.get_status(engine.state_key, task["name"]) == "running"
+    }
+    engine.state.reconcile_running(engine.state_key)
+    for task_name in running_pbs:
+        state = engine.state.get_task_state(engine.state_key, task_name)
+        if state is not None and state.status == "interrupted":
+            engine.state.set_status(
+                engine.state_key,
+                task_name,
+                "unknown",
+                None,
+                state.signature,
+                "submissão PBS interrompida antes de confirmar o job; verifique o escalonador",
+                state.attempt_dir,
+            )
+
+
 def _main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_workflow(args.workflow)
@@ -155,7 +178,7 @@ def _main(argv: list[str] | None = None) -> int:
                 if result != 0:
                     return result
             except KeyboardInterrupt:
-                engine.state.reconcile_running(engine.state_key)
+                _reconcile_after_interrupt(engine)
                 raise
             finally:
                 engine.state.close()
