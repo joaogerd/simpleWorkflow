@@ -78,6 +78,20 @@ def build_parser() -> argparse.ArgumentParser:
             command_parser.add_argument("--force", action="store_true")
             command_parser.add_argument("--dry-run", action="store_true")
 
+    tui_parser = subparsers.add_parser(
+        "tui",
+        help="Open the interactive workflow monitor.",
+    )
+    tui_parser.add_argument("workflow")
+    tui_parser.add_argument("--workdir", default=".simpleworkflow")
+    tui_parser.add_argument(
+        "--refresh",
+        type=float,
+        default=1.0,
+        metavar="SECONDS",
+        help="Refresh interval for persisted workflow state (default: 1.0).",
+    )
+
     return parser
 
 
@@ -166,6 +180,20 @@ def _show_header(
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_workflow(args.workflow)
+
+    if args.command == "tui":
+        if args.refresh <= 0:
+            raise SystemExit("--refresh must be greater than zero")
+        from .tui import run_tui
+
+        run_tui(
+            config,
+            args.workflow,
+            args.workdir,
+            refresh_seconds=args.refresh,
+        )
+        return 0
+
     reporter = TerminalReporter(
         color=args.color,
         verbose=args.verbose,
