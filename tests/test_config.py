@@ -103,6 +103,7 @@ def test_rejects_invalid_artifact_contract(
     workflow = write(
         tmp_path / "workflow.yaml",
         f"""
+workflow: {{name: test}}
 tasks:
   - name: task
     argv: [python]

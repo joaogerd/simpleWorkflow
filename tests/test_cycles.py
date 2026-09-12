@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import sys
@@ -55,13 +56,14 @@ def test_cycle_expansion_renders_per_cycle_context_and_state(tmp_path: Path) -> 
     assert (tmp_path / "products" / "cycle_2018041506.txt").read_text() == "2018-04-15T06:00:00Z"
     assert (tmp_path / "products" / "cycle_2018041512.txt").read_text() == "2018-04-15T12:00:00Z"
 
+    source_digest = hashlib.sha256(str(workflow.resolve()).encode("utf-8")).hexdigest()[:12]
     connection = sqlite3.connect(workdir / "state.sqlite3")
     rows = connection.execute("SELECT workflow, task, status FROM task_state ORDER BY workflow").fetchall()
     connection.close()
     assert rows == [
-        ("cycle_test__20180415T000000Z", "write_cycle", "success"),
-        ("cycle_test__20180415T060000Z", "write_cycle", "success"),
-        ("cycle_test__20180415T120000Z", "write_cycle", "success"),
+        (f"cycle_test__20180415T000000Z@{source_digest}", "write_cycle", "success"),
+        (f"cycle_test__20180415T060000Z@{source_digest}", "write_cycle", "success"),
+        (f"cycle_test__20180415T120000Z@{source_digest}", "write_cycle", "success"),
     ]
 
 
@@ -104,7 +106,7 @@ def test_range_options_override_yaml_cycle_fields() -> None:
 def test_cycle_config_requires_complete_mapping(tmp_path: Path) -> None:
     workflow = tmp_path / "workflow.yaml"
     workflow.write_text(
-        'cycle: {start: "2018-04-15T00:00:00Z", step: PT6H}\ntasks: []\n',
+        'workflow: {name: cycle_test}\ncycle: {start: "2018-04-15T00:00:00Z", step: PT6H}\ntasks: []\n',
         encoding="utf-8",
     )
     with pytest.raises(CycleConfigurationError, match="missing required field"):

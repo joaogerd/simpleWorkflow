@@ -10,7 +10,9 @@ from simpleworkflow.engine import render_template
 
 def test_workflow_rejects_unknown_top_level_field(tmp_path: Path) -> None:
     workflow = tmp_path / "workflow.yaml"
-    workflow.write_text("tasks: []\nworklfow: {}\n", encoding="utf-8")
+    workflow.write_text(
+        "workflow: {name: test}\ntasks: []\nworklfow: {}\n", encoding="utf-8"
+    )
 
     with pytest.raises(ValueError, match="unsupported field"):
         load_workflow(workflow)
@@ -19,7 +21,7 @@ def test_workflow_rejects_unknown_top_level_field(tmp_path: Path) -> None:
 def test_task_rejects_unknown_field(tmp_path: Path) -> None:
     workflow = tmp_path / "workflow.yaml"
     workflow.write_text(
-        "tasks:\n  - name: run\n    argv: [echo, ok]\n    depend_on: setup\n",
+        "workflow: {name: test}\ntasks:\n  - name: run\n    argv: [echo, ok]\n    depend_on: setup\n",
         encoding="utf-8",
     )
 
@@ -30,7 +32,8 @@ def test_task_rejects_unknown_field(tmp_path: Path) -> None:
 def test_pbs_requires_blocking_submission(tmp_path: Path) -> None:
     workflow = tmp_path / "workflow.yaml"
     workflow.write_text(
-        """tasks:
+        """workflow: {name: test}
+tasks:
   - name: run
     executor: pbs
     argv: [echo, ok]
@@ -47,7 +50,8 @@ def test_pbs_requires_blocking_submission(tmp_path: Path) -> None:
 def test_pbs_accepts_context_rendered_resources(tmp_path: Path) -> None:
     workflow = tmp_path / "workflow.yaml"
     workflow.write_text(
-        """context:
+        """workflow: {name: test}
+context:
   ncpus: "128"
   walltime: "00:30:00"
 tasks:
@@ -68,7 +72,8 @@ tasks:
 def test_rejects_invalid_environment_variable_name(tmp_path: Path) -> None:
     workflow = tmp_path / "workflow.yaml"
     workflow.write_text(
-        """tasks:
+        """workflow: {name: test}
+tasks:
   - name: run
     argv: [echo, ok]
     env:
