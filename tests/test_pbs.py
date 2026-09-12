@@ -26,7 +26,6 @@ import sys
 from pathlib import Path
 
 arguments = sys.argv[1:]
-assert arguments[:2] == ["-W", "block=true"]
 assert "-V" in arguments
 script = Path(arguments[-1])
 completed = subprocess.run(["bash", str(script)], check=False)
@@ -39,12 +38,22 @@ raise SystemExit(completed.returncode)
     return path
 
 
+def _write_fake_qstat(path: Path) -> Path:
+    path.write_text(
+        "#!/usr/bin/env python3\nprint('job_state = F')\nprint('Exit_status = 0')\n",
+        encoding="utf-8",
+    )
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return path
+
+
 def test_pbs_executor_waits_for_job_and_records_rendered_script(tmp_path: Path) -> None:
     execution_dir = tmp_path / "execution"
     execution_dir.mkdir()
     workflow_path = tmp_path / "workflow.yaml"
     workflow_path.write_text("workflow: {name: pbs-test}\n", encoding="utf-8")
     qsub = _write_fake_qsub(tmp_path / "fake-qsub")
+    qstat = _write_fake_qstat(tmp_path / "fake-qstat")
 
     config = {
         "workflow": {"name": "pbs-test"},
@@ -52,6 +61,7 @@ def test_pbs_executor_waits_for_job_and_records_rendered_script(tmp_path: Path) 
             "python": sys.executable,
             "cwd": str(execution_dir),
             "qsub": str(qsub),
+            "qstat": str(qstat),
             "walltime": "00:05:00",
             "select": "1",
             "ncpus": "2",
@@ -71,6 +81,8 @@ def test_pbs_executor_waits_for_job_and_records_rendered_script(tmp_path: Path) 
                 "outputs": {"required": ["{cwd}/analysis.nc"]},
                 "pbs": {
                     "qsub": "{qsub}",
+                    "qstat": "{qstat}",
+                    "poll_interval": 0.01,
                     "queue": "testq",
                     "walltime": "{walltime}",
                     "select": "{select}",
@@ -105,6 +117,7 @@ def test_pbs_executor_waits_for_job_and_records_rendered_script(tmp_path: Path) 
     metadata = json.loads((attempt / "metadata.json").read_text(encoding="utf-8"))
     execution = metadata["execution"]
     assert execution["executor"] == "pbs"
-    assert execution["wait_mode"] == "block"
+    assert execution["wait_mode"] == "foreground-poll"
     assert execution["job_id"] == "12345.fake"
-    assert execution["qsub_argv"][1:3] == ["-W", "block=true"]
+    assert "-W" not in execution["qsub_argv"]
+    assert (attempt / "scheduler.json").is_file()

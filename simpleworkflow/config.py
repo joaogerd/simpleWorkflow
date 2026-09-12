@@ -27,6 +27,7 @@ _TASK_FIELDS = {
     "inputs",
     "outputs",
     "input_fingerprint",
+    "timeout",
 }
 _PBS_FIELDS = {
     "queue",
@@ -40,6 +41,9 @@ _PBS_FIELDS = {
     "qsub",
     "block",
     "inherit_environment",
+    "qstat",
+    "qdel",
+    "poll_interval",
 }
 
 
@@ -144,7 +148,7 @@ def _validate_pbs(task: dict[str, Any], task_name: str) -> None:
         raise ValueError(f"Task '{task_name}' field 'pbs' must be a mapping.")
     _reject_unknown_keys(pbs, _PBS_FIELDS, f"Task '{task_name}' field 'pbs'")
 
-    for field in ("queue", "project", "job_name", "qsub"):
+    for field in ("queue", "project", "job_name", "qsub", "qstat", "qdel"):
         if field in pbs and (not isinstance(pbs[field], str) or not pbs[field]):
             raise ValueError(f"Task '{task_name}' field 'pbs.{field}' must be a non-empty string.")
     if "walltime" in pbs and (
@@ -165,6 +169,16 @@ def _validate_pbs(task: dict[str, Any], task_name: str) -> None:
     for field in ("block", "inherit_environment"):
         if field in pbs and not isinstance(pbs[field], bool):
             raise ValueError(f"Task '{task_name}' field 'pbs.{field}' must be a boolean.")
+    if "poll_interval" in pbs:
+        interval = pbs["poll_interval"]
+        if not _contains_template(interval) and (
+            not isinstance(interval, (int, float))
+            or isinstance(interval, bool)
+            or interval <= 0
+        ):
+            raise ValueError(
+                f"Task '{task_name}' field 'pbs.poll_interval' must be a positive number."
+            )
     if pbs.get("block", True) is not True:
         raise ValueError(
             f"Task '{task_name}' field 'pbs.block' must be true; non-blocking PBS is unsupported."
@@ -217,6 +231,14 @@ def _validate_task(task: Any) -> None:
             raise ValueError(
                 f"Task '{name}' field 'env' must map string names to string values."
             )
+    if "timeout" in task:
+        timeout = task["timeout"]
+        if _contains_template(timeout):
+            pass
+        elif not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0:
+            raise ValueError(f"Task '{name}' field 'timeout' must be a positive number.")
+        if executor != "local":
+            raise ValueError(f"Task '{name}' field 'timeout' is supported only locally.")
         invalid_keys = [key for key in environment if not _ENV_NAME.fullmatch(key)]
         if invalid_keys:
             names = ", ".join(sorted(invalid_keys))

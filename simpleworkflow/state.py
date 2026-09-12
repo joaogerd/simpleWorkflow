@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 import json
+import os
+import socket
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -134,6 +136,42 @@ class WorkflowState:
                     continue
                 except (OSError, ValueError, KeyError, TypeError):
                     pass
+            process_record = Path(attempt_dir) / "process.json" if attempt_dir else None
+            if process_record and process_record.is_file():
+                try:
+                    process = json.loads(process_record.read_text(encoding="utf-8"))
+                    pid = int(process["pid"])
+                    if process.get("host") == socket.gethostname():
+                        os.kill(pid, 0)
+                        self.set_status(
+                            workflow,
+                            task,
+                            "unknown",
+                            None,
+                            signature,
+                            f"processo {pid} ainda pode estar ativo neste computador",
+                            attempt_dir,
+                        )
+                        continue
+                except (OSError, ValueError, KeyError, TypeError):
+                    pass
+            scheduler_record = Path(attempt_dir) / "scheduler.json" if attempt_dir else None
+            if scheduler_record and scheduler_record.is_file():
+                try:
+                    scheduler = json.loads(scheduler_record.read_text(encoding="utf-8"))
+                    job_id = str(scheduler["job_id"])
+                    self.set_status(
+                        workflow,
+                        task,
+                        "unknown",
+                        None,
+                        signature,
+                        f"job PBS {job_id} precisa ser reconciliado com o escalonador",
+                        attempt_dir,
+                    )
+                    continue
+                except (OSError, ValueError, KeyError, TypeError):
+                    pass
             self.set_status(
                 workflow,
                 task,
@@ -143,6 +181,15 @@ class WorkflowState:
                 "o controlador anterior terminou antes de registrar o resultado",
                 attempt_dir,
             )
+
+    def tasks_with_status(self, workflow: str, status: str) -> list[str]:
+        return [
+            row[0]
+            for row in self.connection.execute(
+                "SELECT task FROM task_state WHERE workflow = ? AND status = ? ORDER BY task",
+                (workflow, status),
+            )
+        ]
 
     def reset(self, workflow: str, tasks: Iterable[str] | None = None) -> None:
         if tasks is None:

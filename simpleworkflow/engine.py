@@ -115,6 +115,19 @@ class WorkflowEngine:
             for key, value in task.get("env", {}).items()
         }
 
+    def _task_timeout(self, task: dict[str, Any]) -> float | None:
+        value = task.get("timeout")
+        if value is None:
+            return None
+        rendered = render_template(value, self.context) if isinstance(value, str) else value
+        try:
+            timeout = float(rendered)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"Task '{task['name']}' timeout must be a positive number.") from error
+        if timeout <= 0:
+            raise ValueError(f"Task '{task['name']}' timeout must be a positive number.")
+        return timeout
+
     def _task_executor(self, task: dict[str, Any]) -> TaskExecutor:
         executor = task.get("executor", "local")
         if executor == "local":
@@ -153,7 +166,7 @@ class WorkflowEngine:
             executor=(
                 {"name": "pbs", "options": _render_value(task["pbs"], self.context)}
                 if task.get("executor", "local") == "pbs"
-                else {"name": "local"}
+                else {"name": "local", "timeout": self._task_timeout(task)}
             ),
             format_version=int(self.config.get("format_version", 1)),
         )
@@ -223,6 +236,13 @@ class WorkflowEngine:
         """Execute pending workflow tasks in dependency order."""
         with WorkflowLock(self.workdir, self.workflow_name):
             self.state.reconcile_running(self.workflow_name)
+            uncertain = self.state.tasks_with_status(self.workflow_name, "unknown")
+            if uncertain:
+                raise RuntimeError(
+                    "não é seguro continuar; a atividade ainda não pôde ser confirmada para: "
+                    + ", ".join(uncertain)
+                    + ". Verifique o processo ou job antes de usar reset."
+                )
             return self._run_locked()
 
     def _descendants(self, task_name: str) -> list[str]:
@@ -291,6 +311,7 @@ class WorkflowEngine:
             argv = render_argv(task["argv"], self.context)
             cwd = self._task_cwd(task)
             env = self._task_env(task)
+            timeout = self._task_timeout(task)
             rendered = shlex.join(argv)
 
             if self.dry_run:
@@ -376,15 +397,16 @@ class WorkflowEngine:
                 "tarefa iniciada",
                 str(attempt.directory),
             )
+            execution_options: dict[str, Any] = {
+                "cwd": cwd,
+                "env": env,
+                "stdout_path": attempt.stdout_path,
+                "stderr_path": attempt.stderr_path,
+            }
+            if timeout is not None:
+                execution_options["timeout"] = timeout
             execution_result = self._normalize_execution_result(
-                task_executor.run(
-                    task_name,
-                    argv,
-                    cwd=cwd,
-                    env=env,
-                    stdout_path=attempt.stdout_path,
-                    stderr_path=attempt.stderr_path,
-                )
+                task_executor.run(task_name, argv, **execution_options)
             )
             return_code = execution_result.return_code
             execution = execution_result.metadata

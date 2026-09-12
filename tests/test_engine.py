@@ -129,3 +129,22 @@ def test_success_state_is_invalidated_when_required_input_disappears(tmp_path: P
 
     assert engine.run() == 2
     assert engine.state.get_status("stale-input", "task") == "invalid-input"
+
+
+def test_local_timeout_terminates_process_group(tmp_path: Path) -> None:
+    config = {
+        "workflow": {"name": "timeout"},
+        "tasks": [
+            {
+                "name": "slow",
+                "argv": [sys.executable, "-c", "import time; time.sleep(30)"],
+                "timeout": 0.05,
+            }
+        ],
+    }
+    engine = WorkflowEngine(config, workdir=tmp_path / ".simpleworkflow")
+    assert engine.run() == 124
+    state = engine.state.get_task_state("timeout", "slow")
+    assert state is not None and state.status == "failed"
+    attempt = next((tmp_path / ".simpleworkflow" / "runs").glob("*/tasks/*/attempt-001"))
+    assert (attempt / "process.json").is_file()
