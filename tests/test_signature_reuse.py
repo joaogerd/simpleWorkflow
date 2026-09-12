@@ -63,7 +63,7 @@ def test_successful_task_is_reused_only_when_signature_matches(tmp_path: Path) -
     assert engine.run() == 0
     assert executor.calls == 1
     assert output.read_text(encoding="utf-8") == "first"
-    first_state = engine.state.get_task_state("signature-reuse", "analysis")
+    first_state = engine.state.get_task_state(engine.state_key, "analysis")
     assert first_state is not None
     assert first_state.signature
 

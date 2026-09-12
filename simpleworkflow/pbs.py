@@ -1,12 +1,12 @@
-"""Small blocking PBS execution backend for simpleWorkflow."""
+"""Small foreground-wait PBS execution backend for simpleWorkflow."""
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import shlex
 import subprocess
-import json
-import os
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -25,9 +25,9 @@ _EXIT_STATUS = re.compile(r"(?m)^\s*Exit_status\s*=\s*(-?\d+)\s*$")
 class PbsExecutor:
     """Submit one task to PBS and wait for the final job result.
 
-    This backend intentionally supports only blocking submission through
-    ``qsub -W block=true``. A successful simpleWorkflow task therefore means
-    the PBS job completed successfully, not merely that it entered a queue.
+    Submission returns a job identifier immediately; this foreground process
+    then consults PBS until completion. Success means that the job completed
+    successfully, not merely that it entered a queue.
     """
 
     def __init__(self, options: Mapping[str, Any]):

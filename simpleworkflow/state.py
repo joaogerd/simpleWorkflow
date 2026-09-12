@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import sqlite3
 import json
 import os
 import socket
+import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
