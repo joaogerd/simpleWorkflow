@@ -215,6 +215,7 @@ class WorkflowEngine:
         recorder: RunRecorder | None = None
         task_map = {task["name"]: task for task in self.tasks}
         planned_outputs_by_task: dict[str, set[Path]] = {}
+        executed_tasks: set[str] = set()
         exit_code = 0
 
         for task_name in self.plan():
@@ -229,6 +230,9 @@ class WorkflowEngine:
             dependencies = task.get("depends_on", []) or []
             if isinstance(dependencies, str):
                 dependencies = [dependencies]
+            dependency_executed = any(
+                dependency in executed_tasks for dependency in dependencies
+            )
 
             planned_dependency_outputs: set[Path] = set()
             for dependency in dependencies:
@@ -271,7 +275,11 @@ class WorkflowEngine:
             previous = self.state.get_task_state(self.workflow_name, task_name)
             if not self.force and previous and previous.status == "success":
                 missing_outputs = artifacts.missing_required_outputs()
-                if previous.signature == signature.value and not missing_outputs:
+                if (
+                    not dependency_executed
+                    and previous.signature == signature.value
+                    and not missing_outputs
+                ):
                     self.reporter.event(
                         "skip",
                         task_name,
@@ -279,7 +287,14 @@ class WorkflowEngine:
                         executor=executor_name,
                     )
                     continue
-                if missing_outputs:
+                if dependency_executed:
+                    self.reporter.event(
+                        "rerun",
+                        task_name,
+                        "dependency executed again",
+                        executor=executor_name,
+                    )
+                elif missing_outputs:
                     message = (
                         "required output(s) missing: "
                         f"{self._format_missing_outputs(artifacts)}"
@@ -348,6 +363,7 @@ class WorkflowEngine:
                 self.state.set_status(
                     self.workflow_name, task_name, "success", return_code, signature.value
                 )
+                executed_tasks.add(task_name)
                 self._record_attempt(
                     recorder,
                     attempt,
