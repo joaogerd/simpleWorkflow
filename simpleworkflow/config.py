@@ -231,6 +231,12 @@ def _validate_task(task: Any) -> None:
             raise ValueError(
                 f"Task '{name}' field 'env' must map string names to string values."
             )
+        invalid_keys = [key for key in environment if not _ENV_NAME.fullmatch(key)]
+        if invalid_keys:
+            names = ", ".join(sorted(invalid_keys))
+            raise ValueError(
+                f"Task '{name}' field 'env' contains invalid environment variable name(s): {names}."
+            )
     if "timeout" in task:
         timeout = task["timeout"]
         if _contains_template(timeout):
@@ -239,12 +245,6 @@ def _validate_task(task: Any) -> None:
             raise ValueError(f"Task '{name}' field 'timeout' must be a positive number.")
         if executor != "local":
             raise ValueError(f"Task '{name}' field 'timeout' is supported only locally.")
-        invalid_keys = [key for key in environment if not _ENV_NAME.fullmatch(key)]
-        if invalid_keys:
-            names = ", ".join(sorted(invalid_keys))
-            raise ValueError(
-                f"Task '{name}' field 'env' contains invalid environment variable name(s): {names}."
-            )
 
     if "inputs" in task:
         _validate_artifact_group(task["inputs"], "inputs", name)
