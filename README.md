@@ -19,7 +19,7 @@ reproducible workflow that can be installed and understood quickly.
 - per-attempt logs and provenance records;
 - ISO-8601 cycle expansion for scientific cases;
 - local execution and a small blocking PBS backend;
-- friendly, color-aware progress output with no runtime dependency.
+- concise, color-aware scientific progress output with no runtime dependency.
 
 ## Deliberate limits
 
@@ -55,23 +55,41 @@ argument vectors without launching processes.
 
 ## Terminal output
 
-The CLI prints compact lifecycle events such as `PLAN`, `RUN`, `OK`, `FAIL`,
-`SKIP` and `RERUN`. Interactive terminals receive color and symbols by default;
-redirected output stays plain so logs and scripts remain stable.
+The default terminal view is intended for scientific and operational users. It
+shows the workflow, execution mode, progress, human-facing stages and the final
+result without printing every rendered command.
+
+Task names that follow the common `componentHH_action` convention are grouped
+automatically. For example, `jedi06_prepare`, `jedi06_submit` and
+`jedi06_validate` are presented under `JEDI 06Z` with the actions `Prepare`,
+`Submit` and `Validate`. The internal task names remain unchanged and continue
+to be used for state, logs and provenance.
+
+Typical output therefore emphasizes states such as `RUN`, `OK`, `REUSED`,
+`RERUN` and `FAIL`, followed by an end-of-run summary with elapsed time and the
+next useful action.
 
 ```bash
-# Default: color only when stdout is interactive.
+# Concise scientific/operational view.
 swf run workflow.yaml
+
+# Include internal task names, executor names and rendered commands.
+swf run workflow.yaml --verbose
+
+# Default: color only when stdout is interactive.
+swf status workflow.yaml --color auto
 
 # Demonstrations or terminals that do not advertise color.
 swf run workflow.yaml --color always
 
-# CI logs, shell parsing or plain text output.
+# CI logs, redirected output or plain text terminals.
 swf status workflow.yaml --color never
 ```
 
 `--color` accepts `auto`, `always` and `never`. Setting `NO_COLOR` also disables
-automatic color. The terminal renderer uses only Python's standard library.
+automatic color. The terminal renderer uses only Python's standard library and
+the detailed stdout/stderr and provenance records remain stored separately
+below the workflow work directory.
 
 ## Workflow format
 
@@ -98,8 +116,8 @@ use context placeholders such as `{python}`, `{case_name}` and
 
 PBS tasks remain intentionally simple. The runner creates one `job.pbs` file,
 submits it with `qsub -W block=true`, and waits for its final result before
-advancing the DAG. This preserves the same success/failure semantics used by
-local tasks.
+advancing the workflow. This preserves the same success/failure semantics used
+by local tasks.
 
 ```yaml
 - name: analysis
@@ -138,8 +156,10 @@ Runtime files are written below `.simpleworkflow/` by default:
       pbs.stderr.log
 ```
 
-A successful task is reused only when its signature still matches and required
-outputs still exist. Signatures include the rendered invocation, declared
+A successful task is reused only when its signature still matches, required
+outputs still exist and no dependency executed again in the current invocation.
+If an upstream task is executed again, that rerun propagates safely through its
+dependent tasks. Signatures include the rendered invocation, declared
 environment, workflow file and declared input fingerprints.
 
 ## Development
