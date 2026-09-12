@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import simpleworkflow.signature as signature_module
 from simpleworkflow.artifacts import ResolvedArtifacts
 from simpleworkflow.signature import compute_task_signature, fingerprint_artifact
 
@@ -49,11 +50,11 @@ def test_sha256_fingerprint_detects_changed_contents_with_preserved_metadata(
 ) -> None:
     source = tmp_path / "input.nc"
     source.write_text("aaaa", encoding="utf-8")
-    stat = source.stat()
+    stat_result = source.stat()
     before = fingerprint_artifact(source, "sha256")
 
     source.write_text("bbbb", encoding="utf-8")
-    os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    os.utime(source, ns=(stat_result.st_atime_ns, stat_result.st_mtime_ns))
     after = fingerprint_artifact(source, "sha256")
 
     assert before["size"] == after["size"]
@@ -97,3 +98,72 @@ def test_directory_fingerprint_includes_children(tmp_path: Path) -> None:
     child.write_text("second", encoding="utf-8")
     after = fingerprint_artifact(directory, "sha256")
     assert before["children"][0]["sha256"] != after["children"][0]["sha256"]
+
+
+def test_runtime_identity_uses_task_path_override(tmp_path: Path, monkeypatch: object) -> None:
+    tool = tmp_path / "science-tool"
+    tool.write_text("tool", encoding="utf-8")
+    seen_paths: list[str | None] = []
+
+    def fake_which(command: str, path: str | None = None) -> str:
+        assert command == "science-tool"
+        seen_paths.append(path)
+        return str(tool)
+
+    monkeypatch.setattr(signature_module.shutil, "which", fake_which)  # type: ignore[attr-defined]
+    task_path = str(tmp_path / "task-bin")
+    result = compute_task_signature(
+        workflow_path=tmp_path / "workflow.yaml",
+        task_name="analysis",
+        argv=["science-tool"],
+        cwd=tmp_path,
+        env={"PATH": task_path},
+        artifacts=ResolvedArtifacts(),
+    )
+
+    assert seen_paths == [task_path]
+    assert result.payload["task"]["runtime"]["resolved"] == str(tool.resolve())
+
+
+def test_runtime_identity_resolves_relative_executable_from_task_cwd(tmp_path: Path) -> None:
+    execution_dir = tmp_path / "case"
+    tool = execution_dir / "bin" / "science-tool"
+    tool.parent.mkdir(parents=True)
+    tool.write_text("tool", encoding="utf-8")
+
+    result = compute_task_signature(
+        workflow_path=tmp_path / "workflow.yaml",
+        task_name="analysis",
+        argv=["./bin/science-tool"],
+        cwd=execution_dir,
+        env={},
+        artifacts=ResolvedArtifacts(),
+    )
+
+    assert result.payload["task"]["runtime"]["resolved"] == str(tool.resolve())
+
+
+def test_signature_changes_when_resolved_executable_metadata_changes(
+    tmp_path: Path, monkeypatch: object
+) -> None:
+    tool = tmp_path / "science-tool"
+    tool.write_text("first", encoding="utf-8")
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        signature_module.shutil,
+        "which",
+        lambda _command, path=None: str(tool),
+    )
+    common = {
+        "workflow_path": tmp_path / "workflow.yaml",
+        "task_name": "analysis",
+        "argv": ["science-tool"],
+        "cwd": tmp_path,
+        "env": {"PATH": str(tmp_path)},
+        "artifacts": ResolvedArtifacts(),
+    }
+
+    before = compute_task_signature(**common)
+    tool.write_text("changed executable contents", encoding="utf-8")
+    after = compute_task_signature(**common)
+
+    assert before.value != after.value
