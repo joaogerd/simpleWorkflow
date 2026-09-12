@@ -14,39 +14,15 @@ from .engine import WorkflowEngine
 
 
 def _add_cycle_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--cycle-time",
-        action="append",
-        dest="cycle_times",
-        metavar="TIME",
-        help="Run one explicit ISO-8601 cycle; repeat this option for multiple cycles.",
-    )
-    parser.add_argument(
-        "--from",
-        dest="cycle_start",
-        metavar="TIME",
-        help="Override cycle.start with an ISO-8601 timestamp.",
-    )
-    parser.add_argument(
-        "--to",
-        dest="cycle_end",
-        metavar="TIME",
-        help="Override cycle.end with an ISO-8601 timestamp.",
-    )
-    parser.add_argument(
-        "--step",
-        dest="cycle_step",
-        metavar="DURATION",
-        help="Override cycle.step with an ISO-8601 duration such as PT6H.",
-    )
+    parser.add_argument("--cycle-time", action="append", dest="cycle_times", metavar="TIME")
+    parser.add_argument("--from", dest="cycle_start", metavar="TIME")
+    parser.add_argument("--to", dest="cycle_end", metavar="TIME")
+    parser.add_argument("--step", dest="cycle_step", metavar="DURATION")
 
 
 def _add_display_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--color",
-        choices=("auto", "always", "never"),
-        default="auto",
-        help="Terminal color mode: auto (default), always or never.",
+        "--color", choices=("auto", "always", "never"), default="auto"
     )
 
 
@@ -55,19 +31,15 @@ def build_parser() -> argparse.ArgumentParser:
         prog="simpleworkflow",
         description="Lightweight YAML workflow runner for scientific pipelines.",
     )
-
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     for command in ("run", "plan", "status", "reset", "validate", "explain"):
         command_parser = subparsers.add_parser(command)
         command_parser.add_argument("workflow")
         command_parser.add_argument("--workdir", default=".simpleworkflow")
-        command_parser.add_argument(
-            "--debug", action="store_true", help="Show technical traceback details."
-        )
+        command_parser.add_argument("--debug", action="store_true")
         _add_cycle_options(command_parser)
         _add_display_options(command_parser)
-
         if command == "run":
             command_parser.add_argument("--force", action="store_true")
             command_parser.add_argument("--dry-run", action="store_true")
@@ -77,9 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
                 action="append",
                 dest="selected_tasks",
                 metavar="NAME",
-                help="Select a task and include all of its dependencies; repeat as needed.",
             )
-
     return parser
 
 
@@ -95,6 +65,7 @@ def _cycle_engines(
         end=args.cycle_end,
         step=args.cycle_step,
     )
+    selected = set(args.selected_tasks) if getattr(args, "selected_tasks", None) else None
     if not cycles:
         yield None, WorkflowEngine(
             config=config,
@@ -102,7 +73,7 @@ def _cycle_engines(
             force=getattr(args, "force", False),
             dry_run=getattr(args, "dry_run", False),
             reporter=reporter,
-            selected_tasks=set(args.selected_tasks) if getattr(args, "selected_tasks", None) else None,
+            selected_tasks=selected,
         )
         return
 
@@ -123,7 +94,7 @@ def _cycle_engines(
             force=getattr(args, "force", False),
             dry_run=getattr(args, "dry_run", False),
             reporter=reporter,
-            selected_tasks=set(args.selected_tasks) if getattr(args, "selected_tasks", None) else None,
+            selected_tasks=selected,
         )
 
 
@@ -157,6 +128,9 @@ def _main(argv: list[str] | None = None) -> int:
                 result = engine.run()
                 if result != 0:
                     return result
+            except KeyboardInterrupt:
+                engine.state.reconcile_running(engine.state_key)
+                raise
             finally:
                 engine.state.close()
         return 0
@@ -213,6 +187,16 @@ def main(argv: list[str] | None = None) -> int:
     debug = "--debug" in arguments
     try:
         return _main(arguments)
+    except KeyboardInterrupt:
+        if debug:
+            traceback.print_exc()
+        else:
+            print(
+                "simpleworkflow: execução interrompida pelo usuário; "
+                "o estado foi preservado para recuperação segura.",
+                file=sys.stderr,
+            )
+        return 130
     except (FileNotFoundError, ValueError, RuntimeError) as error:
         if debug:
             traceback.print_exc()
