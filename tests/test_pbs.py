@@ -40,7 +40,10 @@ raise SystemExit(completed.returncode)
 
 def _write_fake_qstat(path: Path) -> Path:
     path.write_text(
-        "#!/usr/bin/env python3\nprint('job_state = F')\nprint('Exit_status = 0')\n",
+        "#!/usr/bin/env python3\n"
+        "print('job_state = F')\n"
+        "print('Variable_List = SECRET_TOKEN=must-not-be-persisted')\n"
+        "print('Exit_status = 0')\n",
         encoding="utf-8",
     )
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
@@ -121,3 +124,10 @@ def test_pbs_executor_waits_for_job_and_records_rendered_script(tmp_path: Path) 
     assert execution["job_id"] == "12345.fake"
     assert "-W" not in execution["qsub_argv"]
     assert (attempt / "scheduler.json").is_file()
+
+    launcher_log = (attempt / "stdout.log").read_text(encoding="utf-8")
+    assert "job_id=12345.fake" in launcher_log
+    assert "state=F" in launcher_log
+    assert "exit_status=0" in launcher_log
+    assert "Variable_List" not in launcher_log
+    assert "SECRET_TOKEN" not in launcher_log

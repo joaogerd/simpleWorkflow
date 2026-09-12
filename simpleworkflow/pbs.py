@@ -90,6 +90,20 @@ class PbsExecutor:
         return int(status.group(1)) if status else 75
 
     @staticmethod
+    def _scheduler_status_line(job_id: str, output: str) -> str:
+        """Return a compact scheduler status without persisting qstat payloads."""
+        state_match = _JOB_STATE.search(output)
+        exit_match = _EXIT_STATUS.search(output)
+
+        state = state_match.group(1).upper() if state_match else "?"
+        fields = [f"job_id={job_id}", f"state={state}"]
+
+        if exit_match:
+            fields.append(f"exit_status={exit_match.group(1)}")
+
+        return "[simpleworkflow] qstat: " + " ".join(fields) + "\n"
+
+    @staticmethod
     def _safe_job_name(value: str) -> str:
         normalized = re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._-")
         return normalized[:80] or "simpleworkflow"
@@ -286,12 +300,17 @@ class PbsExecutor:
             except OSError as error:
                 self._write(submit_stderr, f"simpleWorkflow could not run qstat: {error}\n")
                 return ExecutionResult(return_code=75, metadata=base_metadata)
-            self._write(submit_stdout, status.stdout)
-            self._write(submit_stderr, status.stderr)
-            result = self._pbs_result(f"{status.stdout}\n{status.stderr}")
+            status_output = f"{status.stdout}\n{status.stderr}"
+            self._write(
+                submit_stdout,
+                self._scheduler_status_line(job_id, status_output),
+            )
+            result = self._pbs_result(status_output)
             if result is not None:
                 return ExecutionResult(return_code=result, metadata=base_metadata)
             if status.returncode != 0:
+                if status.stderr:
+                    self._write(submit_stderr, status.stderr)
                 return ExecutionResult(return_code=75, metadata=base_metadata)
             try:
                 time.sleep(interval)
