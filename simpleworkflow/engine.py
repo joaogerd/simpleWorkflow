@@ -17,6 +17,7 @@ from .state import WorkflowState
 
 INVALID_INPUT_EXIT_CODE = 2
 INVALID_OUTPUT_EXIT_CODE = 3
+BLOCKED_EXIT_CODE = 4
 
 
 def render_template(text: str, context: dict[str, Any]) -> str:
@@ -56,6 +57,7 @@ class WorkflowEngine:
         force: bool = False,
         dry_run: bool = False,
         reporter: WorkflowReporter | None = None,
+        selected_tasks: set[str] | None = None,
     ):
         self.config = config
         self.workflow_name = config.get("workflow", {}).get("name", "workflow")
@@ -64,6 +66,7 @@ class WorkflowEngine:
         self.force = force
         self.dry_run = dry_run
         self.reporter = reporter or TerminalReporter()
+        self.selected_tasks = selected_tasks
         self.source_dir = Path(
             config.get("__simpleworkflow__", {}).get("source_dir", Path.cwd())
         ).resolve()
@@ -100,7 +103,24 @@ class WorkflowEngine:
                 unresolved = ", ".join(sorted(remaining))
                 raise ValueError(f"Cyclic or unresolved task dependencies: {unresolved}")
 
-        return ordered
+        if not self.selected_tasks:
+            return ordered
+        unknown = self.selected_tasks - set(ordered)
+        if unknown:
+            raise ValueError("Unknown selected task(s): " + ", ".join(sorted(unknown)))
+        task_map = {task["name"]: task for task in self.tasks}
+        required = set(self.selected_tasks)
+        pending = list(self.selected_tasks)
+        while pending:
+            name = pending.pop()
+            dependencies = task_map[name].get("depends_on", []) or []
+            if isinstance(dependencies, str):
+                dependencies = [dependencies]
+            for dependency in dependencies:
+                if dependency not in required:
+                    required.add(dependency)
+                    pending.append(dependency)
+        return [name for name in ordered if name in required]
 
     def _task_cwd(self, task: dict[str, Any]) -> Path | None:
         raw_cwd = task.get("cwd")
@@ -271,15 +291,28 @@ class WorkflowEngine:
         for task_name in self.plan():
             task = task_map[task_name]
             executor_name = str(task.get("executor", "local"))
+            dependencies = task.get("depends_on", []) or []
+            if isinstance(dependencies, str):
+                dependencies = [dependencies]
+            unavailable = [
+                dependency
+                for dependency in dependencies
+                if self.state.get_status(self.workflow_name, dependency)
+                in {"skipped", "blocked", "failed", "invalid-input", "invalid-output", "unknown"}
+            ]
+            if unavailable:
+                reason = "dependência indisponível: " + ", ".join(unavailable)
+                self.reporter.event("fail", task_name, reason, executor=executor_name)
+                self.state.set_status(
+                    self.workflow_name, task_name, "blocked", BLOCKED_EXIT_CODE, reason=reason
+                )
+                return BLOCKED_EXIT_CODE
             if task.get("enabled", True) is False:
                 self.reporter.event("skip", task_name, "disabled", executor=executor_name)
                 self.state.set_status(self.workflow_name, task_name, "skipped", 0)
                 continue
 
             artifacts = self._task_artifacts(task)
-            dependencies = task.get("depends_on", []) or []
-            if isinstance(dependencies, str):
-                dependencies = [dependencies]
             dependency_executed = any(
                 dependency in executed_tasks for dependency in dependencies
             )
@@ -521,3 +554,38 @@ class WorkflowEngine:
     def reset(self) -> None:
         """Reset all persisted state for this workflow."""
         self.state.reset(self.workflow_name)
+
+    def validate(self) -> list[str]:
+        """Validate dependency order and every rendered task field without execution."""
+        problems: list[str] = []
+        task_map = {task["name"]: task for task in self.tasks}
+        for task_name in self.plan():
+            task = task_map[task_name]
+            render_argv(task["argv"], self.context)
+            self._task_cwd(task)
+            self._task_env(task)
+            self._task_timeout(task)
+            self._task_executor(task)
+            artifacts = self._task_artifacts(task)
+            for path in artifacts.missing_required_inputs():
+                problems.append(f"{task_name}: entrada obrigatória ausente: {path}")
+        return problems
+
+    def explain(self) -> None:
+        """Explain current state and the next safe action in researcher-facing terms."""
+        task_map = {task["name"]: task for task in self.tasks}
+        for task_name in self.plan():
+            task = task_map[task_name]
+            state = self.state.get_task_state(self.workflow_name, task_name)
+            status = state.status if state else "pending"
+            reason = state.reason if state and state.reason else "a tarefa ainda não foi executada"
+            self.reporter.event(status, task_name, reason, executor=str(task.get("executor", "local")))
+            artifacts = self._task_artifacts(task)
+            missing_inputs = artifacts.missing_required_inputs()
+            missing_outputs = artifacts.missing_required_outputs()
+            if missing_inputs:
+                self.reporter.note("  Entradas ausentes: " + ", ".join(map(str, missing_inputs)))
+            if missing_outputs:
+                self.reporter.note("  Produtos ausentes: " + ", ".join(map(str, missing_outputs)))
+            if state and state.attempt_dir:
+                self.reporter.note(f"  Registros da tentativa: {state.attempt_dir}")

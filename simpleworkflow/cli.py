@@ -58,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    for command in ("run", "plan", "status", "reset"):
+    for command in ("run", "plan", "status", "reset", "validate", "explain"):
         command_parser = subparsers.add_parser(command)
         command_parser.add_argument("workflow")
         command_parser.add_argument("--workdir", default=".simpleworkflow")
@@ -71,6 +71,14 @@ def build_parser() -> argparse.ArgumentParser:
         if command == "run":
             command_parser.add_argument("--force", action="store_true")
             command_parser.add_argument("--dry-run", action="store_true")
+        if command in {"run", "plan", "validate", "explain"}:
+            command_parser.add_argument(
+                "--task",
+                action="append",
+                dest="selected_tasks",
+                metavar="NAME",
+                help="Select a task and include all of its dependencies; repeat as needed.",
+            )
 
     return parser
 
@@ -94,6 +102,7 @@ def _cycle_engines(
             force=getattr(args, "force", False),
             dry_run=getattr(args, "dry_run", False),
             reporter=reporter,
+            selected_tasks=set(args.selected_tasks) if getattr(args, "selected_tasks", None) else None,
         )
         return
 
@@ -114,6 +123,7 @@ def _cycle_engines(
             force=getattr(args, "force", False),
             dry_run=getattr(args, "dry_run", False),
             reporter=reporter,
+            selected_tasks=set(args.selected_tasks) if getattr(args, "selected_tasks", None) else None,
         )
 
 
@@ -168,6 +178,31 @@ def _main(argv: list[str] | None = None) -> int:
             finally:
                 engine.state.close()
         reporter.note("Workflow state reset.")
+        return 0
+
+    if args.command == "validate":
+        failed = False
+        for cycle, engine in _cycle_engines(config, args, reporter):
+            try:
+                reporter.heading(_heading("validate", config, cycle))
+                problems = engine.validate()
+                if problems:
+                    failed = True
+                    for problem in problems:
+                        reporter.note(problem)
+                else:
+                    reporter.note("Workflow válido e pronto para execução.")
+            finally:
+                engine.state.close()
+        return 2 if failed else 0
+
+    if args.command == "explain":
+        for cycle, engine in _cycle_engines(config, args, reporter):
+            try:
+                reporter.heading(_heading("explain", config, cycle))
+                engine.explain()
+            finally:
+                engine.state.close()
         return 0
 
     return 2
