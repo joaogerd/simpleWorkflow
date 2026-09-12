@@ -148,3 +148,20 @@ def test_local_timeout_terminates_process_group(tmp_path: Path) -> None:
     assert state is not None and state.status == "failed"
     attempt = next((tmp_path / ".simpleworkflow" / "runs").glob("*/tasks/*/attempt-001"))
     assert (attempt / "process.json").is_file()
+
+
+def test_same_workflow_name_from_different_files_uses_independent_state(tmp_path: Path) -> None:
+    first = tmp_path / "first.yaml"
+    second = tmp_path / "second.yaml"
+    first.write_text("workflow: {name: repeated}\n", encoding="utf-8")
+    second.write_text("workflow: {name: repeated}\n", encoding="utf-8")
+    base = {"workflow": {"name": "repeated"}, "tasks": []}
+    first_engine = WorkflowEngine(
+        {**base, "__simpleworkflow__": {"source_path": str(first), "source_dir": str(tmp_path)}},
+        workdir=tmp_path / ".simpleworkflow",
+    )
+    second_engine = WorkflowEngine(
+        {**base, "__simpleworkflow__": {"source_path": str(second), "source_dir": str(tmp_path)}},
+        workdir=tmp_path / ".simpleworkflow",
+    )
+    assert first_engine.state_key != second_engine.state_key

@@ -1,6 +1,6 @@
 # Legacy code
 
-The `app/`, `unittests/` and historical `test/` directories predate the
+The `legacy/app/`, `legacy/unittests/` and `legacy/test/` directories predate the
 `simpleworkflow` package introduced in version 0.1.0.
 
 They are retained temporarily as source history only. They are not:
@@ -16,5 +16,5 @@ patterns in favor of explicit `argv`, task dependencies, artifact contracts and
 cycle expansion.
 
 New development belongs exclusively under `simpleworkflow/`, `tests/`,
-`examples/` and `docs/`. The legacy directories can be physically removed in a
-future major cleanup after any external users have migrated.
+`examples/` and `docs/`. Historical code is grouped under `legacy/` so it is not
+mistaken for the maintained implementation.

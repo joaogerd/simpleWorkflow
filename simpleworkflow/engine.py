@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import shlex
 from collections.abc import Mapping
 from pathlib import Path
@@ -8,10 +9,10 @@ from typing import Any
 from .artifacts import ResolvedArtifacts, resolve_task_artifacts
 from .console import TerminalReporter, WorkflowReporter
 from .executor import ExecutionResult, LocalExecutor, TaskExecutor
+from .locking import WorkflowLock
 from .pbs import PbsExecutor
 from .provenance import build_attempt_metadata
 from .runs import AttemptPaths, RunRecorder
-from .locking import WorkflowLock
 from .signature import TaskSignature, compute_task_signature
 from .state import WorkflowState
 
@@ -70,6 +71,12 @@ class WorkflowEngine:
         self.source_dir = Path(
             config.get("__simpleworkflow__", {}).get("source_dir", Path.cwd())
         ).resolve()
+        source_path = config.get("__simpleworkflow__", {}).get("source_path")
+        if source_path:
+            source_digest = hashlib.sha256(str(source_path).encode("utf-8")).hexdigest()[:12]
+            self.state_key = f"{self.workflow_name}@{source_digest}"
+        else:
+            self.state_key = self.workflow_name
 
         self.workdir = Path(workdir)
         self.log_dir = self.workdir / "logs" / self.workflow_name
@@ -254,9 +261,9 @@ class WorkflowEngine:
 
     def run(self) -> int:
         """Execute pending workflow tasks in dependency order."""
-        with WorkflowLock(self.workdir, self.workflow_name):
-            self.state.reconcile_running(self.workflow_name)
-            uncertain = self.state.tasks_with_status(self.workflow_name, "unknown")
+        with WorkflowLock(self.workdir, self.state_key):
+            self.state.reconcile_running(self.state_key)
+            uncertain = self.state.tasks_with_status(self.state_key, "unknown")
             if uncertain:
                 raise RuntimeError(
                     "não é seguro continuar; a atividade ainda não pôde ser confirmada para: "
@@ -297,19 +304,19 @@ class WorkflowEngine:
             unavailable = [
                 dependency
                 for dependency in dependencies
-                if self.state.get_status(self.workflow_name, dependency)
+                if self.state.get_status(self.state_key, dependency)
                 in {"skipped", "blocked", "failed", "invalid-input", "invalid-output", "unknown"}
             ]
             if unavailable:
                 reason = "dependência indisponível: " + ", ".join(unavailable)
                 self.reporter.event("fail", task_name, reason, executor=executor_name)
                 self.state.set_status(
-                    self.workflow_name, task_name, "blocked", BLOCKED_EXIT_CODE, reason=reason
+                    self.state_key, task_name, "blocked", BLOCKED_EXIT_CODE, reason=reason
                 )
                 return BLOCKED_EXIT_CODE
             if task.get("enabled", True) is False:
                 self.reporter.event("skip", task_name, "disabled", executor=executor_name)
-                self.state.set_status(self.workflow_name, task_name, "skipped", 0)
+                self.state.set_status(self.state_key, task_name, "skipped", 0)
                 continue
 
             artifacts = self._task_artifacts(task)
@@ -334,7 +341,7 @@ class WorkflowEngine:
                 self.reporter.event("fail", task_name, message, executor=executor_name)
                 if not self.dry_run:
                     self.state.set_status(
-                        self.workflow_name,
+                        self.state_key,
                         task_name,
                         "invalid-input",
                         INVALID_INPUT_EXIT_CODE,
@@ -359,7 +366,7 @@ class WorkflowEngine:
             # Build and validate the backend before a durable attempt is marked running.
             task_executor = self._task_executor(task)
 
-            previous = self.state.get_task_state(self.workflow_name, task_name)
+            previous = self.state.get_task_state(self.state_key, task_name)
             if not self.force and previous and previous.status == "success":
                 missing_outputs = artifacts.missing_required_outputs()
                 invalid_outputs = artifacts.invalid_outputs()
@@ -399,7 +406,7 @@ class WorkflowEngine:
             descendants = self._descendants(task_name)
             if descendants:
                 self.state.mark_tasks(
-                    self.workflow_name,
+                    self.state_key,
                     descendants,
                     "stale",
                     f"a dependência '{task_name}' será executada novamente",
@@ -422,7 +429,7 @@ class WorkflowEngine:
                 },
             )
             self.state.set_status(
-                self.workflow_name,
+                self.state_key,
                 task_name,
                 "running",
                 None,
@@ -465,7 +472,7 @@ class WorkflowEngine:
                         reason=reason,
                     )
                     self.state.set_status(
-                        self.workflow_name,
+                        self.state_key,
                         task_name,
                         "invalid-output",
                         INVALID_OUTPUT_EXIT_CODE,
@@ -475,7 +482,7 @@ class WorkflowEngine:
                     )
                     if descendants:
                         self.state.mark_tasks(
-                            self.workflow_name, descendants, "blocked", reason
+                            self.state_key, descendants, "blocked", reason
                         )
                     exit_code = INVALID_OUTPUT_EXIT_CODE
                     break
@@ -494,7 +501,7 @@ class WorkflowEngine:
                     process_return_code=return_code,
                 )
                 self.state.set_status(
-                    self.workflow_name,
+                    self.state_key,
                     task_name,
                     "success",
                     return_code,
@@ -526,7 +533,7 @@ class WorkflowEngine:
                     reason=reason,
                 )
                 self.state.set_status(
-                    self.workflow_name,
+                    self.state_key,
                     task_name,
                     "failed",
                     return_code,
@@ -536,7 +543,7 @@ class WorkflowEngine:
                 )
                 if descendants:
                     self.state.mark_tasks(
-                        self.workflow_name, descendants, "blocked", reason
+                        self.state_key, descendants, "blocked", reason
                     )
                 exit_code = return_code
                 break
@@ -546,14 +553,14 @@ class WorkflowEngine:
     def status(self) -> None:
         """Render current task states in dependency order."""
         entries = [
-            (task_name, self.state.get_status(self.workflow_name, task_name) or "pending")
+            (task_name, self.state.get_status(self.state_key, task_name) or "pending")
             for task_name in self.plan()
         ]
         self.reporter.status_table(entries)
 
     def reset(self) -> None:
         """Reset all persisted state for this workflow."""
-        self.state.reset(self.workflow_name)
+        self.state.reset(self.state_key)
 
     def validate(self) -> list[str]:
         """Validate dependency order and every rendered task field without execution."""
@@ -576,7 +583,7 @@ class WorkflowEngine:
         task_map = {task["name"]: task for task in self.tasks}
         for task_name in self.plan():
             task = task_map[task_name]
-            state = self.state.get_task_state(self.workflow_name, task_name)
+            state = self.state.get_task_state(self.state_key, task_name)
             status = state.status if state else "pending"
             reason = state.reason if state and state.reason else "a tarefa ainda não foi executada"
             self.reporter.event(status, task_name, reason, executor=str(task.get("executor", "local")))
