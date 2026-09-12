@@ -86,3 +86,14 @@ def test_signature_changes_when_optional_input_set_changes(tmp_path: Path) -> No
     with_optional = signature_for(workflow, source, optional=(optional,))
 
     assert without_optional.value != with_optional.value
+
+
+def test_directory_fingerprint_includes_children(tmp_path: Path) -> None:
+    directory = tmp_path / "inputs"
+    directory.mkdir()
+    child = directory / "field.nc"
+    child.write_text("first", encoding="utf-8")
+    before = fingerprint_artifact(directory, "sha256")
+    child.write_text("second", encoding="utf-8")
+    after = fingerprint_artifact(directory, "sha256")
+    assert before["children"][0]["sha256"] != after["children"][0]["sha256"]

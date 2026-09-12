@@ -84,7 +84,7 @@ def _validate_artifact_group(value: Any, field: str, task_name: str) -> None:
     if not isinstance(value, dict):
         raise ValueError(f"Task '{task_name}' field '{field}' must be a mapping.")
 
-    allowed_keys = {"required", "optional"} if field == "inputs" else {"required"}
+    allowed_keys = {"required", "optional"} if field == "inputs" else {"required", "checks"}
     unknown_keys = set(value) - allowed_keys
     if unknown_keys:
         unknown = ", ".join(sorted(unknown_keys))
@@ -98,6 +98,28 @@ def _validate_artifact_group(value: Any, field: str, task_name: str) -> None:
         _validate_artifact_paths(
             value["optional"], f"{field}.optional", task_name, allow_globs=True
         )
+    if field == "outputs" and "checks" in value:
+        checks = value["checks"]
+        if not isinstance(checks, list):
+            raise ValueError(f"Task '{task_name}' field 'outputs.checks' must be a list.")
+        for index, check in enumerate(checks, 1):
+            if not isinstance(check, dict):
+                raise ValueError(f"Task '{task_name}' output check {index} must be a mapping.")
+            _reject_unknown_keys(
+                check, {"path", "kind", "nonempty", "min_size"},
+                f"Task '{task_name}' output check {index}",
+            )
+            if not isinstance(check.get("path"), str) or not check["path"]:
+                raise ValueError(f"Task '{task_name}' output check {index} requires a path.")
+            if check.get("kind", "any") not in {"any", "file", "directory"}:
+                raise ValueError(f"Task '{task_name}' output check {index} has invalid kind.")
+            if "nonempty" in check and not isinstance(check["nonempty"], bool):
+                raise ValueError(f"Task '{task_name}' output check {index} nonempty must be boolean.")
+            minimum = check.get("min_size")
+            if minimum is not None and (
+                not isinstance(minimum, int) or isinstance(minimum, bool) or minimum < 0
+            ):
+                raise ValueError(f"Task '{task_name}' output check {index} min_size is invalid.")
 
 
 def _validate_positive_integer(value: Any, field: str, task_name: str) -> None:

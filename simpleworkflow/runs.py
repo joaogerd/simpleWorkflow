@@ -7,6 +7,7 @@ import uuid
 import os
 import socket
 import tempfile
+import yaml
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -100,6 +101,15 @@ class RunRecorder:
             started_path=directory / "started.json",
         )
 
+    def write_workflow_snapshot(self, config: Mapping[str, Any]) -> None:
+        public_config = {
+            key: value for key, value in config.items() if not key.startswith("__")
+        }
+        self._write_exclusive_text(
+            self.directory / "workflow.yaml",
+            yaml.safe_dump(public_config, sort_keys=False, allow_unicode=True),
+        )
+
     def write_started(self, attempt: AttemptPaths, payload: Mapping[str, Any]) -> None:
         self._write_exclusive_json(
             attempt.started_path,
@@ -133,10 +143,20 @@ class RunRecorder:
             **dict(payload),
         }
         self._write_exclusive_json(attempt.metadata_path, record)
+        digest = hashlib.sha256(attempt.metadata_path.read_bytes()).hexdigest()
+        self._write_exclusive_text(attempt.directory / "metadata.sha256", digest + "\n")
+
+    @staticmethod
+    def _write_exclusive_text(path: Path, text: str) -> None:
+        RunRecorder._atomic_exclusive_write(path, text)
 
     @staticmethod
     def _write_exclusive_json(path: Path, payload: Mapping[str, Any]) -> None:
         serialized = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+        RunRecorder._atomic_exclusive_write(path, serialized)
+
+    @staticmethod
+    def _atomic_exclusive_write(path: Path, serialized: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{path.name}.", suffix=".tmp", dir=path.parent

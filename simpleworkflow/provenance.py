@@ -53,6 +53,15 @@ def build_attempt_metadata(
             },
             "outputs": {
                 "required": _rendered_paths(artifacts.required_outputs),
+                "checks": [
+                    {
+                        "path": str(check.path.resolve(strict=False)),
+                        "kind": check.kind,
+                        "nonempty": check.nonempty,
+                        "min_size": check.min_size,
+                    }
+                    for check in artifacts.output_checks
+                ],
             },
         },
     }

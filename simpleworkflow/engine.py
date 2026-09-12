@@ -150,6 +150,12 @@ class WorkflowEngine:
             env=env,
             artifacts=artifacts,
             fingerprint_mode=task.get("input_fingerprint", "metadata"),
+            executor=(
+                {"name": "pbs", "options": _render_value(task["pbs"], self.context)}
+                if task.get("executor", "local") == "pbs"
+                else {"name": "local"}
+            ),
+            format_version=int(self.config.get("format_version", 1)),
         )
 
     @staticmethod
@@ -162,7 +168,9 @@ class WorkflowEngine:
 
     @staticmethod
     def _output_failure_reason(artifacts: ResolvedArtifacts) -> str:
-        return f"missing required output(s): {WorkflowEngine._format_missing_outputs(artifacts)}"
+        if artifacts.missing_required_outputs():
+            return f"missing required output(s): {WorkflowEngine._format_missing_outputs(artifacts)}"
+        return "invalid output(s): " + "; ".join(artifacts.invalid_outputs())
 
     @staticmethod
     def _process_failure_reason(return_code: int) -> str:
@@ -300,10 +308,12 @@ class WorkflowEngine:
             previous = self.state.get_task_state(self.workflow_name, task_name)
             if not self.force and previous and previous.status == "success":
                 missing_outputs = artifacts.missing_required_outputs()
+                invalid_outputs = artifacts.invalid_outputs()
                 if (
                     not dependency_executed
                     and previous.signature == signature.value
                     and not missing_outputs
+                    and not invalid_outputs
                 ):
                     self.reporter.event(
                         "skip",
@@ -319,10 +329,9 @@ class WorkflowEngine:
                         "dependency executed again",
                         executor=executor_name,
                     )
-                elif missing_outputs:
+                elif missing_outputs or invalid_outputs:
                     message = (
-                        "required output(s) missing: "
-                        f"{self._format_missing_outputs(artifacts)}"
+                        self._output_failure_reason(artifacts)
                     )
                     self.reporter.event("rerun", task_name, message, executor=executor_name)
                 else:
@@ -348,6 +357,7 @@ class WorkflowEngine:
             self.reporter.event("run", task_name, run_message, executor=executor_name)
             if recorder is None:
                 recorder = RunRecorder(self.workdir, self.workflow_name)
+                recorder.write_workflow_snapshot(self.config)
             attempt = recorder.begin_attempt(task_name)
             recorder.write_started(
                 attempt,
@@ -381,7 +391,8 @@ class WorkflowEngine:
 
             if return_code == 0:
                 missing_outputs = artifacts.missing_required_outputs()
-                if missing_outputs:
+                invalid_outputs = artifacts.invalid_outputs()
+                if missing_outputs or invalid_outputs:
                     reason = self._output_failure_reason(artifacts)
                     self.reporter.event("fail", task_name, reason, executor=executor_name)
                     self._record_attempt(
