@@ -5,6 +5,9 @@ from __future__ import annotations
 import re
 import shlex
 import subprocess
+import json
+import os
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -15,6 +18,8 @@ _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _JOB_ID = re.compile(r"(?m)^\s*([0-9]+(?:\.[A-Za-z0-9_.-]+)?)\s*$")
 _WALLTIME = re.compile(r"^\d{1,3}:\d{2}:\d{2}$")
 _DIRECTIVE_VALUE = re.compile(r"^[A-Za-z0-9_.@/+:-]+$")
+_JOB_STATE = re.compile(r"(?m)^\s*job_state\s*=\s*([A-Za-z])\s*$")
+_EXIT_STATUS = re.compile(r"(?m)^\s*Exit_status\s*=\s*(-?\d+)\s*$")
 
 
 class PbsExecutor:
@@ -47,6 +52,13 @@ class PbsExecutor:
                 raise ValueError("PBS field 'qsub' must be a safe non-empty command.")
             if not shlex.split(value):
                 raise ValueError("PBS field 'qsub' must resolve to a command.")
+        for field in ("qstat", "qdel"):
+            if field in self.options:
+                value = self.options[field]
+                if not isinstance(value, str) or not value or any(ord(char) < 32 for char in value):
+                    raise ValueError(f"PBS field '{field}' must be a safe non-empty command.")
+                if not shlex.split(value):
+                    raise ValueError(f"PBS field '{field}' must resolve to a command.")
         if "walltime" in self.options:
             self._walltime(self.options["walltime"])
         for field in ("select", "ncpus", "mpiprocs", "omp_threads"):
@@ -54,6 +66,28 @@ class PbsExecutor:
                 self._positive_integer(self.options[field], field)
         if self.options.get("block", True) is not True:
             raise ValueError("PBS non-blocking submission is intentionally unsupported.")
+        interval = self.options.get("poll_interval", 5)
+        try:
+            interval = float(interval)
+        except (TypeError, ValueError) as error:
+            raise ValueError("PBS field 'poll_interval' must be a positive number.") from error
+        if interval <= 0:
+            raise ValueError("PBS field 'poll_interval' must be a positive number.")
+        self.options["poll_interval"] = interval
+
+    @staticmethod
+    def _write_scheduler_record(path: Path, payload: Mapping[str, Any]) -> None:
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(dict(payload), sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+
+    @staticmethod
+    def _pbs_result(output: str) -> int | None:
+        state = _JOB_STATE.search(output)
+        if not state or state.group(1).upper() not in {"F", "X"}:
+            return None
+        status = _EXIT_STATUS.search(output)
+        return int(status.group(1)) if status else 75
 
     @staticmethod
     def _safe_job_name(value: str) -> str:
@@ -162,8 +196,10 @@ class PbsExecutor:
         env: Mapping[str, str] | None = None,
         stdout_path: str | Path | None = None,
         stderr_path: str | Path | None = None,
+        timeout: float | None = None,
     ) -> ExecutionResult:
-        """Render a PBS script, submit it in blocking mode and return its result."""
+        """Submit one PBS job, persist its ID and wait in the foreground."""
+        del timeout
         if stdout_path is None or stderr_path is None:
             raise ValueError("PBS execution requires attempt stdout and stderr paths.")
         if self.options.get("block", True) is not True:
@@ -190,7 +226,7 @@ class PbsExecutor:
         qsub = shlex.split(str(self.options.get("qsub", "qsub")))
         if not qsub:
             raise ValueError("PBS field 'qsub' must resolve to a command.")
-        command = [*qsub, "-W", "block=true"]
+        command = [*qsub]
         if self.options.get("inherit_environment", True):
             command.append("-V")
         command.append(str(script_path.resolve(strict=False)))
@@ -209,7 +245,7 @@ class PbsExecutor:
                 return_code=127,
                 metadata={
                     "executor": "pbs",
-                    "wait_mode": "block",
+                    "wait_mode": "foreground-poll",
                     "qsub_argv": command,
                     "script": str(script_path.resolve(strict=False)),
                     "job_stdout": str(worker_stdout.resolve(strict=False)),
@@ -221,15 +257,44 @@ class PbsExecutor:
         self._write(submit_stdout, completed.stdout)
         self._write(submit_stderr, completed.stderr)
         combined_output = f"{completed.stdout}\n{completed.stderr}"
-        return ExecutionResult(
-            return_code=completed.returncode,
-            metadata={
-                "executor": "pbs",
-                "wait_mode": "block",
-                "qsub_argv": command,
-                "script": str(script_path.resolve(strict=False)),
-                "job_id": self._job_id(combined_output),
-                "job_stdout": str(worker_stdout.resolve(strict=False)),
-                "job_stderr": str(worker_stderr.resolve(strict=False)),
-            },
-        )
+        job_id = self._job_id(combined_output)
+        base_metadata = {
+            "executor": "pbs",
+            "wait_mode": "foreground-poll",
+            "qsub_argv": command,
+            "script": str(script_path.resolve(strict=False)),
+            "job_id": job_id,
+            "job_stdout": str(worker_stdout.resolve(strict=False)),
+            "job_stderr": str(worker_stderr.resolve(strict=False)),
+        }
+        if completed.returncode != 0 or job_id is None:
+            return ExecutionResult(
+                return_code=completed.returncode or 75,
+                metadata=base_metadata,
+            )
+
+        scheduler_record = attempt_dir / "scheduler.json"
+        self._write_scheduler_record(scheduler_record, base_metadata)
+        qstat = shlex.split(str(self.options.get("qstat", "qstat")))
+        qdel = shlex.split(str(self.options.get("qdel", "qdel")))
+        interval = float(self.options["poll_interval"])
+        while True:
+            try:
+                status = subprocess.run(
+                    [*qstat, "-xf", job_id], text=True, capture_output=True, check=False
+                )
+            except OSError as error:
+                self._write(submit_stderr, f"simpleWorkflow could not run qstat: {error}\n")
+                return ExecutionResult(return_code=75, metadata=base_metadata)
+            self._write(submit_stdout, status.stdout)
+            self._write(submit_stderr, status.stderr)
+            result = self._pbs_result(f"{status.stdout}\n{status.stderr}")
+            if result is not None:
+                return ExecutionResult(return_code=result, metadata=base_metadata)
+            if status.returncode != 0:
+                return ExecutionResult(return_code=75, metadata=base_metadata)
+            try:
+                time.sleep(interval)
+            except KeyboardInterrupt:
+                subprocess.run([*qdel, job_id], text=True, capture_output=True, check=False)
+                raise
