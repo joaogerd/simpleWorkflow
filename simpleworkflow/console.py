@@ -45,6 +45,10 @@ _EVENT_STYLES = {
     "invalid-input": EventStyle("!", "BAD INPUT", "red"),
     "invalid-output": EventStyle("!", "BAD OUTPUT", "red"),
     "skipped": EventStyle("↷", "SKIPPED", "yellow"),
+    "interrupted": EventStyle("!", "INTERRUPTED", "yellow"),
+    "unknown": EventStyle("?", "UNKNOWN", "yellow"),
+    "stale": EventStyle("↻", "STALE", "yellow"),
+    "blocked": EventStyle("×", "BLOCKED", "red"),
 }
 
 

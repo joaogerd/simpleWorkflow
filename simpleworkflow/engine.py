@@ -11,6 +11,7 @@ from .executor import ExecutionResult, LocalExecutor, TaskExecutor
 from .pbs import PbsExecutor
 from .provenance import build_attempt_metadata
 from .runs import AttemptPaths, RunRecorder
+from .locking import WorkflowLock
 from .signature import TaskSignature, compute_task_signature
 from .state import WorkflowState
 
@@ -212,6 +213,27 @@ class WorkflowEngine:
 
     def run(self) -> int:
         """Execute pending workflow tasks in dependency order."""
+        with WorkflowLock(self.workdir, self.workflow_name):
+            self.state.reconcile_running(self.workflow_name)
+            return self._run_locked()
+
+    def _descendants(self, task_name: str) -> list[str]:
+        descendants: list[str] = []
+        pending = [task_name]
+        while pending:
+            parent = pending.pop(0)
+            for task in self.tasks:
+                dependencies = task.get("depends_on", []) or []
+                if isinstance(dependencies, str):
+                    dependencies = [dependencies]
+                name = task["name"]
+                if parent in dependencies and name not in descendants:
+                    descendants.append(name)
+                    pending.append(name)
+        return descendants
+
+    def _run_locked(self) -> int:
+        """Run after acquiring the workflow lock and reconciling interrupted work."""
         recorder: RunRecorder | None = None
         task_map = {task["name"]: task for task in self.tasks}
         planned_outputs_by_task: dict[str, set[Path]] = {}
@@ -272,6 +294,9 @@ class WorkflowEngine:
 
             signature = self._task_signature(task_name, task, argv, cwd, env, artifacts)
 
+            # Build and validate the backend before a durable attempt is marked running.
+            task_executor = self._task_executor(task)
+
             previous = self.state.get_task_state(self.workflow_name, task_name)
             if not self.force and previous and previous.status == "success":
                 missing_outputs = artifacts.missing_required_outputs()
@@ -308,6 +333,15 @@ class WorkflowEngine:
                         executor=executor_name,
                     )
 
+            descendants = self._descendants(task_name)
+            if descendants:
+                self.state.mark_tasks(
+                    self.workflow_name,
+                    descendants,
+                    "stale",
+                    f"a dependência '{task_name}' será executada novamente",
+                )
+
             run_message = rendered
             if executor_name == "pbs":
                 run_message = f"waiting for scheduler completion · {rendered}"
@@ -315,11 +349,25 @@ class WorkflowEngine:
             if recorder is None:
                 recorder = RunRecorder(self.workdir, self.workflow_name)
             attempt = recorder.begin_attempt(task_name)
+            recorder.write_started(
+                attempt,
+                {
+                    "status": "running",
+                    "command": {"argv": argv, "cwd": str(cwd) if cwd else None, "env": env},
+                    "signature": signature.value,
+                },
+            )
             self.state.set_status(
-                self.workflow_name, task_name, "running", None, signature.value
+                self.workflow_name,
+                task_name,
+                "running",
+                None,
+                signature.value,
+                "tarefa iniciada",
+                str(attempt.directory),
             )
             execution_result = self._normalize_execution_result(
-                self._task_executor(task).run(
+                task_executor.run(
                     task_name,
                     argv,
                     cwd=cwd,
@@ -336,13 +384,6 @@ class WorkflowEngine:
                 if missing_outputs:
                     reason = self._output_failure_reason(artifacts)
                     self.reporter.event("fail", task_name, reason, executor=executor_name)
-                    self.state.set_status(
-                        self.workflow_name,
-                        task_name,
-                        "invalid-output",
-                        INVALID_OUTPUT_EXIT_CODE,
-                        signature.value,
-                    )
                     self._record_attempt(
                         recorder,
                         attempt,
@@ -357,13 +398,22 @@ class WorkflowEngine:
                         process_return_code=return_code,
                         reason=reason,
                     )
+                    self.state.set_status(
+                        self.workflow_name,
+                        task_name,
+                        "invalid-output",
+                        INVALID_OUTPUT_EXIT_CODE,
+                        signature.value,
+                        reason,
+                        str(attempt.directory),
+                    )
+                    if descendants:
+                        self.state.mark_tasks(
+                            self.workflow_name, descendants, "blocked", reason
+                        )
                     exit_code = INVALID_OUTPUT_EXIT_CODE
                     break
                 self.reporter.event("ok", task_name, executor=executor_name)
-                self.state.set_status(
-                    self.workflow_name, task_name, "success", return_code, signature.value
-                )
-                executed_tasks.add(task_name)
                 self._record_attempt(
                     recorder,
                     attempt,
@@ -377,6 +427,16 @@ class WorkflowEngine:
                     execution=execution,
                     process_return_code=return_code,
                 )
+                self.state.set_status(
+                    self.workflow_name,
+                    task_name,
+                    "success",
+                    return_code,
+                    signature.value,
+                    "concluída com sucesso",
+                    str(attempt.directory),
+                )
+                executed_tasks.add(task_name)
             else:
                 reason = self._process_failure_reason(return_code)
                 self.reporter.event(
@@ -384,9 +444,6 @@ class WorkflowEngine:
                     task_name,
                     f"return code {return_code}",
                     executor=executor_name,
-                )
-                self.state.set_status(
-                    self.workflow_name, task_name, "failed", return_code, signature.value
                 )
                 self._record_attempt(
                     recorder,
@@ -402,6 +459,19 @@ class WorkflowEngine:
                     process_return_code=return_code,
                     reason=reason,
                 )
+                self.state.set_status(
+                    self.workflow_name,
+                    task_name,
+                    "failed",
+                    return_code,
+                    signature.value,
+                    reason,
+                    str(attempt.directory),
+                )
+                if descendants:
+                    self.state.mark_tasks(
+                        self.workflow_name, descendants, "blocked", reason
+                    )
                 exit_code = return_code
                 break
 
