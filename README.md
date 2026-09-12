@@ -93,43 +93,44 @@ separately below the workflow work directory.
 
 ## Interactive TUI
 
-`swf tui` opens a full-screen Textual monitor inspired by the operational ideas
-used by ecFlow and Cylc, while keeping workflow execution and persisted state
-independent of the interface.
+`swf tui` opens a full-screen Textual monitor inspired by operational ideas from
+ecFlow and Cylc, while keeping workflow execution and persisted state independent
+of the interface.
 
 ```bash
 swf tui workflow.yaml --workdir .simpleworkflow
 ```
 
 For workflows with explicit `--cycle` timestamps, the operational view is
-organized around one selected date. The normal screen is deliberately sparse:
-the workflow name and run summary stay at the upper left, while the selected
-date and previous/next-day controls stay at the upper right.
+organized around one selected date. The top of the screen is deliberately
+compact: workflow name and run summary at the left, selected date at the right,
+and a one-line cycle selector inside Monitor.
 
-The Monitor shows only one compact cycle line followed by two working areas:
-the workflow hierarchy on the left and the selected-task inspector on the
-right. Runtime output is intentionally kept out of the Monitor and is available
-in the dedicated **Logs** view.
+The four synoptic cycles `00Z`, `06Z`, `12Z` and `18Z` are directly clickable.
+Keys `1`, `2`, `3` and `4` provide the same selection from the keyboard.
+Clicking a populated cell in the **Ciclos** view also selects that cycle and
+returns to Monitor. Left/right moves by day and Shift+left/right moves by month.
 
-The four synoptic cycles remain available as `00Z`, `06Z`, `12Z` and `18Z`.
-Keys `1`, `2`, `3` and `4` select them. Left/right moves by day and
-Shift+left/right moves by month.
-
-The TUI uses a small set of clickable tabs:
+The TUI separates information into clickable tabs:
 
 - **Monitor** — selected-cycle workflow and task inspector;
-- **Ciclos** — OBS/JEDI/MPAS status across `00Z`, `06Z`, `12Z` and `18Z` for the selected date;
-- **Campanha** — a monthly map of complete, running, failed, partial and waiting days;
+- **Ciclos** — OBS/JEDI/MPAS status across `00Z`, `06Z`, `12Z` and `18Z`;
+- **Campanha** — monthly map of complete, running, failed, partial and waiting days;
 - **Problemas** — failed tasks only;
-- **Logs** — expanded output for the selected task.
+- **Logs** — output for the selected task.
 
-Help is not kept as a permanent tab or footer. Press `?` to open a small help
-overlay only when needed. `Tab` moves through the main views and `q` exits.
+The task inspector includes a small **Logs** action whenever runtime logs are
+available. Clicking it opens the Logs view. That view exposes each available
+file (`pbs.stdout.log`, `stdout.log`, `pbs.stderr.log`, `stderr.log`) as a
+clickable selector, so output and error streams can be inspected separately.
+
+Help is intentionally not a permanent tab or footer. Press `?` to open a compact
+on-demand help overlay.
 
 The selected task inspector is refreshed from the real `state.sqlite3` database
-and newest immutable runtime attempt. It focuses on the task, internal name,
-state, PBS Job ID when available, and runtime path. Logs are read from the
-persisted stdout/stderr files rather than simulated.
+and newest immutable runtime attempt. It shows state, return code context, Job ID
+when available, and the attempt path. The Logs view tails persisted files rather
+than simulating scientific output.
 
 Generic workflows without explicit cycle timestamps continue to work in a
 non-dated monitor mode.
