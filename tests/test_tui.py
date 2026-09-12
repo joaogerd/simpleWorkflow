@@ -149,14 +149,17 @@ def test_textual_monitor_mounts_with_persisted_workflow_state(tmp_path: Path) ->
             assert set(app.task_nodes) == {"jedi06_prepare", "jedi06_validate"}
             assert app.engine.state.get_status("tui_test", "jedi06_prepare") == "success"
             assert app.query_one("#views") is not None
-            assert app.query_one("#matrix-table") is not None
+            assert app.query_one("#cycles-table") is not None
             assert app.query_one("#campaign-view") is not None
             assert app.query_one("#problems-table") is not None
+            assert app.query_one("#footer-help") is not None
 
     asyncio.run(scenario())
 
 
-def test_dated_monitor_shows_one_day_and_four_synoptic_cycles(tmp_path: Path) -> None:
+def test_dated_monitor_uses_compact_date_navigation_and_hidden_cycle_shortcuts(
+    tmp_path: Path,
+) -> None:
     workflow = tmp_path / "workflow.yaml"
     workflow.write_text("workflow:\n  name: dated_tui_test\n", encoding="utf-8")
 
@@ -180,12 +183,9 @@ def test_dated_monitor_shows_one_day_and_four_synoptic_cycles(tmp_path: Path) ->
             assert app.selected_date == date(2018, 4, 15)
             assert app.selected_hour == "06"
             assert set(app.task_nodes) == {"obs06_prepare", "jedi06_prepare"}
-            assert app.query_one("#cycle-00") is not None
-            assert app.query_one("#cycle-06") is not None
-            assert app.query_one("#cycle-12") is not None
-            assert app.query_one("#cycle-18") is not None
+            assert app.query_one("#cycles-table") is not None
 
-            await pilot.click("#cycle-00")
+            await pilot.press("1")
             await pilot.pause()
             assert app.selected_hour == "00"
             assert set(app.task_nodes) == {"jedi00_prepare", "mpas00_prepare"}
@@ -193,10 +193,17 @@ def test_dated_monitor_shows_one_day_and_four_synoptic_cycles(tmp_path: Path) ->
             await pilot.click("#next-date")
             await pilot.pause()
             assert app.selected_date == date(2018, 4, 16)
+            assert app.selected_hour == "00"
             assert set(app.task_nodes) == {"jedi00_next_prepare"}
 
             await pilot.click("#prev-date")
             await pilot.pause()
             assert app.selected_date == date(2018, 4, 15)
+
+            views = app.query_one("#views")
+            assert views.active == "monitor"
+            await pilot.press("tab")
+            await pilot.pause()
+            assert views.active == "cycles"
 
     asyncio.run(scenario())
