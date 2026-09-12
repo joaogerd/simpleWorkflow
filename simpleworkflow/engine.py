@@ -391,9 +391,7 @@ class WorkflowEngine:
                         executor=executor_name,
                     )
                 elif missing_outputs or invalid_outputs:
-                    message = (
-                        self._output_failure_reason(artifacts)
-                    )
+                    message = self._output_failure_reason(artifacts)
                     self.reporter.event("rerun", task_name, message, executor=executor_name)
                 else:
                     self.reporter.event(
@@ -566,6 +564,7 @@ class WorkflowEngine:
         """Validate dependency order and every rendered task field without execution."""
         problems: list[str] = []
         task_map = {task["name"]: task for task in self.tasks}
+        planned_outputs_by_task: dict[str, set[Path]] = {}
         for task_name in self.plan():
             task = task_map[task_name]
             render_argv(task["argv"], self.context)
@@ -574,8 +573,24 @@ class WorkflowEngine:
             self._task_timeout(task)
             self._task_executor(task)
             artifacts = self._task_artifacts(task)
+
+            dependencies = task.get("depends_on", []) or []
+            if isinstance(dependencies, str):
+                dependencies = [dependencies]
+            planned_dependency_outputs: set[Path] = set()
+            for dependency in dependencies:
+                planned_dependency_outputs.update(
+                    planned_outputs_by_task.get(dependency, set())
+                )
+
             for path in artifacts.missing_required_inputs():
-                problems.append(f"{task_name}: entrada obrigatória ausente: {path}")
+                if path not in planned_dependency_outputs:
+                    problems.append(f"{task_name}: entrada obrigatória ausente: {path}")
+
+            if task.get("enabled", True) is not False:
+                planned_outputs_by_task[task_name] = (
+                    planned_dependency_outputs | set(artifacts.required_outputs)
+                )
         return problems
 
     def explain(self) -> None:
