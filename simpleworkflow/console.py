@@ -259,7 +259,7 @@ class TerminalReporter:
         symbol, _label, style = self._status_parts(status)
         elapsed = self._task_elapsed.get(task_name)
         duration = f" [dim]({self._format_elapsed(elapsed)})[/dim]" if elapsed is not None else ""
-        technical = f" [dim]\[{escape(task_name)}\][/dim]" if self.verbose else ""
+        technical = f" [dim]task={escape(task_name)}[/dim]" if self.verbose else ""
         return f"[{style}]{symbol}[/{style}] {escape(display.action)}{duration}{technical}"
 
     def _build_tree(self) -> Tree:
@@ -416,11 +416,12 @@ class TerminalReporter:
         symbol, label, style = self._status_parts(status)
         line = f"[{style}]{symbol} {label:<8}[/{style}] {escape(stage + display.action)}"
         if self.verbose:
-            line += f" [dim]\[{escape(task_name)}\]"
+            details = [f"task={task_name}"]
             if executor:
-                line += f" [{escape(executor)}]"
+                details.append(f"executor={executor}")
+            line += f" [dim]{escape(' · '.join(details))}"
             if message:
-                line += f" — {escape(message)}"
+                line += f" · {escape(message)}"
             line += "[/dim]"
         else:
             friendly = self._friendly_message(kind, message)
