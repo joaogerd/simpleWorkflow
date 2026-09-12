@@ -12,7 +12,7 @@ from typing import Any
 from . import __version__
 from .artifacts import ResolvedArtifacts
 
-SIGNATURE_SCHEMA_VERSION = 2
+SIGNATURE_SCHEMA_VERSION = 3
 SUPPORTED_FINGERPRINT_MODES = {"metadata", "sha256"}
 
 
@@ -83,23 +83,57 @@ def _fingerprint_paths(paths: tuple[Path, ...], mode: str) -> list[dict[str, Any
 
 
 _SAFE_ENVIRONMENT = (
-    "PATH", "LD_LIBRARY_PATH", "PYTHONPATH", "MODULEPATH", "LOADEDMODULES",
-    "OMP_NUM_THREADS", "MKL_NUM_THREADS", "MPI_HOME", "CONDA_PREFIX",
+    "PATH",
+    "LD_LIBRARY_PATH",
+    "PYTHONPATH",
+    "MODULEPATH",
+    "LOADEDMODULES",
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "MPI_HOME",
+    "CONDA_PREFIX",
 )
 
 
-def _runtime_identity(argv: list[str]) -> dict[str, Any]:
-    executable = shutil.which(argv[0])
+def _effective_environment(env: Mapping[str, str]) -> dict[str, str]:
+    effective = os.environ.copy()
+    effective.update(env)
+    return effective
+
+
+def _resolve_executable(
+    requested: str,
+    *,
+    cwd: Path | None,
+    environment: Mapping[str, str],
+) -> str | None:
+    if os.path.dirname(requested):
+        candidate = Path(requested)
+        if not candidate.is_absolute():
+            candidate = (cwd if cwd is not None else Path.cwd()) / candidate
+        resolved = candidate.resolve(strict=False)
+        return str(resolved) if resolved.is_file() else None
+    return shutil.which(requested, path=environment.get("PATH"))
+
+
+def _runtime_identity(
+    argv: list[str],
+    *,
+    cwd: Path | None,
+    env: Mapping[str, str],
+) -> dict[str, Any]:
+    environment = _effective_environment(env)
+    executable = _resolve_executable(argv[0], cwd=cwd, environment=environment)
     identity: dict[str, Any] = {"requested": argv[0], "resolved": executable}
     if executable:
         path = Path(executable).resolve(strict=False)
         if path.is_file():
             stat = path.stat()
             identity.update({"size": stat.st_size, "mtime_ns": stat.st_mtime_ns})
-    identity["inherited_environment_sha256"] = {
-        name: hashlib.sha256(os.environ[name].encode("utf-8")).hexdigest()
+    identity["effective_environment_sha256"] = {
+        name: hashlib.sha256(environment[name].encode("utf-8")).hexdigest()
         for name in _SAFE_ENVIRONMENT
-        if name in os.environ
+        if name in environment
     }
     return identity
 
@@ -118,9 +152,9 @@ def compute_task_signature(
 ) -> TaskSignature:
     """Compute a deterministic signature for a fully rendered task invocation.
 
-    The signature deliberately includes only declared task environment values, never the
-    inherited process environment. Optional input globs are represented by their resolved
-    matches, so newly appearing files change the signature.
+    Declared task environment values are stored directly. A fixed allow-list of
+    effective technical environment variables is included only as SHA-256 hashes,
+    and executable identity is resolved using the task's effective PATH and cwd.
     """
     payload: dict[str, Any] = {
         "signature_schema": SIGNATURE_SCHEMA_VERSION,
@@ -150,7 +184,7 @@ def compute_task_signature(
                 for check in artifacts.output_checks
             ],
             "executor": dict(executor or {"name": "local"}),
-            "runtime": _runtime_identity(argv),
+            "runtime": _runtime_identity(argv, cwd=cwd, env=env),
         },
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
