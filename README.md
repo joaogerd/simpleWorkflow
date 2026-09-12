@@ -102,19 +102,32 @@ swf tui workflow.yaml --workdir .simpleworkflow
 ```
 
 For workflows with explicit `--cycle` timestamps, the operational view is
-organized around one selected date. At most four synoptic cycles are visible at
-once: `00Z`, `06Z`, `12Z` and `18Z`. Previous/next-day buttons and the left/right
-keys move the selected date, while `1`, `2`, `3` and `4` select those cycles.
+organized around one selected date. The top of the screen is deliberately
+compact: it shows the workflow name, a run summary and the selected date with
+previous/next-day controls. The selected cycle is shown in the Monitor view
+rather than repeated as four large cards.
+
+The four synoptic cycles remain available as `00Z`, `06Z`, `12Z` and `18Z`.
+Keys `1`, `2`, `3` and `4` select them. Left/right moves by day and
 Shift+left/right moves by month.
 
 The TUI separates information into clickable tabs:
 
 - **Monitor** — the selected cycle workflow, task inspector and current log;
-- **Matriz** — component-by-cycle status for the selected date;
+- **Ciclos** — OBS/JEDI/MPAS status across `00Z`, `06Z`, `12Z` and `18Z` for the selected date;
 - **Campanha** — a monthly map of complete, running, failed, partial and waiting days;
 - **Problemas** — failed tasks only;
 - **Logs** — expanded output for the selected task;
 - **Ajuda** — keyboard navigation and status legend.
+
+The permanent footer is intentionally short:
+
+```text
+q Quit    ←/→ Day    Tab Views    ? Help
+```
+
+Less common shortcuts remain on the Ajuda page instead of occupying the
+operational screen.
 
 The selected task inspector is refreshed from the real `state.sqlite3` database
 and newest immutable runtime attempt. It shows executor, return code, configured
