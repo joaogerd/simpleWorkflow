@@ -7,6 +7,15 @@ import pytest
 from simpleworkflow.config import load_workflow
 
 
+def test_rejects_unsupported_format_version(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text(
+        "format_version: 2\nworkflow: {name: test}\ntasks: []\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="format_version"):
+        load_workflow(workflow)
+
+
 def write(path: Path, text: str) -> Path:
     path.write_text(text, encoding="utf-8")
     return path

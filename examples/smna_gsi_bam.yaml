@@ -1,3 +1,5 @@
+format_version: 1
+
 workflow:
   name: smna_gsi_bam_cycle
 
@@ -12,16 +14,16 @@ context:
 
 tasks:
   - name: obsmake
-    run: "bash SMG/run/run_obsmake.sh {cycle}"
+    argv: [bash, SMG/run/run_obsmake.sh, "{cycle}"]
 
   - name: gsi
-    run: "bash SMG/run/run_gsi.sh {cycle} {model_trunc} {gsi_mpi_tasks}"
+    argv: [bash, SMG/run/run_gsi.sh, "{cycle}", "{model_trunc}", "{gsi_mpi_tasks}"]
     depends_on: [obsmake]
 
   - name: bam
-    run: "bash SMG/run/run_bam.sh {cycle} {model_trunc} {model_levels} {model_prefix} {model_mpi_tasks} {forecast_hours}"
+    argv: [bash, SMG/run/run_bam.sh, "{cycle}", "{model_trunc}", "{model_levels}", "{model_prefix}", "{model_mpi_tasks}", "{forecast_hours}"]
     depends_on: [gsi]
 
   - name: diagnostics
-    run: "bash SMG/run/run_diagnostics.sh {cycle}"
+    argv: [bash, SMG/run/run_diagnostics.sh, "{cycle}"]
     depends_on: [bam]

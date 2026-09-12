@@ -14,6 +14,7 @@ from .executor import ExecutionResult
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _JOB_ID = re.compile(r"(?m)^\s*([0-9]+(?:\.[A-Za-z0-9_.-]+)?)\s*$")
 _WALLTIME = re.compile(r"^\d{1,3}:\d{2}:\d{2}$")
+_DIRECTIVE_VALUE = re.compile(r"^[A-Za-z0-9_.@/+:-]+$")
 
 
 class PbsExecutor:
@@ -26,6 +27,33 @@ class PbsExecutor:
 
     def __init__(self, options: Mapping[str, Any]):
         self.options = dict(options)
+        self._validate_options()
+
+    @staticmethod
+    def _directive_value(value: Any, field: str) -> str:
+        if not isinstance(value, str) or not value or not _DIRECTIVE_VALUE.fullmatch(value):
+            raise ValueError(
+                f"PBS field '{field}' contains characters that are not safe in a directive."
+            )
+        return value
+
+    def _validate_options(self) -> None:
+        for field in ("queue", "project"):
+            if field in self.options:
+                self._directive_value(self.options[field], field)
+        if "qsub" in self.options:
+            value = self.options["qsub"]
+            if not isinstance(value, str) or not value or any(ord(char) < 32 for char in value):
+                raise ValueError("PBS field 'qsub' must be a safe non-empty command.")
+            if not shlex.split(value):
+                raise ValueError("PBS field 'qsub' must resolve to a command.")
+        if "walltime" in self.options:
+            self._walltime(self.options["walltime"])
+        for field in ("select", "ncpus", "mpiprocs", "omp_threads"):
+            if field in self.options:
+                self._positive_integer(self.options[field], field)
+        if self.options.get("block", True) is not True:
+            raise ValueError("PBS non-blocking submission is intentionally unsupported.")
 
     @staticmethod
     def _safe_job_name(value: str) -> str:
@@ -73,11 +101,11 @@ class PbsExecutor:
 
         queue = self.options.get("queue")
         if queue:
-            lines.append(f"#PBS -q {queue}")
+            lines.append(f"#PBS -q {self._directive_value(queue, 'queue')}")
 
         project = self.options.get("project")
         if project:
-            lines.append(f"#PBS -A {project}")
+            lines.append(f"#PBS -A {self._directive_value(project, 'project')}")
 
         if "walltime" in self.options:
             lines.append(f"#PBS -l walltime={self._walltime(self.options['walltime'])}")

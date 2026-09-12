@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import sys
+import traceback
 from collections.abc import Iterable
 from copy import deepcopy
 from typing import Any
@@ -60,6 +62,9 @@ def build_parser() -> argparse.ArgumentParser:
         command_parser = subparsers.add_parser(command)
         command_parser.add_argument("workflow")
         command_parser.add_argument("--workdir", default=".simpleworkflow")
+        command_parser.add_argument(
+            "--debug", action="store_true", help="Show technical traceback details."
+        )
         _add_cycle_options(command_parser)
         _add_display_options(command_parser)
 
@@ -118,7 +123,7 @@ def _heading(command: str, config: dict[str, Any], cycle: CycleContext | None) -
     return f"{title} · {cycle.cycle_time}" if cycle is not None else title
 
 
-def main(argv: list[str] | None = None) -> int:
+def _main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_workflow(args.workflow)
     reporter = TerminalReporter(color=args.color)
@@ -166,6 +171,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     return 2
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = list(argv) if argv is not None else sys.argv[1:]
+    debug = "--debug" in arguments
+    try:
+        return _main(arguments)
+    except (FileNotFoundError, ValueError, RuntimeError) as error:
+        if debug:
+            traceback.print_exc()
+        else:
+            print(f"simpleworkflow: {error}", file=sys.stderr)
+            print("Use --debug to show technical details.", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
