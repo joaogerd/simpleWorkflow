@@ -70,6 +70,10 @@ class WorkflowReporter(Protocol):
         """Render task states in a compact terminal table."""
         ...
 
+    def note(self, message: str) -> None:
+        """Render a neutral informational message."""
+        ...
+
 
 class TerminalReporter:
     """Render friendly workflow progress without a third-party dependency.
