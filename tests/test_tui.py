@@ -150,16 +150,17 @@ def test_textual_monitor_mounts_with_minimal_layout(tmp_path: Path) -> None:
             assert app.engine.state.get_status("tui_test", "jedi06_prepare") == "success"
             assert app.query_one("#topbar") is not None
             assert app.query_one("#cycle-line") is not None
+            assert app.query_one("#cycle-00") is not None
             assert app.query_one("#cycles-table") is not None
             assert app.query_one("#campaign-view") is not None
             assert app.query_one("#problems-table") is not None
+            assert app.query_one("#open-logs") is not None
+            assert app.query_one("#log-toolbar") is not None
 
     asyncio.run(scenario())
 
 
-def test_dated_monitor_uses_compact_navigation_and_cycle_shortcuts(
-    tmp_path: Path,
-) -> None:
+def test_dated_monitor_cycles_are_clickable(tmp_path: Path) -> None:
     workflow = tmp_path / "workflow.yaml"
     workflow.write_text("workflow:\n  name: dated_tui_test\n", encoding="utf-8")
 
@@ -183,12 +184,16 @@ def test_dated_monitor_uses_compact_navigation_and_cycle_shortcuts(
             assert app.selected_date == date(2018, 4, 15)
             assert app.selected_hour == "06"
             assert set(app.task_nodes) == {"obs06_prepare", "jedi06_prepare"}
-            assert app.query_one("#cycles-table") is not None
 
-            await pilot.press("1")
+            await pilot.click("#cycle-00")
             await pilot.pause()
             assert app.selected_hour == "00"
             assert set(app.task_nodes) == {"jedi00_prepare", "mpas00_prepare"}
+
+            await pilot.click("#cycle-06")
+            await pilot.pause()
+            assert app.selected_hour == "06"
+            assert set(app.task_nodes) == {"obs06_prepare", "jedi06_prepare"}
 
             await pilot.click("#next-date")
             await pilot.pause()
@@ -205,5 +210,56 @@ def test_dated_monitor_uses_compact_navigation_and_cycle_shortcuts(
             await pilot.press("tab")
             await pilot.pause()
             assert views.active == "cycles"
+
+    asyncio.run(scenario())
+
+
+def test_logs_can_be_opened_and_selected_by_click(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: tui_test\n", encoding="utf-8")
+
+    state = WorkflowState(tmp_path / "state.sqlite3")
+    state.set_status("tui_test", "jedi06_prepare", "success", 0)
+    state.close()
+
+    recorder = RunRecorder(tmp_path, "tui_test", run_id="20260912T010000.000000Z-test")
+    attempt = recorder.begin_attempt("jedi06_prepare")
+    attempt.stdout_path.write_text("launcher output\n", encoding="utf-8")
+    attempt.stderr_path.write_text("launcher warning\n", encoding="utf-8")
+    recorder.write_metadata(
+        attempt,
+        {
+            "status": "success",
+            "return_code": 0,
+            "execution": {"executor": "local"},
+        },
+    )
+
+    app = WorkflowTui(
+        config=_config(),
+        workflow_path=workflow,
+        workdir=tmp_path,
+        refresh_seconds=60.0,
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.pause()
+            assert app.selected_task == "jedi06_prepare"
+            assert app.selected_log_name == "stdout.log"
+
+            views = app.query_one("#views")
+            assert views.active == "monitor"
+            await pilot.click("#open-logs")
+            await pilot.pause()
+            assert views.active == "logs"
+
+            await pilot.click("#log-stderr")
+            await pilot.pause()
+            assert app.selected_log_name == "stderr.log"
+
+            await pilot.click("#log-stdout")
+            await pilot.pause()
+            assert app.selected_log_name == "stdout.log"
 
     asyncio.run(scenario())
