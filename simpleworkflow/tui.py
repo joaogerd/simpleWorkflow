@@ -45,12 +45,19 @@ _COMPLETE_STATES = {"success", "skipped"}
 _CYCLE_HOURS = ("00", "06", "12", "18")
 _COMPONENT_ORDER = ("OBS", "JEDI", "MPAS")
 _VIEW_IDS = ("monitor", "cycles", "campaign", "problems", "logs")
+_LOG_BUTTONS = {
+    "log-pbs-stdout": "pbs.stdout.log",
+    "log-stdout": "stdout.log",
+    "log-pbs-stderr": "pbs.stderr.log",
+    "log-stderr": "stderr.log",
+}
 
 _HELP_TEXT = """[bold cyan]simpleWorkflow TUI[/bold cyan]
 
 [bold]Navigation[/bold]
 ← / →          Previous / next day
 1 / 2 / 3 / 4  Select 00Z / 06Z / 12Z / 18Z
+Click cycle    Select that cycle
 Tab            Next view
 Shift+← / →    Previous / next month
 r              Refresh now
@@ -58,12 +65,9 @@ c              Clear displayed log
 ?              Help
 q              Quit
 
-[bold]Views[/bold]
-Monitor     Selected-cycle workflow and task inspector
-Ciclos      OBS/JEDI/MPAS status across 00Z, 06Z, 12Z and 18Z
-Campanha    Monthly execution map
-Problemas   Failed tasks only
-Logs        Expanded output for the selected task
+[bold]Logs[/bold]
+Select a task, then click Logs in the inspector or the Logs tab.
+Inside Logs, click a file name to switch between available output/error logs.
 
 [dim]Monitoring is read-only and never changes workflow state.[/dim]
 
@@ -209,9 +213,9 @@ class HelpScreen(ModalScreen[None]):
     }
 
     #help-dialog {
-        width: 66;
+        width: 70;
         height: auto;
-        max-height: 32;
+        max-height: 34;
         padding: 1 2;
         border: solid #394150;
         background: #111318;
@@ -291,8 +295,43 @@ class WorkflowTui(App[None]):
         height: 1;
         padding: 0 1;
         background: #171a21;
+        align: left middle;
+    }
+
+    #cycle-caption {
+        width: 9;
+        height: 1;
+        color: #8c93a1;
+        content-align: left middle;
+    }
+
+    .cycle-button {
+        width: 10;
+        min-width: 8;
+        height: 1;
+        min-height: 1;
+        padding: 0 1;
+        border: none;
+        background: #171a21;
         color: #8c93a1;
     }
+
+    .cycle-button:hover {
+        background: #20242d;
+        color: #ffffff;
+    }
+
+    .cycle-button.selected-cycle {
+        color: #facc15;
+        text-style: bold;
+    }
+
+    .cycle-button.status-success { color: #65a30d; }
+    .cycle-button.status-running { color: #22d3ee; }
+    .cycle-button.status-failed { color: #ef4444; }
+    .cycle-button.status-partial { color: #eab308; }
+    .cycle-button.status-pending { color: #8c93a1; }
+    .cycle-button.status-absent { color: #555b66; }
 
     #monitor-main {
         height: 1fr;
@@ -329,6 +368,60 @@ class WorkflowTui(App[None]):
         height: 1fr;
         padding: 1 2;
         background: #0d0f13;
+    }
+
+    #open-logs {
+        width: 14;
+        height: 1;
+        min-height: 1;
+        margin: 0 0 1 2;
+        padding: 0 1;
+        border: none;
+        background: #0d0f13;
+        color: #67e8f9;
+        text-style: underline;
+    }
+
+    #open-logs:hover {
+        background: #20242d;
+        color: #ffffff;
+    }
+
+    #log-toolbar {
+        height: 2;
+        padding: 0 1;
+        background: #111318;
+        border-bottom: solid #303744;
+        align: left middle;
+    }
+
+    #log-title {
+        width: 1fr;
+        height: 1;
+        color: #9fb9ff;
+        content-align: left middle;
+    }
+
+    .log-button {
+        width: auto;
+        min-width: 12;
+        height: 1;
+        min-height: 1;
+        padding: 0 1;
+        margin-left: 1;
+        border: none;
+        background: #111318;
+        color: #8c93a1;
+    }
+
+    .log-button:hover {
+        background: #20242d;
+        color: #ffffff;
+    }
+
+    .log-button.selected-log {
+        color: #67e8f9;
+        text-style: bold underline;
     }
 
     #full-log {
@@ -391,6 +484,7 @@ class WorkflowTui(App[None]):
         self.selected_date: date | None = None
         self.selected_hour: str | None = None
         self.selected_task: str | None = None
+        self.selected_log_name: str | None = None
         self.task_nodes: dict[str, Any] = {}
         self._last_log_signature: tuple[str, int, int] | None = None
         self._choose_initial_selection()
@@ -405,7 +499,14 @@ class WorkflowTui(App[None]):
 
         with TabbedContent(initial="monitor", id="views"):
             with TabPane("Monitor", id="monitor"):
-                yield Static(id="cycle-line")
+                with Horizontal(id="cycle-line"):
+                    yield Static("CICLOS:", id="cycle-caption")
+                    for hour in _CYCLE_HOURS:
+                        yield Button(
+                            f"{hour}Z",
+                            id=f"cycle-{hour}",
+                            classes="cycle-button",
+                        )
                 with Horizontal(id="monitor-main"):
                     with Vertical(id="left"):
                         yield Label("WORKFLOW", classes="pane-title")
@@ -413,6 +514,7 @@ class WorkflowTui(App[None]):
                     with Vertical(id="right"):
                         yield Label("INSPECTOR", classes="pane-title")
                         yield Static(id="inspector")
+                        yield Button("Logs", id="open-logs")
             with TabPane("Ciclos", id="cycles"):
                 yield DataTable(id="cycles-table", cursor_type="cell", zebra_stripes=True)
             with TabPane("Campanha", id="campaign"):
@@ -420,6 +522,10 @@ class WorkflowTui(App[None]):
             with TabPane("Problemas", id="problems"):
                 yield DataTable(id="problems-table", cursor_type="row", zebra_stripes=True)
             with TabPane("Logs", id="logs"):
+                with Horizontal(id="log-toolbar"):
+                    yield Static(id="log-title")
+                    for button_id, filename in _LOG_BUTTONS.items():
+                        yield Button(filename, id=button_id, classes="log-button")
                 yield RichLog(
                     id="full-log",
                     highlight=False,
@@ -583,6 +689,7 @@ class WorkflowTui(App[None]):
         data = event.node.data
         if isinstance(data, str) and data in self.task_map:
             self.selected_task = data
+            self.selected_log_name = None
             self._last_log_signature = None
             self._refresh_inspector()
             self._refresh_logs(force=True)
@@ -593,6 +700,26 @@ class WorkflowTui(App[None]):
             self.action_previous_day()
         elif button_id == "next-date":
             self.action_next_day()
+        elif button_id.startswith("cycle-"):
+            self.action_select_cycle(button_id.removeprefix("cycle-"))
+        elif button_id == "open-logs":
+            self.action_open_logs()
+        elif button_id in _LOG_BUTTONS:
+            self.selected_log_name = _LOG_BUTTONS[button_id]
+            self._last_log_signature = None
+            self._refresh_logs(force=True)
+
+    def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
+        if event.data_table.id != "cycles-table":
+            return
+        column = event.coordinate.column
+        if column <= 0 or column > len(_CYCLE_HOURS):
+            return
+        hour = _CYCLE_HOURS[column - 1]
+        if not self._tasks_for_cycle(self.selected_date, hour):
+            return
+        self.action_select_cycle(hour)
+        self.query_one("#views", TabbedContent).active = "monitor"
 
     def action_previous_day(self) -> None:
         if self.selected_date is not None:
@@ -627,9 +754,16 @@ class WorkflowTui(App[None]):
             return
         self.selected_hour = hour
         self.selected_task = None
+        self.selected_log_name = None
         self._last_log_signature = None
         self._rebuild_tree()
         self.refresh_runtime()
+
+    def action_open_logs(self) -> None:
+        if self.selected_task is None:
+            return
+        self.query_one("#views", TabbedContent).active = "logs"
+        self._refresh_logs(force=True)
 
     def action_next_view(self) -> None:
         views = self.query_one("#views", TabbedContent)
@@ -645,6 +779,7 @@ class WorkflowTui(App[None]):
 
     def _date_changed(self) -> None:
         self.selected_task = None
+        self.selected_log_name = None
         self._last_log_signature = None
         self._normalize_selected_hour()
         self._rebuild_tree()
@@ -705,28 +840,34 @@ class WorkflowTui(App[None]):
         )
 
     def _refresh_cycle_line(self) -> None:
-        line = self.query_one("#cycle-line", Static)
         if self.selected_date is None:
-            line.update("[dim]CICLOS: —[/dim]")
+            for hour in _CYCLE_HOURS:
+                button = self.query_one(f"#cycle-{hour}", Button)
+                button.disabled = True
+                button.label = f"{hour}Z ·"
             return
 
-        parts = ["[dim]CICLOS:[/dim]"]
+        symbol_map = {
+            "success": "✓",
+            "running": "●",
+            "failed": "✘",
+            "partial": "◐",
+            "pending": "○",
+            "absent": "·",
+        }
+        status_classes = {f"status-{name}" for name in symbol_map}
         for hour in _CYCLE_HOURS:
-            aggregate = self._aggregate_status(self._statuses_for_cycle(self.selected_date, hour))
-            symbol_style = {
-                "success": ("✓", "green"),
-                "running": ("●", "cyan"),
-                "failed": ("✘", "red"),
-                "partial": ("◐", "yellow"),
-                "pending": ("○", "dim"),
-                "absent": ("·", "dim"),
-            }[aggregate]
-            symbol, style = symbol_style
-            if hour == self.selected_hour:
-                parts.append(f"[bold yellow]▶ {hour}Z[/bold yellow]")
-            else:
-                parts.append(f"[green]{hour}Z[/green] [{style}]{symbol}[/{style}]")
-        line.update("   ".join(parts))
+            button = self.query_one(f"#cycle-{hour}", Button)
+            aggregate = self._aggregate_status(
+                self._statuses_for_cycle(self.selected_date, hour)
+            )
+            for class_name in status_classes:
+                button.remove_class(class_name)
+            button.add_class(f"status-{aggregate}")
+            button.set_class(hour == self.selected_hour, "selected-cycle")
+            button.disabled = aggregate == "absent"
+            prefix = "▶ " if hour == self.selected_hour else ""
+            button.label = f"{prefix}{hour}Z {symbol_map[aggregate]}"
 
     def _refresh_cycles_view(self) -> None:
         table = self.query_one("#cycles-table", DataTable)
@@ -828,8 +969,11 @@ class WorkflowTui(App[None]):
 
     def _refresh_inspector(self) -> None:
         inspector = self.query_one("#inspector", Static)
+        open_logs = self.query_one("#open-logs", Button)
         if self.selected_task is None:
             inspector.update("[dim]No task selected for this cycle.[/dim]")
+            open_logs.disabled = True
+            open_logs.label = "Logs"
             return
 
         state = self.engine.state.get_task_state(self.workflow_name, self.selected_task)
@@ -839,13 +983,19 @@ class WorkflowTui(App[None]):
         cycle = self.task_cycles.get(self.selected_task)
         job_id = attempt.job_id if attempt else None
         return_code = state.return_code if state and state.return_code is not None else None
+        log_paths = attempt.preferred_log_paths() if attempt is not None else []
+
+        open_logs.disabled = not log_paths
+        open_logs.label = f"Logs ({len(log_paths)})" if log_paths else "Logs"
 
         task_title = display.component or "Task"
         if cycle is not None:
             task_title += f"  {cycle.hour}Z"
         task_title += f"  {display.action}"
 
-        _, state_label, state_style = _STATUS.get(status, ("•", status.upper(), "white"))
+        _, state_label, state_style = _STATUS.get(
+            status, ("•", status.upper(), "white")
+        )
         state_text = f"[{state_style}]{state_label}[/{state_style}]"
         if return_code is not None:
             state_text += f" [dim]({return_code})[/dim]"
@@ -864,9 +1014,24 @@ class WorkflowTui(App[None]):
             f"[cyan]{escape(path)}[/cyan]"
         )
 
+    def _refresh_log_toolbar(self, paths: list[Path]) -> None:
+        available = {path.name for path in paths}
+        if self.selected_log_name not in available:
+            self.selected_log_name = paths[0].name if paths else None
+
+        title = self.query_one("#log-title", Static)
+        task_label = self.selected_task or "no task selected"
+        title.update(f"[bold]{escape(task_label)}[/bold]")
+
+        for button_id, filename in _LOG_BUTTONS.items():
+            button = self.query_one(f"#{button_id}", Button)
+            button.display = filename in available
+            button.set_class(filename == self.selected_log_name, "selected-log")
+
     def _refresh_logs(self, *, force: bool = False) -> None:
         log = self.query_one("#full-log", RichLog)
         if self.selected_task is None:
+            self._refresh_log_toolbar([])
             if force:
                 log.clear()
                 log.write("No task selected for this cycle.")
@@ -874,36 +1039,38 @@ class WorkflowTui(App[None]):
 
         attempt = _latest_attempt(self.workdir, self.selected_task)
         if attempt is None:
+            self._refresh_log_toolbar([])
             if force:
                 log.clear()
                 log.write("No runtime log is available for this task yet.")
             return
 
         paths = attempt.preferred_log_paths()
+        self._refresh_log_toolbar(paths)
         if not paths:
             if force:
                 log.clear()
                 log.write(f"Attempt exists at {attempt.directory}, but its logs are empty.")
             return
 
-        signature_parts: list[str] = []
-        total_size = 0
-        for path in paths:
-            try:
-                stat = path.stat()
-            except OSError:
-                continue
-            total_size += stat.st_size
-            signature_parts.extend([str(path), str(stat.st_size), str(stat.st_mtime_ns)])
-        signature = ("|".join(signature_parts), total_size, len(paths))
+        path_by_name = {path.name: path for path in paths}
+        path = path_by_name.get(self.selected_log_name or "", paths[0])
+        try:
+            stat = path.stat()
+        except OSError:
+            if force:
+                log.clear()
+                log.write(f"Unable to read {path}.")
+            return
+
+        signature = (str(path), stat.st_size, stat.st_mtime_ns)
         if not force and signature == self._last_log_signature:
             return
         self._last_log_signature = signature
 
         log.clear()
-        for path in paths:
-            log.write(f"--- {path.name} ---")
-            log.write(_tail(path, max_lines=1000) or "(empty)")
+        log.write(f"--- {path.name} ---")
+        log.write(_tail(path, max_lines=1000) or "(empty)")
 
 
 def run_tui(
