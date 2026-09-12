@@ -37,16 +37,16 @@ tasks:
 
 
 def test_rejects_shell_run_field(tmp_path: Path) -> None:
-    workflow = write(tmp_path / "workflow.yaml", "tasks: [{name: task, run: 'echo no'}]\n")
+    workflow = write(tmp_path / "workflow.yaml", "workflow: {name: test}\ntasks: [{name: task, run: 'echo no'}]\n")
     with pytest.raises(ValueError, match="unsupported field 'run'"):
         load_workflow(workflow)
 
 
 def test_rejects_missing_or_invalid_argv(tmp_path: Path) -> None:
-    missing = write(tmp_path / "missing.yaml", "tasks: [{name: task}]\n")
+    missing = write(tmp_path / "missing.yaml", "workflow: {name: test}\ntasks: [{name: task}]\n")
     with pytest.raises(ValueError, match="must define 'argv'"):
         load_workflow(missing)
-    invalid = write(tmp_path / "invalid.yaml", "tasks: [{name: task, argv: []}]\n")
+    invalid = write(tmp_path / "invalid.yaml", "workflow: {name: test}\ntasks: [{name: task, argv: []}]\n")
     with pytest.raises(ValueError, match="non-empty list"):
         load_workflow(invalid)
 
@@ -54,7 +54,7 @@ def test_rejects_missing_or_invalid_argv(tmp_path: Path) -> None:
 def test_rejects_unknown_executor(tmp_path: Path) -> None:
     workflow = write(
         tmp_path / "workflow.yaml",
-        "tasks: [{name: task, argv: [python], executor: slurm}]\n",
+        "workflow: {name: test}\ntasks: [{name: task, argv: [python], executor: slurm}]\n",
     )
     with pytest.raises(ValueError, match="unsupported executor"):
         load_workflow(workflow)
