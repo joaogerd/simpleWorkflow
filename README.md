@@ -102,38 +102,34 @@ swf tui workflow.yaml --workdir .simpleworkflow
 ```
 
 For workflows with explicit `--cycle` timestamps, the operational view is
-organized around one selected date. The top of the screen is deliberately
-compact: it shows the workflow name, a run summary and the selected date with
-previous/next-day controls. The selected cycle is shown in the Monitor view
-rather than repeated as four large cards.
+organized around one selected date. The normal screen is deliberately sparse:
+the workflow name and run summary stay at the upper left, while the selected
+date and previous/next-day controls stay at the upper right.
+
+The Monitor shows only one compact cycle line followed by two working areas:
+the workflow hierarchy on the left and the selected-task inspector on the
+right. Runtime output is intentionally kept out of the Monitor and is available
+in the dedicated **Logs** view.
 
 The four synoptic cycles remain available as `00Z`, `06Z`, `12Z` and `18Z`.
 Keys `1`, `2`, `3` and `4` select them. Left/right moves by day and
 Shift+left/right moves by month.
 
-The TUI separates information into clickable tabs:
+The TUI uses a small set of clickable tabs:
 
-- **Monitor** — the selected cycle workflow, task inspector and current log;
+- **Monitor** — selected-cycle workflow and task inspector;
 - **Ciclos** — OBS/JEDI/MPAS status across `00Z`, `06Z`, `12Z` and `18Z` for the selected date;
 - **Campanha** — a monthly map of complete, running, failed, partial and waiting days;
 - **Problemas** — failed tasks only;
-- **Logs** — expanded output for the selected task;
-- **Ajuda** — keyboard navigation and status legend.
+- **Logs** — expanded output for the selected task.
 
-The permanent footer is intentionally short:
-
-```text
-q Quit    ←/→ Day    Tab Views    ? Help
-```
-
-Less common shortcuts remain on the Ajuda page instead of occupying the
-operational screen.
+Help is not kept as a permanent tab or footer. Press `?` to open a small help
+overlay only when needed. `Tab` moves through the main views and `q` exits.
 
 The selected task inspector is refreshed from the real `state.sqlite3` database
-and newest immutable runtime attempt. It shows executor, return code, configured
-PBS resources and Job ID when those details are available in attempt metadata.
-The Monitor and Logs views tail the persisted stdout/stderr files rather than
-simulating scientific output.
+and newest immutable runtime attempt. It focuses on the task, internal name,
+state, PBS Job ID when available, and runtime path. Logs are read from the
+persisted stdout/stderr files rather than simulated.
 
 Generic workflows without explicit cycle timestamps continue to work in a
 non-dated monitor mode.
