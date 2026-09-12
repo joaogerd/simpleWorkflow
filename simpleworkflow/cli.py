@@ -14,15 +14,39 @@ from .engine import WorkflowEngine
 
 
 def _add_cycle_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--cycle-time", action="append", dest="cycle_times", metavar="TIME")
-    parser.add_argument("--from", dest="cycle_start", metavar="TIME")
-    parser.add_argument("--to", dest="cycle_end", metavar="TIME")
-    parser.add_argument("--step", dest="cycle_step", metavar="DURATION")
+    parser.add_argument(
+        "--cycle-time",
+        action="append",
+        dest="cycle_times",
+        metavar="TIME",
+        help="Run one explicit ISO-8601 cycle; repeat this option for multiple cycles.",
+    )
+    parser.add_argument(
+        "--from",
+        dest="cycle_start",
+        metavar="TIME",
+        help="Override cycle.start with an ISO-8601 timestamp.",
+    )
+    parser.add_argument(
+        "--to",
+        dest="cycle_end",
+        metavar="TIME",
+        help="Override cycle.end with an ISO-8601 timestamp.",
+    )
+    parser.add_argument(
+        "--step",
+        dest="cycle_step",
+        metavar="DURATION",
+        help="Override cycle.step with an ISO-8601 duration such as PT6H.",
+    )
 
 
 def _add_display_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--color", choices=("auto", "always", "never"), default="auto"
+        "--color",
+        choices=("auto", "always", "never"),
+        default="auto",
+        help="Terminal color mode: auto (default), always or never.",
     )
 
 
@@ -37,7 +61,9 @@ def build_parser() -> argparse.ArgumentParser:
         command_parser = subparsers.add_parser(command)
         command_parser.add_argument("workflow")
         command_parser.add_argument("--workdir", default=".simpleworkflow")
-        command_parser.add_argument("--debug", action="store_true")
+        command_parser.add_argument(
+            "--debug", action="store_true", help="Show technical traceback details."
+        )
         _add_cycle_options(command_parser)
         _add_display_options(command_parser)
         if command == "run":
@@ -49,6 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
                 action="append",
                 dest="selected_tasks",
                 metavar="NAME",
+                help="Select a task and include all of its dependencies; repeat as needed.",
             )
     return parser
 
@@ -65,7 +92,6 @@ def _cycle_engines(
         end=args.cycle_end,
         step=args.cycle_step,
     )
-    selected = set(args.selected_tasks) if getattr(args, "selected_tasks", None) else None
     if not cycles:
         yield None, WorkflowEngine(
             config=config,
@@ -73,7 +99,7 @@ def _cycle_engines(
             force=getattr(args, "force", False),
             dry_run=getattr(args, "dry_run", False),
             reporter=reporter,
-            selected_tasks=selected,
+            selected_tasks=set(args.selected_tasks) if getattr(args, "selected_tasks", None) else None,
         )
         return
 
@@ -94,7 +120,7 @@ def _cycle_engines(
             force=getattr(args, "force", False),
             dry_run=getattr(args, "dry_run", False),
             reporter=reporter,
-            selected_tasks=selected,
+            selected_tasks=set(args.selected_tasks) if getattr(args, "selected_tasks", None) else None,
         )
 
 
