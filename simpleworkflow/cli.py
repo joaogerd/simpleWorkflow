@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import time
 from collections.abc import Iterable
 from copy import deepcopy
 from typing import Any
@@ -46,6 +47,16 @@ def _add_display_options(parser: argparse.ArgumentParser) -> None:
         default="auto",
         help="Terminal color mode: auto (default), always or never.",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show internal task names, executors and rendered commands.",
+    )
+    parser.add_argument(
+        "--plain",
+        action="store_true",
+        help="Disable the live Rich dashboard and use stable linear output.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -66,6 +77,20 @@ def build_parser() -> argparse.ArgumentParser:
         if command == "run":
             command_parser.add_argument("--force", action="store_true")
             command_parser.add_argument("--dry-run", action="store_true")
+
+    tui_parser = subparsers.add_parser(
+        "tui",
+        help="Open the interactive workflow monitor.",
+    )
+    tui_parser.add_argument("workflow")
+    tui_parser.add_argument("--workdir", default=".simpleworkflow")
+    tui_parser.add_argument(
+        "--refresh",
+        type=float,
+        default=1.0,
+        metavar="SECONDS",
+        help="Refresh interval for persisted workflow state (default: 1.0).",
+    )
 
     return parser
 
@@ -112,57 +137,155 @@ def _cycle_engines(
         )
 
 
-def _heading(command: str, config: dict[str, Any], cycle: CycleContext | None) -> str:
-    workflow_name = config.get("workflow", {}).get("name", "workflow")
-    title = f"{command.title()} · {workflow_name}"
-    return f"{title} · {cycle.cycle_time}" if cycle is not None else title
+def _status_entries(engine: WorkflowEngine) -> list[tuple[str, str]]:
+    return [
+        (task_name, engine.state.get_status(engine.workflow_name, task_name) or "pending")
+        for task_name in engine.plan()
+    ]
+
+
+def _display_workflow_name(config: dict[str, Any]) -> str:
+    return str(config.get("workflow", {}).get("name", "workflow"))
+
+
+def _mode(args: argparse.Namespace) -> str:
+    if getattr(args, "dry_run", False):
+        return "dry-run"
+    if getattr(args, "force", False):
+        return "force rerun"
+    return "normal"
+
+
+def _show_header(
+    reporter: TerminalReporter,
+    *,
+    command: str,
+    config: dict[str, Any],
+    args: argparse.Namespace,
+    cycle: CycleContext | None,
+    engine: WorkflowEngine,
+) -> list[str]:
+    plan = engine.plan()
+    reporter.workflow_header(
+        command=command,
+        workflow_name=_display_workflow_name(config),
+        workdir=str(args.workdir),
+        cycle_time=cycle.cycle_time if cycle is not None else None,
+        mode=_mode(args),
+        task_names=plan,
+    )
+    return plan
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_workflow(args.workflow)
-    reporter = TerminalReporter(color=args.color)
+
+    if args.command == "tui":
+        if args.refresh <= 0:
+            raise SystemExit("--refresh must be greater than zero")
+        from .tui import run_tui
+
+        run_tui(
+            config,
+            args.workflow,
+            args.workdir,
+            refresh_seconds=args.refresh,
+        )
+        return 0
+
+    reporter = TerminalReporter(
+        color=args.color,
+        verbose=args.verbose,
+        plain=args.plain,
+    )
 
     if args.command == "plan":
-        index = 1
         for cycle, engine in _cycle_engines(config, args, reporter):
             try:
-                reporter.heading(_heading("plan", config, cycle))
-                for task_name in engine.plan():
-                    reporter.plan_item(index, task_name)
-                    index += 1
+                plan = _show_header(
+                    reporter,
+                    command="plan",
+                    config=config,
+                    args=args,
+                    cycle=cycle,
+                    engine=engine,
+                )
+                reporter.plan_view(plan)
             finally:
+                reporter.close()
                 engine.state.close()
         return 0
 
     if args.command == "run":
         for cycle, engine in _cycle_engines(config, args, reporter):
+            started = time.monotonic()
             try:
-                reporter.heading(_heading("run", config, cycle))
+                plan = _show_header(
+                    reporter,
+                    command="run",
+                    config=config,
+                    args=args,
+                    cycle=cycle,
+                    engine=engine,
+                )
+                if getattr(args, "dry_run", False):
+                    reporter.plan_view(plan)
+                else:
+                    reporter.begin_run(_status_entries(engine))
+
                 result = engine.run()
+                if getattr(args, "dry_run", False):
+                    elapsed = TerminalReporter._format_elapsed(time.monotonic() - started)
+                    reporter.note(
+                        f"Dry run complete in {elapsed}. No task state was changed."
+                    )
+                else:
+                    reporter.run_summary(
+                        _status_entries(engine),
+                        elapsed_seconds=time.monotonic() - started,
+                        exit_code=result,
+                    )
                 if result != 0:
                     return result
             finally:
+                reporter.close()
                 engine.state.close()
         return 0
 
     if args.command == "status":
         for cycle, engine in _cycle_engines(config, args, reporter):
             try:
-                reporter.heading(_heading("status", config, cycle))
+                _show_header(
+                    reporter,
+                    command="status",
+                    config=config,
+                    args=args,
+                    cycle=cycle,
+                    engine=engine,
+                )
                 engine.status()
             finally:
+                reporter.close()
                 engine.state.close()
         return 0
 
     if args.command == "reset":
         for cycle, engine in _cycle_engines(config, args, reporter):
             try:
-                reporter.heading(_heading("reset", config, cycle))
+                _show_header(
+                    reporter,
+                    command="reset",
+                    config=config,
+                    args=args,
+                    cycle=cycle,
+                    engine=engine,
+                )
                 engine.reset()
+                reporter.note("Workflow state reset.")
             finally:
+                reporter.close()
                 engine.state.close()
-        reporter.note("Workflow state reset.")
         return 0
 
     return 2

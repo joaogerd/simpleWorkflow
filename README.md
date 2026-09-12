@@ -13,13 +13,13 @@ reproducible workflow that can be installed and understood quickly.
 
 - YAML task definitions with explicit `argv` arguments, never shell command strings;
 - dependency-aware, sequential execution;
-- `plan`, `run`, `status` and `reset` commands;
+- `plan`, `run`, `status`, `reset` and interactive `tui` commands;
 - persistent SQLite task state and safe restart/reuse;
 - required input/output artifact validation;
 - per-attempt logs and provenance records;
 - ISO-8601 cycle expansion for scientific cases;
 - local execution and a small blocking PBS backend;
-- friendly, color-aware progress output with no runtime dependency.
+- concise Rich terminal progress plus an optional full-screen Textual monitor.
 
 ## Deliberate limits
 
@@ -47,6 +47,7 @@ python -m pip install -e ".[dev]"
 swf plan examples/hello.yaml
 swf run examples/hello.yaml
 swf status examples/hello.yaml
+swf tui examples/hello.yaml
 swf reset examples/hello.yaml
 ```
 
@@ -55,23 +56,96 @@ argument vectors without launching processes.
 
 ## Terminal output
 
-The CLI prints compact lifecycle events such as `PLAN`, `RUN`, `OK`, `FAIL`,
-`SKIP` and `RERUN`. Interactive terminals receive color and symbols by default;
-redirected output stays plain so logs and scripts remain stable.
+The normal CLI view is intended for scientific and operational users. It shows
+the workflow, execution mode, progress, human-facing stages and the final result
+without printing every rendered command.
+
+Task names that follow the common `componentHH_action` convention are grouped
+automatically. For example, `jedi06_prepare`, `jedi06_submit` and
+`jedi06_validate` are presented under `JEDI 06Z` with the actions `Prepare`,
+`Submit` and `Validate`. The internal task names remain unchanged and continue
+to be used for state, logs and provenance.
+
+Typical output emphasizes states such as `RUNNING`, `SUCCESS`, `REUSED`,
+`RERUN` and `FAILED`, followed by an end-of-run summary with elapsed time and
+the next useful action.
 
 ```bash
-# Default: color only when stdout is interactive.
+# Concise scientific/operational view.
 swf run workflow.yaml
+
+# Include internal task names, executors and rendered commands.
+swf run workflow.yaml --verbose
+
+# Stable linear output in an interactive terminal.
+swf run workflow.yaml --plain
 
 # Demonstrations or terminals that do not advertise color.
 swf run workflow.yaml --color always
 
-# CI logs, shell parsing or plain text output.
+# CI logs, redirected output or plain text terminals.
 swf status workflow.yaml --color never
 ```
 
 `--color` accepts `auto`, `always` and `never`. Setting `NO_COLOR` also disables
-automatic color. The terminal renderer uses only Python's standard library.
+automatic color. Detailed stdout/stderr and provenance records remain stored
+separately below the workflow work directory.
+
+## Interactive TUI
+
+`swf tui` opens a full-screen Textual monitor inspired by operational ideas from
+ecFlow and Cylc, while keeping workflow execution and persisted state independent
+of the interface.
+
+```bash
+swf tui workflow.yaml --workdir .simpleworkflow
+```
+
+For workflows with explicit `--cycle` timestamps, the operational view is
+organized around one selected date. The top of the screen is deliberately
+compact: workflow name and run summary at the left, selected date at the right,
+and a one-line cycle selector inside Monitor.
+
+The four synoptic cycles `00Z`, `06Z`, `12Z` and `18Z` are directly clickable.
+Keys `1`, `2`, `3` and `4` provide the same selection from the keyboard.
+Clicking a populated cell in the **Ciclos** view also selects that cycle and
+returns to Monitor. Left/right moves by day and Shift+left/right moves by month.
+
+The TUI separates information into clickable tabs:
+
+- **Monitor** — selected-cycle workflow and task inspector;
+- **Ciclos** — OBS/JEDI/MPAS status across `00Z`, `06Z`, `12Z` and `18Z`;
+- **Campanha** — monthly map of complete, running, failed, partial and waiting days;
+- **Problemas** — failed tasks only;
+- **Logs** — output for the selected task.
+
+The task inspector includes a small **Logs** action whenever runtime logs are
+available. Clicking it opens the Logs view. That view exposes each available
+file (`pbs.stdout.log`, `stdout.log`, `pbs.stderr.log`, `stderr.log`) as a
+clickable selector, so output and error streams can be inspected separately.
+Press `v` to open the same live-updating view for the selected task.
+
+Press `/` to filter the selected cycle's task tree by component, action or
+internal task name. A single compact shortcut line remains visible; press `?`
+for the complete on-demand help overlay.
+
+The selected task inspector is refreshed from the real `state.sqlite3` database
+and newest immutable runtime attempt. It shows state, return code context, Job ID
+when available, elapsed time, start/end timestamps, requested PBS resources and
+the attempt path. The top summary includes a live-refresh indicator and the last
+refresh time. The Logs view tails persisted files rather than simulating
+scientific output.
+
+The **Problemas** tab displays a failure count and the recorded reason or last
+useful `stderr` line. Selecting a problem opens that task's error log directly.
+
+Generic workflows without explicit cycle timestamps continue to work in a
+non-dated monitor mode.
+
+The first monitor is intentionally read-only. Monitoring should not change
+workflow state. Destructive operational actions such as scheduler cancellation
+or selective reruns can be added later with explicit confirmation and dedicated
+tests.
 
 ## Workflow format
 
@@ -98,8 +172,8 @@ use context placeholders such as `{python}`, `{case_name}` and
 
 PBS tasks remain intentionally simple. The runner creates one `job.pbs` file,
 submits it with `qsub -W block=true`, and waits for its final result before
-advancing the DAG. This preserves the same success/failure semantics used by
-local tasks.
+advancing the workflow. This preserves the same success/failure semantics used
+by local tasks.
 
 ```yaml
 - name: analysis
@@ -138,8 +212,10 @@ Runtime files are written below `.simpleworkflow/` by default:
       pbs.stderr.log
 ```
 
-A successful task is reused only when its signature still matches and required
-outputs still exist. Signatures include the rendered invocation, declared
+A successful task is reused only when its signature still matches, required
+outputs still exist and no dependency executed again in the current invocation.
+If an upstream task is executed again, that rerun propagates safely through its
+dependent tasks. Signatures include the rendered invocation, declared
 environment, workflow file and declared input fingerprints.
 
 ## Development
