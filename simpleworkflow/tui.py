@@ -12,6 +12,7 @@ from typing import Any
 
 from rich.markup import escape
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import (
     Button,
@@ -295,7 +296,7 @@ class WorkflowTui(App[None]):
         ("4", "select_cycle('18')", "18Z"),
         ("r", "refresh_now", "Refresh"),
         ("c", "clear_log", "Clear log"),
-        ("tab", "next_view", "Views"),
+        Binding("tab", "next_view", "Views", priority=True),
         ("question_mark", "show_help", "Help"),
     ]
 
