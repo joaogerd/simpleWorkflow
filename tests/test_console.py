@@ -20,8 +20,8 @@ def test_color_always_emits_ansi_escape_sequences() -> None:
 
     output = stream.getvalue()
     assert "\033[" in output
-    assert "analysis" in output
-    assert "[pbs]" in output
+    assert "Analysis" in output
+    assert "pbs" in output
 
 
 def test_color_never_emits_plain_text() -> None:
@@ -32,7 +32,7 @@ def test_color_never_emits_plain_text() -> None:
 
     output = stream.getvalue()
     assert "\033[" not in output
-    assert "✘ FAIL" in output
+    assert "✘ FAILED" in output
     assert "return code 7" in output
 
 
@@ -40,12 +40,20 @@ def test_auto_color_uses_interactive_stream() -> None:
     stream = InteractiveBuffer()
     reporter = TerminalReporter(color="auto", stream=stream)
 
+    reporter.workflow_header(
+        command="status",
+        workflow_name="test",
+        workdir=".simpleworkflow",
+        task_names=["prepare", "analysis"],
+    )
     reporter.status_table([("prepare", "success"), ("analysis", "pending")])
 
     output = stream.getvalue()
     assert "\033[" in output
-    assert "prepare" in output
-    assert "analysis" in output
+    assert "Execution hierarchy" in output
+    assert "Cycle status" in output
+    assert "Prepare" in output
+    assert "Analysis" in output
 
 
 def test_status_table_renders_all_lifecycle_states_without_color() -> None:
@@ -61,7 +69,7 @@ def test_status_table_renders_all_lifecycle_states_without_color() -> None:
     )
 
     output = stream.getvalue()
-    assert "PENDING" in output
+    assert "WAITING" in output
     assert "RUNNING" in output
     assert "BAD OUTPUT" in output
 
@@ -73,7 +81,7 @@ def test_scientific_task_names_are_grouped_by_stage_and_cycle() -> None:
         command="run",
         workflow_name="corrected-replay",
         workdir=".simpleworkflow",
-        task_count=3,
+        task_names=["jedi06_prepare", "jedi06_submit", "mpas06_prepare"],
     )
 
     reporter.event("skip", "jedi06_prepare", "already successful", executor="local")
@@ -102,8 +110,8 @@ def test_verbose_mode_keeps_internal_details_available() -> None:
     )
 
     output = stream.getvalue()
-    assert "[jedi06_prepare]" in output
-    assert "[local]" in output
+    assert "jedi06_prepare" in output
+    assert "local" in output
     assert "monan-jedi-workflow jedi-prepare" in output
 
 
@@ -114,7 +122,7 @@ def test_run_summary_is_concise_and_actionable() -> None:
         command="run",
         workflow_name="test",
         workdir=".simpleworkflow",
-        task_count=2,
+        task_names=["prepare", "validate"],
     )
     reporter.event("ok", "prepare")
     reporter.event("skip", "validate", "already successful")
@@ -129,4 +137,57 @@ def test_run_summary_is_concise_and_actionable() -> None:
     assert "Result · SUCCESS" in output
     assert "1 executed" in output
     assert "1 reused/skipped" in output
-    assert "workflow complete" in output
+    assert "Workflow complete" in output
+
+
+def test_interactive_dashboard_contains_tree_and_cycle_matrix() -> None:
+    stream = InteractiveBuffer()
+    reporter = TerminalReporter(color="never", stream=stream)
+    reporter.workflow_header(
+        command="status",
+        workflow_name="monan-jedi",
+        workdir=".simpleworkflow",
+        task_names=[
+            "jedi00_prepare",
+            "jedi00_validate",
+            "mpas00_prepare",
+            "obs06_run",
+            "jedi06_prepare",
+        ],
+    )
+
+    reporter.status_table(
+        [
+            ("jedi00_prepare", "success"),
+            ("jedi00_validate", "success"),
+            ("mpas00_prepare", "success"),
+            ("obs06_run", "success"),
+            ("jedi06_prepare", "running"),
+        ]
+    )
+
+    output = stream.getvalue()
+    assert "Execution hierarchy" in output
+    assert "Cycle status" in output
+    assert "JEDI 00Z" in output
+    assert "JEDI 06Z" in output
+    assert "MPAS" in output
+    assert "OBS" in output
+    assert "RUNNING" in output
+
+
+def test_plain_mode_disables_live_dashboard() -> None:
+    stream = InteractiveBuffer()
+    reporter = TerminalReporter(color="never", stream=stream, plain=True)
+    reporter.workflow_header(
+        command="run",
+        workflow_name="plain-test",
+        workdir=".simpleworkflow",
+        task_names=["jedi00_prepare"],
+    )
+    reporter.event("run", "jedi00_prepare", "command --flag", executor="local")
+
+    output = stream.getvalue()
+    assert "Run · plain-test" in output
+    assert "RUNNING" in output
+    assert "Execution hierarchy" not in output
