@@ -101,18 +101,34 @@ independent of the interface.
 swf tui workflow.yaml --workdir .simpleworkflow
 ```
 
-The initial monitor is intentionally read-only. It provides:
+For workflows with explicit `--cycle` timestamps, the operational view is
+organized around one selected date. At most four synoptic cycles are visible at
+once: `00Z`, `06Z`, `12Z` and `18Z`. Previous/next-day buttons and the left/right
+keys move the selected date, while `1`, `2`, `3` and `4` select those cycles.
+Shift+left/right moves by month.
 
-- a navigable hierarchy of workflow stages and tasks;
-- automatic refresh of task states from `state.sqlite3`;
-- a task inspector with executor, return code, PBS metadata when available and
-  configured resources;
-- the stdout/stderr tail from the newest immutable task attempt;
-- keyboard shortcuts for refresh, log clearing and exit.
+The TUI separates information into clickable tabs:
 
-This separation is deliberate: monitoring should not change workflow state.
-Destructive operational actions such as scheduler cancellation or selective
-reruns can be added later with explicit confirmation and dedicated tests.
+- **Monitor** — the selected cycle workflow, task inspector and current log;
+- **Matriz** — component-by-cycle status for the selected date;
+- **Campanha** — a monthly map of complete, running, failed, partial and waiting days;
+- **Problemas** — failed tasks only;
+- **Logs** — expanded output for the selected task;
+- **Ajuda** — keyboard navigation and status legend.
+
+The selected task inspector is refreshed from the real `state.sqlite3` database
+and newest immutable runtime attempt. It shows executor, return code, configured
+PBS resources and Job ID when those details are available in attempt metadata.
+The Monitor and Logs views tail the persisted stdout/stderr files rather than
+simulating scientific output.
+
+Generic workflows without explicit cycle timestamps continue to work in a
+non-dated monitor mode.
+
+The first monitor is intentionally read-only. Monitoring should not change
+workflow state. Destructive operational actions such as scheduler cancellation
+or selective reruns can be added later with explicit confirmation and dedicated
+tests.
 
 ## Workflow format
 
