@@ -126,7 +126,7 @@ def test_parse_cycle_uses_explicit_cycle_argument() -> None:
     assert cycle.hour == "12"
 
 
-def test_textual_monitor_mounts_with_persisted_workflow_state(tmp_path: Path) -> None:
+def test_textual_monitor_mounts_with_minimal_layout(tmp_path: Path) -> None:
     workflow = tmp_path / "workflow.yaml"
     workflow.write_text("workflow:\n  name: tui_test\n", encoding="utf-8")
 
@@ -148,16 +148,16 @@ def test_textual_monitor_mounts_with_persisted_workflow_state(tmp_path: Path) ->
             assert app.selected_date is None
             assert set(app.task_nodes) == {"jedi06_prepare", "jedi06_validate"}
             assert app.engine.state.get_status("tui_test", "jedi06_prepare") == "success"
-            assert app.query_one("#views") is not None
+            assert app.query_one("#topbar") is not None
+            assert app.query_one("#cycle-line") is not None
             assert app.query_one("#cycles-table") is not None
             assert app.query_one("#campaign-view") is not None
             assert app.query_one("#problems-table") is not None
-            assert app.query_one("#footer-help") is not None
 
     asyncio.run(scenario())
 
 
-def test_dated_monitor_uses_compact_date_navigation_and_hidden_cycle_shortcuts(
+def test_dated_monitor_uses_compact_navigation_and_cycle_shortcuts(
     tmp_path: Path,
 ) -> None:
     workflow = tmp_path / "workflow.yaml"
