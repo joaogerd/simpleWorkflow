@@ -16,8 +16,6 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import (
     Button,
     DataTable,
-    Footer,
-    Header,
     Label,
     RichLog,
     Static,
@@ -44,6 +42,7 @@ _FAILED_STATES = {"failed", "invalid-input", "invalid-output"}
 _COMPLETE_STATES = {"success", "skipped"}
 _CYCLE_HOURS = ("00", "06", "12", "18")
 _COMPONENT_ORDER = ("OBS", "JEDI", "MPAS")
+_VIEW_IDS = ("monitor", "cycles", "campaign", "problems", "logs", "help")
 
 
 @dataclass(frozen=True)
@@ -75,7 +74,6 @@ class AttemptSnapshot:
         return str(value) if value else None
 
     def preferred_log_paths(self) -> list[Path]:
-        """Return useful stdout/stderr paths in display priority order."""
         paths: list[Path] = []
         for candidate in (
             self.pbs_stdout_path,
@@ -110,11 +108,12 @@ def _latest_attempt(workdir: Path, task_name: str) -> AttemptSnapshot | None:
         return None
 
     task_directory = _task_directory_name(task_name)
-    for run_dir in sorted(
+    run_dirs = sorted(
         (path for path in runs_root.iterdir() if path.is_dir()),
         key=lambda path: path.name,
         reverse=True,
-    ):
+    )
+    for run_dir in run_dirs:
         task_root = run_dir / "tasks" / task_directory
         if not task_root.is_dir():
             continue
@@ -149,7 +148,6 @@ def _latest_attempt(workdir: Path, task_name: str) -> AttemptSnapshot | None:
 
 
 def _tail(path: Path, *, max_lines: int = 250) -> str:
-    """Read the tail of one UTF-8-ish text file without failing on bad bytes."""
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
@@ -169,9 +167,8 @@ def _parse_cycle(task: dict[str, Any]) -> TaskCycle | None:
     if index + 1 >= len(argv) or not isinstance(argv[index + 1], str):
         return None
 
-    raw = argv[index + 1]
     try:
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(argv[index + 1].replace("Z", "+00:00"))
     except ValueError:
         return None
     return TaskCycle(parsed)
@@ -187,9 +184,9 @@ class WorkflowTui(App[None]):
     }
 
     #summary {
-        height: 4;
+        height: 3;
         padding: 0 1;
-        border-bottom: heavy #3b82f6;
+        border-bottom: solid #303744;
         background: #171a21;
     }
 
@@ -197,31 +194,28 @@ class WorkflowTui(App[None]):
         height: 3;
         align: center middle;
         background: #12151b;
+        border-bottom: solid #202633;
     }
 
     #date-label {
-        width: 1fr;
+        width: 32;
         content-align: center middle;
-        text-style: bold;
+        text-align: center;
         color: #f8fafc;
     }
 
     #prev-date, #next-date {
-        width: 9;
-        min-width: 9;
-    }
-
-    #cycle-strip {
-        height: 6;
-        padding: 0 1;
-        align: center middle;
+        width: 5;
+        min-width: 5;
+        height: 3;
+        border: none;
         background: #12151b;
+        color: #94a3b8;
     }
 
-    .cycle-card {
-        width: 1fr;
-        height: 5;
-        margin: 0 1;
+    #prev-date:hover, #next-date:hover {
+        background: #202633;
+        color: #f8fafc;
     }
 
     TabbedContent {
@@ -235,7 +229,7 @@ class WorkflowTui(App[None]):
     #left {
         width: 38%;
         min-width: 38;
-        border-right: heavy #303744;
+        border-right: solid #303744;
         background: #12151b;
     }
 
@@ -269,7 +263,7 @@ class WorkflowTui(App[None]):
         padding: 0 1;
     }
 
-    #matrix-table, #problems-table {
+    #cycles-table, #problems-table {
         height: 1fr;
         margin: 1;
     }
@@ -278,6 +272,14 @@ class WorkflowTui(App[None]):
         height: 1fr;
         padding: 1 2;
         background: #12151b;
+    }
+
+    #footer-help {
+        height: 1;
+        padding: 0 1;
+        background: #0b1020;
+        color: #cbd5e1;
+        content-align: left middle;
     }
     """
 
@@ -293,6 +295,8 @@ class WorkflowTui(App[None]):
         ("4", "select_cycle('18')", "18Z"),
         ("r", "refresh_now", "Refresh"),
         ("c", "clear_log", "Clear log"),
+        ("tab", "next_view", "Views"),
+        ("question_mark", "show_help", "Help"),
     ]
 
     def __init__(
@@ -326,21 +330,17 @@ class WorkflowTui(App[None]):
         self._choose_initial_selection()
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
         yield Static(id="summary")
         with Horizontal(id="date-bar"):
             yield Button("◀", id="prev-date")
             yield Static(id="date-label")
             yield Button("▶", id="next-date")
-        with Horizontal(id="cycle-strip"):
-            for hour in _CYCLE_HOURS:
-                yield Button(f"{hour}Z", id=f"cycle-{hour}", classes="cycle-card")
 
         with TabbedContent(initial="monitor", id="views"):
             with TabPane("Monitor", id="monitor"):
                 with Horizontal(id="monitor-main"):
                     with Vertical(id="left"):
-                        yield Label(" WORKFLOW DO CICLO", classes="pane-title")
+                        yield Label(id="workflow-title", classes="pane-title")
                         yield Tree(self.workflow_name, id="task-tree")
                     with Vertical(id="right"):
                         yield Label(" TASK INSPECTOR", classes="pane-title")
@@ -353,8 +353,8 @@ class WorkflowTui(App[None]):
                             wrap=False,
                             max_lines=300,
                         )
-            with TabPane("Matriz", id="matrix"):
-                yield DataTable(id="matrix-table", cursor_type="cell", zebra_stripes=True)
+            with TabPane("Ciclos", id="cycles"):
+                yield DataTable(id="cycles-table", cursor_type="cell", zebra_stripes=True)
             with TabPane("Campanha", id="campaign"):
                 yield Static(id="campaign-view")
             with TabPane("Problemas", id="problems"):
@@ -369,7 +369,12 @@ class WorkflowTui(App[None]):
                 )
             with TabPane("Ajuda", id="help"):
                 yield Static(id="help-view")
-        yield Footer()
+
+        yield Static(
+            "[bold]q[/bold] Quit    [bold]←/→[/bold] Day    "
+            "[bold]Tab[/bold] Views    [bold]?[/bold] Help",
+            id="footer-help",
+        )
 
     def on_mount(self) -> None:
         self._configure_tables()
@@ -412,8 +417,8 @@ class WorkflowTui(App[None]):
         self.selected_task = preferred
 
     def _configure_tables(self) -> None:
-        matrix = self.query_one("#matrix-table", DataTable)
-        matrix.add_columns("Etapa", "00Z", "06Z", "12Z", "18Z")
+        cycles = self.query_one("#cycles-table", DataTable)
+        cycles.add_columns("Etapa", "00Z", "06Z", "12Z", "18Z")
         problems = self.query_one("#problems-table", DataTable)
         problems.add_columns("Data", "Ciclo", "Etapa", "Tarefa", "Estado")
 
@@ -476,6 +481,18 @@ class WorkflowTui(App[None]):
         display = TerminalReporter._humanize_task(task_name)
         return f"{self._status_markup(status)}  {escape(display.action)}"
 
+    def _available_hours_for_day(self, day: date | None) -> list[str]:
+        if day is None:
+            return []
+        return [hour for hour in _CYCLE_HOURS if self._tasks_for_cycle(day, hour)]
+
+    def _normalize_selected_hour(self) -> None:
+        if not self.task_cycles:
+            return
+        available = self._available_hours_for_day(self.selected_date)
+        if available and self.selected_hour not in available:
+            self.selected_hour = available[0]
+
     def _rebuild_tree(self) -> None:
         tree = self.query_one("#task-tree", Tree)
         tree.clear()
@@ -483,6 +500,7 @@ class WorkflowTui(App[None]):
         tree.root.set_label(self.workflow_name)
         tree.root.expand()
 
+        self._normalize_selected_hour()
         visible_tasks = self._tasks_for_cycle(self.selected_date, self.selected_hour)
         groups: OrderedDict[str, list[str]] = OrderedDict()
         for task_name in visible_tasks:
@@ -516,6 +534,11 @@ class WorkflowTui(App[None]):
             if node is not None:
                 tree.select_node(node)
 
+        title = " WORKFLOW"
+        if self.selected_hour is not None:
+            title += f" · {self.selected_hour}Z"
+        self.query_one("#workflow-title", Label).update(title)
+
     def on_tree_node_selected(self, event: Tree.NodeSelected[str]) -> None:
         data = event.node.data
         if isinstance(data, str) and data in self.task_map:
@@ -528,12 +551,8 @@ class WorkflowTui(App[None]):
         button_id = event.button.id or ""
         if button_id == "prev-date":
             self.action_previous_day()
-            return
-        if button_id == "next-date":
+        elif button_id == "next-date":
             self.action_next_day()
-            return
-        if button_id.startswith("cycle-"):
-            self.action_select_cycle(button_id.removeprefix("cycle-"))
 
     def action_previous_day(self) -> None:
         if self.selected_date is not None:
@@ -570,9 +589,22 @@ class WorkflowTui(App[None]):
         self._rebuild_tree()
         self.refresh_runtime()
 
+    def action_next_view(self) -> None:
+        views = self.query_one("#views", TabbedContent)
+        current = views.active or _VIEW_IDS[0]
+        try:
+            index = _VIEW_IDS.index(current)
+        except ValueError:
+            index = 0
+        views.active = _VIEW_IDS[(index + 1) % len(_VIEW_IDS)]
+
+    def action_show_help(self) -> None:
+        self.query_one("#views", TabbedContent).active = "help"
+
     def _date_changed(self) -> None:
         self.selected_task = None
         self._last_log_signature = None
+        self._normalize_selected_hour()
         self._rebuild_tree()
         self.refresh_runtime()
 
@@ -600,15 +632,14 @@ class WorkflowTui(App[None]):
         now = datetime.now().strftime("%H:%M:%S")
         self.query_one("#summary", Static).update(
             f"[bold cyan]{escape(self.workflow_name)}[/bold cyan]\n"
-            f"[green]{completed}/{len(self.plan)} complete[/green]  │  "
-            f"[cyan]{counts['running']} running[/cyan]  │  "
-            f"[red]{failed} failed[/red]  │  "
-            f"[dim]{counts['pending']} waiting  ·  updated {now}[/dim]"
+            f"[green]{completed}/{len(self.plan)} complete[/green] | "
+            f"[cyan]{counts['running']} running[/cyan] | "
+            f"[red]{failed} failed[/red] | "
+            f"[dim]updated {now}[/dim]"
         )
 
         self._refresh_date_bar()
-        self._refresh_cycle_cards()
-        self._refresh_matrix()
+        self._refresh_cycles_view()
         self._refresh_campaign()
         self._refresh_problems()
         self._refresh_inspector()
@@ -619,71 +650,26 @@ class WorkflowTui(App[None]):
         previous = self.query_one("#prev-date", Button)
         following = self.query_one("#next-date", Button)
         if self.selected_date is None:
-            label.update("[dim]Workflow sem datas de ciclo explícitas[/dim]")
+            label.update("[dim]Workflow without explicit cycle dates[/dim]")
             previous.disabled = True
             following.disabled = True
             return
+
         previous.disabled = False
         following.disabled = False
         weekday = calendar.day_name[self.selected_date.weekday()]
+        days_in_year = 366 if calendar.isleap(self.selected_date.year) else 365
         label.update(
-            f"[bold]◀  {self.selected_date.strftime('%d/%m/%Y')}  ▶[/bold]\n"
-            f"[dim]{weekday} · day {self.selected_date.timetuple().tm_yday}/"
-            f"{366 if calendar.isleap(self.selected_date.year) else 365}[/dim]"
+            f"[bold]{self.selected_date.strftime('%d/%m/%Y')}[/bold]\n"
+            f"[dim]{weekday} · day {self.selected_date.timetuple().tm_yday}/{days_in_year}[/dim]"
         )
 
-    def _refresh_cycle_cards(self) -> None:
-        for hour in _CYCLE_HOURS:
-            button = self.query_one(f"#cycle-{hour}", Button)
-            if self.selected_date is None:
-                button.disabled = True
-                button.label = f"{hour}Z\n—"
-                continue
-            button.disabled = False
-            aggregate = self._aggregate_status(
-                self._statuses_for_cycle(self.selected_date, hour)
-            )
-            selected = "▶ " if hour == self.selected_hour else ""
-            compact = {
-                "absent": "—",
-                "failed": "✘ FAILED",
-                "running": "● RUNNING",
-                "success": "✔ SUCCESS",
-                "partial": "◐ PARTIAL",
-                "pending": "○ WAITING",
-            }[aggregate]
-            component_bits: list[str] = []
-            for component in _COMPONENT_ORDER:
-                names = [
-                    name
-                    for name in self._tasks_for_cycle(self.selected_date, hour)
-                    if self._component(name) == component
-                ]
-                if names:
-                    status = self._aggregate_status(
-                        [
-                            self.engine.state.get_status(self.workflow_name, name)
-                            or "pending"
-                            for name in names
-                        ]
-                    )
-                    symbol = {
-                        "success": "✔",
-                        "running": "●",
-                        "failed": "✘",
-                        "partial": "◐",
-                        "pending": "○",
-                        "absent": "—",
-                    }[status]
-                    component_bits.append(f"{component} {symbol}")
-            details = "  ".join(component_bits) if component_bits else "No tasks"
-            button.label = f"{selected}{hour}Z\n{compact}\n{details}"
-
-    def _refresh_matrix(self) -> None:
-        table = self.query_one("#matrix-table", DataTable)
+    def _refresh_cycles_view(self) -> None:
+        table = self.query_one("#cycles-table", DataTable)
         table.clear(columns=False)
         if self.selected_date is None:
             return
+
         components = list(_COMPONENT_ORDER)
         extras = [
             component
@@ -709,9 +695,7 @@ class WorkflowTui(App[None]):
 
     def _day_status(self, day: date) -> str:
         names = [
-            name
-            for name, cycle in self.task_cycles.items()
-            if cycle.day == day
+            name for name, cycle in self.task_cycles.items() if cycle.day == day
         ]
         statuses = [
             self.engine.state.get_status(self.workflow_name, name) or "pending"
@@ -724,10 +708,10 @@ class WorkflowTui(App[None]):
         if self.selected_date is None:
             view.update("[dim]No dated campaign information is available.[/dim]")
             return
+
         year = self.selected_date.year
         month = self.selected_date.month
-        cal = calendar.Calendar(firstweekday=0)
-        weeks = cal.monthdayscalendar(year, month)
+        weeks = calendar.Calendar(firstweekday=0).monthdayscalendar(year, month)
         lines = [
             f"[bold cyan]{calendar.month_name[month].upper()} {year}[/bold cyan]",
             "",
@@ -748,17 +732,17 @@ class WorkflowTui(App[None]):
                     cells.append("     ")
                     continue
                 current = date(year, month, day_number)
-                status = self._day_status(current)
-                marker = symbols[status]
-                selected = "[reverse]" if current == self.selected_date else ""
-                ending = "[/reverse]" if selected else ""
-                cells.append(f"{selected}{day_number:02d}{marker}{ending}")
+                marker = symbols[self._day_status(current)]
+                if current == self.selected_date:
+                    cells.append(f"[reverse]{day_number:02d}{marker}[/reverse]")
+                else:
+                    cells.append(f"{day_number:02d}{marker}")
             lines.append("  ".join(cells))
         lines.extend(
             [
                 "",
-                "[dim]✔ complete   ● running   ✘ failed   ◐ partial   ○ waiting   · no tasks[/dim]",
-                "[dim]Use ←/→ for day navigation and Shift+←/→ for month navigation.[/dim]",
+                "[dim]✔ complete   ● running   ✘ failed   ◐ partial   "
+                "○ waiting   · no tasks[/dim]",
             ]
         )
         view.update("\n".join(lines))
@@ -820,7 +804,8 @@ class WorkflowTui(App[None]):
             f"Internal name : [bold]{escape(self.selected_task)}[/bold]",
             f"State         : {self._status_markup(status)}",
             f"Executor      : {escape(attempt_executor or executor)}",
-            f"Return code   : {state.return_code if state and state.return_code is not None else '—'}",
+            f"Return code   : "
+            f"{state.return_code if state and state.return_code is not None else '—'}",
             f"PBS Job ID    : {escape(job_id) if job_id else '—'}",
         ]
         if resources:
@@ -830,13 +815,17 @@ class WorkflowTui(App[None]):
         inspector.update("\n".join(lines))
 
     def _refresh_logs(self, *, force: bool = False) -> None:
-        logs = [self.query_one("#log", RichLog), self.query_one("#full-log", RichLog)]
+        logs = [
+            self.query_one("#log", RichLog),
+            self.query_one("#full-log", RichLog),
+        ]
         if self.selected_task is None:
             if force:
                 for log in logs:
                     log.clear()
                     log.write("No task selected for this cycle.")
             return
+
         attempt = _latest_attempt(self.workdir, self.selected_task)
         if attempt is None:
             if force:
@@ -850,7 +839,9 @@ class WorkflowTui(App[None]):
             if force:
                 for log in logs:
                     log.clear()
-                    log.write(f"Attempt exists at {attempt.directory}, but its logs are empty.")
+                    log.write(
+                        f"Attempt exists at {attempt.directory}, but its logs are empty."
+                    )
             return
 
         signature_parts: list[str] = []
@@ -861,7 +852,9 @@ class WorkflowTui(App[None]):
             except OSError:
                 continue
             total_size += stat.st_size
-            signature_parts.extend([str(path), str(stat.st_size), str(stat.st_mtime_ns)])
+            signature_parts.extend(
+                [str(path), str(stat.st_size), str(stat.st_mtime_ns)]
+            )
         signature = ("|".join(signature_parts), total_size, len(paths))
         if not force and signature == self._last_log_signature:
             return
@@ -871,27 +864,33 @@ class WorkflowTui(App[None]):
             log.clear()
             for path in paths:
                 log.write(f"--- {path.name} ---")
-                content = _tail(path, max_lines=1000 if log.id == "full-log" else 250)
+                content = _tail(
+                    path,
+                    max_lines=1000 if log.id == "full-log" else 250,
+                )
                 log.write(content or "(empty)")
 
     def _render_help(self) -> None:
         self.query_one("#help-view", Static).update(
             "[bold cyan]simpleWorkflow TUI[/bold cyan]\n\n"
             "[bold]Views[/bold]\n"
-            "Monitor    Daily operational view with at most 00Z, 06Z, 12Z and 18Z.\n"
-            "Matriz     Cycle/status matrix for the selected date.\n"
+            "Monitor    Operational view for the selected cycle.\n"
+            "Ciclos     OBS/JEDI/MPAS status across 00Z, 06Z, 12Z and 18Z.\n"
             "Campanha   Monthly execution map.\n"
             "Problemas  Failed validation/execution tasks only.\n"
             "Logs       Expanded output for the selected task.\n"
             "Ajuda      This page.\n\n"
             "[bold]Navigation[/bold]\n"
             "← / →          Previous / next day\n"
-            "Shift+← / →    Previous / next month\n"
+            "Tab            Next view\n"
+            "?              Open this help page\n"
             "1 / 2 / 3 / 4  Select 00Z / 06Z / 12Z / 18Z\n"
+            "Shift+← / →    Previous / next month\n"
             "r              Refresh now\n"
             "c              Clear displayed logs\n"
             "q              Quit\n\n"
-            "[dim]The interface is read-only in this version: monitoring never changes workflow state.[/dim]"
+            "[dim]The interface is read-only in this version: monitoring never "
+            "changes workflow state.[/dim]"
         )
 
 
