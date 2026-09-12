@@ -23,7 +23,12 @@ _EXIT_STATUS = re.compile(r"(?m)^\s*Exit_status\s*=\s*(-?\d+)\s*$")
 
 
 class PbsExecutor:
-    """Submit one task to PBS and wait for the final job result."""
+    """Submit one task to PBS and wait for the final job result.
+
+    Submission returns a job identifier immediately; this foreground process
+    then consults PBS until completion. Success means that the job completed
+    successfully, not merely that it entered a queue.
+    """
 
     def __init__(self, options: Mapping[str, Any]):
         self.options = dict(options)
@@ -86,12 +91,16 @@ class PbsExecutor:
 
     @staticmethod
     def _scheduler_status_line(job_id: str, output: str) -> str:
+        """Return a compact scheduler status without persisting qstat payloads."""
         state_match = _JOB_STATE.search(output)
         exit_match = _EXIT_STATUS.search(output)
+
         state = state_match.group(1).upper() if state_match else "?"
         fields = [f"job_id={job_id}", f"state={state}"]
+
         if exit_match:
             fields.append(f"exit_status={exit_match.group(1)}")
+
         return "[simpleworkflow] qstat: " + " ".join(fields) + "\n"
 
     @staticmethod
@@ -107,6 +116,7 @@ class PbsExecutor:
 
     @staticmethod
     def _positive_integer(value: Any, field: str) -> int:
+        """Normalize a rendered PBS count and reject invalid resource values."""
         if isinstance(value, bool):
             raise ValueError(f"PBS field '{field}' must be a positive integer.")
         try:
@@ -119,6 +129,7 @@ class PbsExecutor:
 
     @staticmethod
     def _walltime(value: Any) -> str:
+        """Validate a rendered PBS walltime value."""
         if not isinstance(value, str) or not _WALLTIME.fullmatch(value):
             raise ValueError("PBS field 'walltime' must use HHH:MM:SS format.")
         return value
@@ -135,14 +146,18 @@ class PbsExecutor:
     ) -> str:
         job_name = self._safe_job_name(str(self.options.get("job_name", task_name)))
         lines = ["#!/bin/bash", f"#PBS -N {job_name}"]
+
         queue = self.options.get("queue")
         if queue:
             lines.append(f"#PBS -q {self._directive_value(queue, 'queue')}")
+
         project = self.options.get("project")
         if project:
             lines.append(f"#PBS -A {self._directive_value(project, 'project')}")
+
         if "walltime" in self.options:
             lines.append(f"#PBS -l walltime={self._walltime(self.options['walltime'])}")
+
         has_select = any(key in self.options for key in ("select", "ncpus", "mpiprocs"))
         if has_select:
             select = self._positive_integer(self.options.get("select", 1), "select")
@@ -151,6 +166,7 @@ class PbsExecutor:
                 if key in self.options:
                     resources.append(f"{key}={self._positive_integer(self.options[key], key)}")
             lines.append(f"#PBS -l {':'.join(resources)}")
+
         lines.extend(
             [
                 f"#PBS -o {worker_stdout.resolve(strict=False)}",
@@ -158,8 +174,10 @@ class PbsExecutor:
                 "set -euo pipefail",
             ]
         )
+
         resolved_cwd = Path(cwd).resolve(strict=False) if cwd is not None else Path.cwd()
         lines.append(f"cd {shlex.quote(str(resolved_cwd))}")
+
         task_env = dict(env or {})
         if "omp_threads" in self.options:
             omp_threads = self._positive_integer(self.options["omp_threads"], "omp_threads")
@@ -168,6 +186,7 @@ class PbsExecutor:
             if not _ENV_NAME.fullmatch(key):
                 raise ValueError(f"Invalid PBS environment variable name: {key!r}")
             lines.append(f"export {key}={shlex.quote(value)}")
+
         lines.append(f"exec {shlex.join(list(argv))}")
         return "\n".join(lines) + "\n"
 
@@ -187,6 +206,7 @@ class PbsExecutor:
         stderr_path: str | Path | None = None,
         timeout: float | None = None,
     ) -> ExecutionResult:
+        """Submit one PBS job, persist its ID and wait in the foreground."""
         del timeout
         if stdout_path is None or stderr_path is None:
             raise ValueError("PBS execution requires attempt stdout and stderr paths.")
@@ -229,7 +249,17 @@ class PbsExecutor:
             )
         except OSError as error:
             self._write(submit_stderr, f"simpleWorkflow could not start qsub: {error}\n")
-            return ExecutionResult(return_code=127, metadata={"executor": "pbs"})
+            return ExecutionResult(
+                return_code=127,
+                metadata={
+                    "executor": "pbs",
+                    "wait_mode": "foreground-poll",
+                    "qsub_argv": command,
+                    "script": str(script_path.resolve(strict=False)),
+                    "job_stdout": str(worker_stdout.resolve(strict=False)),
+                    "job_stderr": str(worker_stderr.resolve(strict=False)),
+                },
+            )
 
         self._write(submit_stdout, f"[simpleworkflow] qsub: {shlex.join(command)}\n")
         self._write(submit_stdout, completed.stdout)
@@ -282,7 +312,10 @@ class PbsExecutor:
             self._write_scheduler_record(scheduler_record, cancellation)
             try:
                 cancelled = subprocess.run(
-                    cancel_command, text=True, capture_output=True, check=False
+                    cancel_command,
+                    text=True,
+                    capture_output=True,
+                    check=False,
                 )
             except OSError as error:
                 cancellation["qdel_return_code"] = 127
