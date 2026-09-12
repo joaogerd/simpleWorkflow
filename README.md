@@ -19,7 +19,7 @@ reproducible workflow that can be installed and understood quickly.
 - per-attempt logs and provenance records;
 - ISO-8601 cycle expansion for scientific cases;
 - local execution and a small blocking PBS backend;
-- concise, color-aware scientific progress output with no runtime dependency.
+- a Rich-based scientific terminal dashboard with a stable plain-text fallback.
 
 ## Deliberate limits
 
@@ -53,43 +53,52 @@ swf reset examples/hello.yaml
 Use `--force` to rerun successful tasks and `--dry-run` to inspect rendered
 argument vectors without launching processes.
 
-## Terminal output
+## Terminal dashboard
 
-The default terminal view is intended for scientific and operational users. It
-shows the workflow, execution mode, progress, human-facing stages and the final
-result without printing every rendered command.
+Interactive terminals use an ecFlow/Cylc-inspired Rich dashboard. The left side
+shows the execution hierarchy and individual task state; the right side shows a
+cycle matrix that makes it easy to see which scientific components have
+completed, are running, failed or are still waiting.
 
 Task names that follow the common `componentHH_action` convention are grouped
 automatically. For example, `jedi06_prepare`, `jedi06_submit` and
-`jedi06_validate` are presented under `JEDI 06Z` with the actions `Prepare`,
-`Submit` and `Validate`. The internal task names remain unchanged and continue
-to be used for state, logs and provenance.
+`jedi06_validate` appear under `JEDI 06Z`, while the cycle matrix summarizes the
+state of JEDI, MPAS and observation-processing stages across the available
+cycles.
 
-Typical output therefore emphasizes states such as `RUN`, `OK`, `REUSED`,
-`RERUN` and `FAIL`, followed by an end-of-run summary with elapsed time and the
-next useful action.
+During `swf run`, the dashboard is refreshed in place. Completed tasks show their
+elapsed time. The current activity is highlighted separately, and a final panel
+summarizes the result, elapsed time and next useful action.
+
+The workflow engine does not invent progress percentages. A stage is shown as
+`RUNNING` while its task is active unless the underlying scientific application
+provides a real progress signal in a future integration.
 
 ```bash
-# Concise scientific/operational view.
+# Live scientific dashboard in an interactive terminal.
 swf run workflow.yaml
+
+# Static dashboard showing the current state.
+swf status workflow.yaml
 
 # Include internal task names, executor names and rendered commands.
 swf run workflow.yaml --verbose
 
-# Default: color only when stdout is interactive.
-swf status workflow.yaml --color auto
+# Stable linear output for logs, CI or shell processing.
+swf run workflow.yaml --plain
 
-# Demonstrations or terminals that do not advertise color.
-swf run workflow.yaml --color always
-
-# CI logs, redirected output or plain text terminals.
+# Disable ANSI color while keeping the same information.
 swf status workflow.yaml --color never
 ```
 
-`--color` accepts `auto`, `always` and `never`. Setting `NO_COLOR` also disables
-automatic color. The terminal renderer uses only Python's standard library and
-the detailed stdout/stderr and provenance records remain stored separately
-below the workflow work directory.
+Redirected output automatically falls back to the linear representation. `--plain`
+can be used to force that representation even in an interactive terminal.
+`--color` accepts `auto`, `always` and `never`; setting `NO_COLOR` also disables
+automatic color.
+
+The dashboard is presentation only. Task state, stdout/stderr, commands,
+signatures and provenance remain stored separately below the workflow work
+directory and are unaffected by the terminal renderer.
 
 ## Workflow format
 
