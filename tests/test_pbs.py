@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import json
 import stat
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from simpleworkflow.engine import WorkflowEngine
 from simpleworkflow.pbs import PbsExecutor
@@ -42,7 +45,7 @@ def _write_fake_qstat(path: Path) -> Path:
     path.write_text(
         "#!/usr/bin/env python3\n"
         "print('job_state = F')\n"
-        "print('Variable_List = SECRET_TOKEN=must-not-be-persisted')\n"
+        "print('Variable_List = PRIVATE_SETTING=not-for-log')\n"
         "print('Exit_status = 0')\n",
         encoding="utf-8",
     )
@@ -130,4 +133,57 @@ def test_pbs_executor_waits_for_job_and_records_rendered_script(tmp_path: Path) 
     assert "state=F" in launcher_log
     assert "exit_status=0" in launcher_log
     assert "Variable_List" not in launcher_log
-    assert "SECRET_TOKEN" not in launcher_log
+    assert "PRIVATE_SETTING" not in launcher_log
+
+
+def test_pbs_interrupt_requests_qdel_and_records_cancellation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        if command[0] == "qsub":
+            return subprocess.CompletedProcess(command, 0, "12345.fake\n", "")
+        if command[0] == "qstat":
+            return subprocess.CompletedProcess(command, 0, "job_state = R\n", "")
+        if command[0] == "qdel":
+            return subprocess.CompletedProcess(command, 0, "", "")
+        raise AssertionError(f"unexpected command: {command}")
+
+    def interrupt_sleep(_seconds: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("simpleworkflow.pbs.subprocess.run", fake_run)
+    monkeypatch.setattr("simpleworkflow.pbs.time.sleep", interrupt_sleep)
+
+    attempt = tmp_path / "attempt"
+    attempt.mkdir()
+    executor = PbsExecutor(
+        {
+            "qsub": "qsub",
+            "qstat": "qstat",
+            "qdel": "qdel",
+            "poll_interval": 0.01,
+            "inherit_environment": True,
+            "block": True,
+        }
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        executor.run(
+            "analysis",
+            [sys.executable, "-c", "print('ok')"],
+            stdout_path=attempt / "stdout.log",
+            stderr_path=attempt / "stderr.log",
+        )
+
+    scheduler = json.loads((attempt / "scheduler.json").read_text(encoding="utf-8"))
+    assert scheduler["job_id"] == "12345.fake"
+    assert scheduler["cancel_requested"] is True
+    assert scheduler["qdel_argv"] == ["qdel", "12345.fake"]
+    assert scheduler["qdel_return_code"] == 0
+    assert ["qdel", "12345.fake"] in calls
+
+    launcher_log = (attempt / "stdout.log").read_text(encoding="utf-8")
+    assert "qdel: job_id=12345.fake return_code=0" in launcher_log
