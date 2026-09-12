@@ -196,11 +196,17 @@ def main(argv: list[str] | None = None) -> int:
                     engine=engine,
                 )
                 result = engine.run()
-                reporter.run_summary(
-                    _status_entries(engine),
-                    elapsed_seconds=time.monotonic() - started,
-                    exit_code=result,
-                )
+                if getattr(args, "dry_run", False):
+                    elapsed = TerminalReporter._format_elapsed(time.monotonic() - started)
+                    reporter.note(
+                        f"Dry run complete in {elapsed}. No task state was changed."
+                    )
+                else:
+                    reporter.run_summary(
+                        _status_entries(engine),
+                        elapsed_seconds=time.monotonic() - started,
+                        exit_code=result,
+                    )
                 if result != 0:
                     return result
             finally:
