@@ -256,7 +256,7 @@ class TerminalReporter:
     def _task_tree_line(self, task_name: str) -> str:
         display = self._humanize_task(task_name)
         status = self._task_states.get(task_name, "pending")
-        symbol, label, style = self._status_parts(status)
+        symbol, _label, style = self._status_parts(status)
         elapsed = self._task_elapsed.get(task_name)
         duration = f" [dim]({self._format_elapsed(elapsed)})[/dim]" if elapsed is not None else ""
         technical = f" [dim]\[{escape(task_name)}\][/dim]" if self.verbose else ""
@@ -476,7 +476,7 @@ class TerminalReporter:
 
         if self._live is not None:
             self._refresh()
-        elif not self._dashboard_enabled:
+        else:
             self._linear_event(kind, task_name, message, executor)
 
     def plan_view(self, task_names: Iterable[str]) -> None:
