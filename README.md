@@ -13,13 +13,13 @@ reproducible workflow that can be installed and understood quickly.
 
 - YAML task definitions with explicit `argv` arguments, never shell command strings;
 - dependency-aware, sequential execution;
-- `plan`, `run`, `status` and `reset` commands;
+- `plan`, `run`, `status`, `reset` and interactive `tui` commands;
 - persistent SQLite task state and safe restart/reuse;
 - required input/output artifact validation;
 - per-attempt logs and provenance records;
 - ISO-8601 cycle expansion for scientific cases;
 - local execution and a small blocking PBS backend;
-- a Rich-based scientific terminal dashboard with a stable plain-text fallback.
+- concise Rich terminal progress plus an optional full-screen Textual monitor.
 
 ## Deliberate limits
 
@@ -47,58 +47,72 @@ python -m pip install -e ".[dev]"
 swf plan examples/hello.yaml
 swf run examples/hello.yaml
 swf status examples/hello.yaml
+swf tui examples/hello.yaml
 swf reset examples/hello.yaml
 ```
 
 Use `--force` to rerun successful tasks and `--dry-run` to inspect rendered
 argument vectors without launching processes.
 
-## Terminal dashboard
+## Terminal output
 
-Interactive terminals use an ecFlow/Cylc-inspired Rich dashboard. The left side
-shows the execution hierarchy and individual task state; the right side shows a
-cycle matrix that makes it easy to see which scientific components have
-completed, are running, failed or are still waiting.
+The normal CLI view is intended for scientific and operational users. It shows
+the workflow, execution mode, progress, human-facing stages and the final result
+without printing every rendered command.
 
 Task names that follow the common `componentHH_action` convention are grouped
 automatically. For example, `jedi06_prepare`, `jedi06_submit` and
-`jedi06_validate` appear under `JEDI 06Z`, while the cycle matrix summarizes the
-state of JEDI, MPAS and observation-processing stages across the available
-cycles.
+`jedi06_validate` are presented under `JEDI 06Z` with the actions `Prepare`,
+`Submit` and `Validate`. The internal task names remain unchanged and continue
+to be used for state, logs and provenance.
 
-During `swf run`, the dashboard is refreshed in place. Completed tasks show their
-elapsed time. The current activity is highlighted separately, and a final panel
-summarizes the result, elapsed time and next useful action.
-
-The workflow engine does not invent progress percentages. A stage is shown as
-`RUNNING` while its task is active unless the underlying scientific application
-provides a real progress signal in a future integration.
+Typical output emphasizes states such as `RUNNING`, `SUCCESS`, `REUSED`,
+`RERUN` and `FAILED`, followed by an end-of-run summary with elapsed time and
+the next useful action.
 
 ```bash
-# Live scientific dashboard in an interactive terminal.
+# Concise scientific/operational view.
 swf run workflow.yaml
 
-# Static dashboard showing the current state.
-swf status workflow.yaml
-
-# Include internal task names, executor names and rendered commands.
+# Include internal task names, executors and rendered commands.
 swf run workflow.yaml --verbose
 
-# Stable linear output for logs, CI or shell processing.
+# Stable linear output in an interactive terminal.
 swf run workflow.yaml --plain
 
-# Disable ANSI color while keeping the same information.
+# Demonstrations or terminals that do not advertise color.
+swf run workflow.yaml --color always
+
+# CI logs, redirected output or plain text terminals.
 swf status workflow.yaml --color never
 ```
 
-Redirected output automatically falls back to the linear representation. `--plain`
-can be used to force that representation even in an interactive terminal.
-`--color` accepts `auto`, `always` and `never`; setting `NO_COLOR` also disables
-automatic color.
+`--color` accepts `auto`, `always` and `never`. Setting `NO_COLOR` also disables
+automatic color. Detailed stdout/stderr and provenance records remain stored
+separately below the workflow work directory.
 
-The dashboard is presentation only. Task state, stdout/stderr, commands,
-signatures and provenance remain stored separately below the workflow work
-directory and are unaffected by the terminal renderer.
+## Interactive TUI
+
+`swf tui` opens a full-screen Textual monitor inspired by the operational ideas
+used by ecFlow and Cylc, while keeping workflow execution and persisted state
+independent of the interface.
+
+```bash
+swf tui workflow.yaml --workdir .simpleworkflow
+```
+
+The initial monitor is intentionally read-only. It provides:
+
+- a navigable hierarchy of workflow stages and tasks;
+- automatic refresh of task states from `state.sqlite3`;
+- a task inspector with executor, return code, PBS metadata when available and
+  configured resources;
+- the stdout/stderr tail from the newest immutable task attempt;
+- keyboard shortcuts for refresh, log clearing and exit.
+
+This separation is deliberate: monitoring should not change workflow state.
+Destructive operational actions such as scheduler cancellation or selective
+reruns can be added later with explicit confirmation and dedicated tests.
 
 ## Workflow format
 
