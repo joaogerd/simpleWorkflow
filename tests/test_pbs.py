@@ -6,6 +6,16 @@ import sys
 from pathlib import Path
 
 from simpleworkflow.engine import WorkflowEngine
+from simpleworkflow.pbs import PbsExecutor
+
+
+def test_pbs_rejects_directive_injection() -> None:
+    try:
+        PbsExecutor({"queue": "normal\n#PBS -l walltime=999:00:00"})
+    except ValueError as error:
+        assert "safe" in str(error)
+    else:
+        raise AssertionError("unsafe PBS queue was accepted")
 
 
 def _write_fake_qsub(path: Path) -> Path:

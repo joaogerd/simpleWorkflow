@@ -9,6 +9,7 @@ import yaml
 from .cycles import validate_cycle_mapping
 
 SUPPORTED_EXECUTORS = {"local", "pbs"}
+WORKFLOW_FORMAT_VERSION = 1
 SUPPORTED_INPUT_FINGERPRINTS = {"metadata", "sha256"}
 _GLOB_MARKERS = ("*", "?", "[")
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -226,17 +227,24 @@ def load_workflow(path: str | Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("Workflow file must contain a YAML mapping at the top level.")
 
-    _reject_unknown_keys(data, {"workflow", "context", "tasks", "cycle"}, "Workflow")
+    _reject_unknown_keys(
+        data, {"format_version", "workflow", "context", "tasks", "cycle"}, "Workflow"
+    )
+    # Files created before versioning are interpreted as version 1 for compatibility.
+    version = data.get("format_version", WORKFLOW_FORMAT_VERSION)
+    if version != WORKFLOW_FORMAT_VERSION:
+        raise ValueError(
+            f"'format_version' must be {WORKFLOW_FORMAT_VERSION}; received {version!r}."
+        )
+    data["format_version"] = version
     data.setdefault("workflow", {})
     data.setdefault("context", {})
     data.setdefault("tasks", [])
     if not isinstance(data["workflow"], dict):
         raise ValueError("'workflow' must be a mapping.")
     _reject_unknown_keys(data["workflow"], {"name"}, "'workflow'")
-    if "name" in data["workflow"] and (
-        not isinstance(data["workflow"]["name"], str) or not data["workflow"]["name"]
-    ):
-        raise ValueError("'workflow.name' must be a non-empty string.")
+    if not isinstance(data["workflow"].get("name"), str) or not data["workflow"]["name"]:
+        raise ValueError("'workflow.name' is required and must be a non-empty string.")
     if not isinstance(data["context"], dict):
         raise ValueError("'context' must be a mapping.")
     if any(not isinstance(key, str) or not key for key in data["context"]):

@@ -37,4 +37,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
       - name: Run tests with coverage
-        run: python -m pytest --cov=simpleworkflow --cov-report=term-missing
+        run: python -m pytest --cov=simpleworkflow --cov-report=term-missing --cov-fail-under=85
+      - name: Validate published examples
+        run: |
+          for workflow in examples/*.yaml examples/cycle/*.yaml; do
+            swf plan "$workflow" --color never
+          done
