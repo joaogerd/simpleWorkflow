@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import sys
+import traceback
 from collections.abc import Iterable
 from copy import deepcopy
 from typing import Any
@@ -53,20 +55,28 @@ def build_parser() -> argparse.ArgumentParser:
         prog="simpleworkflow",
         description="Lightweight YAML workflow runner for scientific pipelines.",
     )
-
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    for command in ("run", "plan", "status", "reset"):
+    for command in ("run", "plan", "status", "reset", "validate", "explain"):
         command_parser = subparsers.add_parser(command)
         command_parser.add_argument("workflow")
         command_parser.add_argument("--workdir", default=".simpleworkflow")
+        command_parser.add_argument(
+            "--debug", action="store_true", help="Show technical traceback details."
+        )
         _add_cycle_options(command_parser)
         _add_display_options(command_parser)
-
         if command == "run":
             command_parser.add_argument("--force", action="store_true")
             command_parser.add_argument("--dry-run", action="store_true")
-
+        if command in {"run", "plan", "validate", "explain"}:
+            command_parser.add_argument(
+                "--task",
+                action="append",
+                dest="selected_tasks",
+                metavar="NAME",
+                help="Select a task and include all of its dependencies; repeat as needed.",
+            )
     return parser
 
 
@@ -89,6 +99,7 @@ def _cycle_engines(
             force=getattr(args, "force", False),
             dry_run=getattr(args, "dry_run", False),
             reporter=reporter,
+            selected_tasks=set(args.selected_tasks) if getattr(args, "selected_tasks", None) else None,
         )
         return
 
@@ -109,6 +120,7 @@ def _cycle_engines(
             force=getattr(args, "force", False),
             dry_run=getattr(args, "dry_run", False),
             reporter=reporter,
+            selected_tasks=set(args.selected_tasks) if getattr(args, "selected_tasks", None) else None,
         )
 
 
@@ -118,7 +130,30 @@ def _heading(command: str, config: dict[str, Any], cycle: CycleContext | None) -
     return f"{title} · {cycle.cycle_time}" if cycle is not None else title
 
 
-def main(argv: list[str] | None = None) -> int:
+def _reconcile_after_interrupt(engine: WorkflowEngine) -> None:
+    """Recover task state conservatively after an interactive interruption."""
+    running_pbs = {
+        task["name"]
+        for task in engine.tasks
+        if task.get("executor", "local") == "pbs"
+        and engine.state.get_status(engine.state_key, task["name"]) == "running"
+    }
+    engine.state.reconcile_running(engine.state_key)
+    for task_name in running_pbs:
+        state = engine.state.get_task_state(engine.state_key, task_name)
+        if state is not None and state.status == "interrupted":
+            engine.state.set_status(
+                engine.state_key,
+                task_name,
+                "unknown",
+                None,
+                state.signature,
+                "submissão PBS interrompida antes de confirmar o job; verifique o escalonador",
+                state.attempt_dir,
+            )
+
+
+def _main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_workflow(args.workflow)
     reporter = TerminalReporter(color=args.color)
@@ -142,6 +177,9 @@ def main(argv: list[str] | None = None) -> int:
                 result = engine.run()
                 if result != 0:
                     return result
+            except KeyboardInterrupt:
+                _reconcile_after_interrupt(engine)
+                raise
             finally:
                 engine.state.close()
         return 0
@@ -165,7 +203,56 @@ def main(argv: list[str] | None = None) -> int:
         reporter.note("Workflow state reset.")
         return 0
 
+    if args.command == "validate":
+        failed = False
+        for cycle, engine in _cycle_engines(config, args, reporter):
+            try:
+                reporter.heading(_heading("validate", config, cycle))
+                problems = engine.validate()
+                if problems:
+                    failed = True
+                    for problem in problems:
+                        reporter.note(problem)
+                else:
+                    reporter.note("Workflow válido e pronto para execução.")
+            finally:
+                engine.state.close()
+        return 2 if failed else 0
+
+    if args.command == "explain":
+        for cycle, engine in _cycle_engines(config, args, reporter):
+            try:
+                reporter.heading(_heading("explain", config, cycle))
+                engine.explain()
+            finally:
+                engine.state.close()
+        return 0
+
     return 2
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = list(argv) if argv is not None else sys.argv[1:]
+    debug = "--debug" in arguments
+    try:
+        return _main(arguments)
+    except KeyboardInterrupt:
+        if debug:
+            traceback.print_exc()
+        else:
+            print(
+                "simpleworkflow: execução interrompida pelo usuário; "
+                "o estado foi preservado para recuperação segura.",
+                file=sys.stderr,
+            )
+        return 130
+    except (FileNotFoundError, ValueError, RuntimeError) as error:
+        if debug:
+            traceback.print_exc()
+        else:
+            print(f"simpleworkflow: {error}", file=sys.stderr)
+            print("Use --debug to show technical details.", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

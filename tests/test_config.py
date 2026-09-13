@@ -7,6 +7,15 @@ import pytest
 from simpleworkflow.config import load_workflow
 
 
+def test_rejects_unsupported_format_version(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text(
+        "format_version: 2\nworkflow: {name: test}\ntasks: []\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="format_version"):
+        load_workflow(workflow)
+
+
 def write(path: Path, text: str) -> Path:
     path.write_text(text, encoding="utf-8")
     return path
@@ -28,16 +37,16 @@ tasks:
 
 
 def test_rejects_shell_run_field(tmp_path: Path) -> None:
-    workflow = write(tmp_path / "workflow.yaml", "tasks: [{name: task, run: 'echo no'}]\n")
+    workflow = write(tmp_path / "workflow.yaml", "workflow: {name: test}\ntasks: [{name: task, run: 'echo no'}]\n")
     with pytest.raises(ValueError, match="unsupported field 'run'"):
         load_workflow(workflow)
 
 
 def test_rejects_missing_or_invalid_argv(tmp_path: Path) -> None:
-    missing = write(tmp_path / "missing.yaml", "tasks: [{name: task}]\n")
+    missing = write(tmp_path / "missing.yaml", "workflow: {name: test}\ntasks: [{name: task}]\n")
     with pytest.raises(ValueError, match="must define 'argv'"):
         load_workflow(missing)
-    invalid = write(tmp_path / "invalid.yaml", "tasks: [{name: task, argv: []}]\n")
+    invalid = write(tmp_path / "invalid.yaml", "workflow: {name: test}\ntasks: [{name: task, argv: []}]\n")
     with pytest.raises(ValueError, match="non-empty list"):
         load_workflow(invalid)
 
@@ -45,7 +54,7 @@ def test_rejects_missing_or_invalid_argv(tmp_path: Path) -> None:
 def test_rejects_unknown_executor(tmp_path: Path) -> None:
     workflow = write(
         tmp_path / "workflow.yaml",
-        "tasks: [{name: task, argv: [python], executor: slurm}]\n",
+        "workflow: {name: test}\ntasks: [{name: task, argv: [python], executor: slurm}]\n",
     )
     with pytest.raises(ValueError, match="unsupported executor"):
         load_workflow(workflow)
@@ -94,6 +103,7 @@ def test_rejects_invalid_artifact_contract(
     workflow = write(
         tmp_path / "workflow.yaml",
         f"""
+workflow: {{name: test}}
 tasks:
   - name: task
     argv: [python]

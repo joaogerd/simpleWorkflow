@@ -56,3 +56,25 @@ def test_successful_task_reruns_when_required_output_disappears(tmp_path: Path) 
     assert engine.run() == 0
     assert output.read_text(encoding="utf-8") == "analysis"
     assert engine.state.get_status("rerun-output", "run") == "success"
+
+
+def test_nonempty_output_check_rejects_empty_file(tmp_path: Path) -> None:
+    output = tmp_path / "analysis.nc"
+    config = {
+        "workflow": {"name": "empty-output"},
+        "tasks": [
+            {
+                "name": "run",
+                "argv": [sys.executable, "-c", f"open({str(output)!r}, 'w').close()"],
+                "outputs": {
+                    "required": [str(output)],
+                    "checks": [{"path": str(output), "kind": "file", "nonempty": True}],
+                },
+            }
+        ],
+    }
+    engine = WorkflowEngine(config, workdir=tmp_path / ".simpleworkflow")
+    assert engine.run() == INVALID_OUTPUT_EXIT_CODE
+    state = engine.state.get_task_state("empty-output", "run")
+    assert state is not None and state.status == "invalid-output"
+    assert state.reason and "empty" in state.reason

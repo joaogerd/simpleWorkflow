@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import socket
+import tempfile
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
+
+import yaml
 
 RUN_SCHEMA_VERSION = 1
 
@@ -40,6 +45,7 @@ class AttemptPaths:
     stdout_path: Path
     stderr_path: Path
     metadata_path: Path
+    started_path: Path
 
 
 class RunRecorder:
@@ -93,6 +99,31 @@ class RunRecorder:
             stdout_path=stdout_path,
             stderr_path=stderr_path,
             metadata_path=directory / "metadata.json",
+            started_path=directory / "started.json",
+        )
+
+    def write_workflow_snapshot(self, config: Mapping[str, Any]) -> None:
+        public_config = {
+            key: value for key, value in config.items() if not key.startswith("__")
+        }
+        self._write_exclusive_text(
+            self.directory / "workflow.yaml",
+            yaml.safe_dump(public_config, sort_keys=False, allow_unicode=True),
+        )
+
+    def write_started(self, attempt: AttemptPaths, payload: Mapping[str, Any]) -> None:
+        self._write_exclusive_json(
+            attempt.started_path,
+            {
+                "schema_version": RUN_SCHEMA_VERSION,
+                "run_id": attempt.run_id,
+                "workflow": self.workflow_name,
+                "task": attempt.task_name,
+                "attempt": attempt.attempt,
+                "started_at": _utc_timestamp(),
+                "controller": {"pid": os.getpid(), "host": socket.gethostname()},
+                **dict(payload),
+            },
         )
 
     def write_metadata(
@@ -113,9 +144,37 @@ class RunRecorder:
             **dict(payload),
         }
         self._write_exclusive_json(attempt.metadata_path, record)
+        digest = hashlib.sha256(attempt.metadata_path.read_bytes()).hexdigest()
+        self._write_exclusive_text(attempt.directory / "metadata.sha256", digest + "\n")
+
+    @staticmethod
+    def _write_exclusive_text(path: Path, text: str) -> None:
+        RunRecorder._atomic_exclusive_write(path, text)
 
     @staticmethod
     def _write_exclusive_json(path: Path, payload: Mapping[str, Any]) -> None:
         serialized = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-        with path.open("x", encoding="utf-8") as stream:
-            stream.write(serialized)
+        RunRecorder._atomic_exclusive_write(path, serialized)
+
+    @staticmethod
+    def _atomic_exclusive_write(path: Path, serialized: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(serialized)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if path.exists():
+                raise FileExistsError(path)
+            os.link(temporary, path)
+            directory_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            temporary.unlink(missing_ok=True)

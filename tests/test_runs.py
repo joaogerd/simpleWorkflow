@@ -41,6 +41,7 @@ def test_attempt_metadata_is_written_once(tmp_path) -> None:
     metadata = json.loads(attempt.metadata_path.read_text(encoding="utf-8"))
     assert metadata["status"] == "success"
     assert metadata["logs"] == {"stdout": "stdout.log", "stderr": "stderr.log"}
+    assert (attempt.directory / "metadata.sha256").is_file()
 
     with pytest.raises(FileExistsError):
         recorder.write_metadata(attempt, {"status": "failed"})

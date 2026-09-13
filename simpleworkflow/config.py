@@ -9,6 +9,7 @@ import yaml
 from .cycles import validate_cycle_mapping
 
 SUPPORTED_EXECUTORS = {"local", "pbs"}
+WORKFLOW_FORMAT_VERSION = 1
 SUPPORTED_INPUT_FINGERPRINTS = {"metadata", "sha256"}
 _GLOB_MARKERS = ("*", "?", "[")
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -26,6 +27,7 @@ _TASK_FIELDS = {
     "inputs",
     "outputs",
     "input_fingerprint",
+    "timeout",
 }
 _PBS_FIELDS = {
     "queue",
@@ -39,6 +41,9 @@ _PBS_FIELDS = {
     "qsub",
     "block",
     "inherit_environment",
+    "qstat",
+    "qdel",
+    "poll_interval",
 }
 
 
@@ -83,7 +88,7 @@ def _validate_artifact_group(value: Any, field: str, task_name: str) -> None:
     if not isinstance(value, dict):
         raise ValueError(f"Task '{task_name}' field '{field}' must be a mapping.")
 
-    allowed_keys = {"required", "optional"} if field == "inputs" else {"required"}
+    allowed_keys = {"required", "optional"} if field == "inputs" else {"required", "checks"}
     unknown_keys = set(value) - allowed_keys
     if unknown_keys:
         unknown = ", ".join(sorted(unknown_keys))
@@ -97,6 +102,28 @@ def _validate_artifact_group(value: Any, field: str, task_name: str) -> None:
         _validate_artifact_paths(
             value["optional"], f"{field}.optional", task_name, allow_globs=True
         )
+    if field == "outputs" and "checks" in value:
+        checks = value["checks"]
+        if not isinstance(checks, list):
+            raise ValueError(f"Task '{task_name}' field 'outputs.checks' must be a list.")
+        for index, check in enumerate(checks, 1):
+            if not isinstance(check, dict):
+                raise ValueError(f"Task '{task_name}' output check {index} must be a mapping.")
+            _reject_unknown_keys(
+                check, {"path", "kind", "nonempty", "min_size"},
+                f"Task '{task_name}' output check {index}",
+            )
+            if not isinstance(check.get("path"), str) or not check["path"]:
+                raise ValueError(f"Task '{task_name}' output check {index} requires a path.")
+            if check.get("kind", "any") not in {"any", "file", "directory"}:
+                raise ValueError(f"Task '{task_name}' output check {index} has invalid kind.")
+            if "nonempty" in check and not isinstance(check["nonempty"], bool):
+                raise ValueError(f"Task '{task_name}' output check {index} nonempty must be boolean.")
+            minimum = check.get("min_size")
+            if minimum is not None and (
+                not isinstance(minimum, int) or isinstance(minimum, bool) or minimum < 0
+            ):
+                raise ValueError(f"Task '{task_name}' output check {index} min_size is invalid.")
 
 
 def _validate_positive_integer(value: Any, field: str, task_name: str) -> None:
@@ -121,7 +148,7 @@ def _validate_pbs(task: dict[str, Any], task_name: str) -> None:
         raise ValueError(f"Task '{task_name}' field 'pbs' must be a mapping.")
     _reject_unknown_keys(pbs, _PBS_FIELDS, f"Task '{task_name}' field 'pbs'")
 
-    for field in ("queue", "project", "job_name", "qsub"):
+    for field in ("queue", "project", "job_name", "qsub", "qstat", "qdel"):
         if field in pbs and (not isinstance(pbs[field], str) or not pbs[field]):
             raise ValueError(f"Task '{task_name}' field 'pbs.{field}' must be a non-empty string.")
     if "walltime" in pbs and (
@@ -142,6 +169,16 @@ def _validate_pbs(task: dict[str, Any], task_name: str) -> None:
     for field in ("block", "inherit_environment"):
         if field in pbs and not isinstance(pbs[field], bool):
             raise ValueError(f"Task '{task_name}' field 'pbs.{field}' must be a boolean.")
+    if "poll_interval" in pbs:
+        interval = pbs["poll_interval"]
+        if not _contains_template(interval) and (
+            not isinstance(interval, (int, float))
+            or isinstance(interval, bool)
+            or interval <= 0
+        ):
+            raise ValueError(
+                f"Task '{task_name}' field 'pbs.poll_interval' must be a positive number."
+            )
     if pbs.get("block", True) is not True:
         raise ValueError(
             f"Task '{task_name}' field 'pbs.block' must be true; non-blocking PBS is unsupported."
@@ -200,6 +237,14 @@ def _validate_task(task: Any) -> None:
             raise ValueError(
                 f"Task '{name}' field 'env' contains invalid environment variable name(s): {names}."
             )
+    if "timeout" in task:
+        timeout = task["timeout"]
+        if _contains_template(timeout):
+            pass
+        elif not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0:
+            raise ValueError(f"Task '{name}' field 'timeout' must be a positive number.")
+        if executor != "local":
+            raise ValueError(f"Task '{name}' field 'timeout' is supported only locally.")
 
     if "inputs" in task:
         _validate_artifact_group(task["inputs"], "inputs", name)
@@ -226,17 +271,24 @@ def load_workflow(path: str | Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("Workflow file must contain a YAML mapping at the top level.")
 
-    _reject_unknown_keys(data, {"workflow", "context", "tasks", "cycle"}, "Workflow")
+    _reject_unknown_keys(
+        data, {"format_version", "workflow", "context", "tasks", "cycle"}, "Workflow"
+    )
+    # Files created before versioning are interpreted as version 1 for compatibility.
+    version = data.get("format_version", WORKFLOW_FORMAT_VERSION)
+    if version != WORKFLOW_FORMAT_VERSION:
+        raise ValueError(
+            f"'format_version' must be {WORKFLOW_FORMAT_VERSION}; received {version!r}."
+        )
+    data["format_version"] = version
     data.setdefault("workflow", {})
     data.setdefault("context", {})
     data.setdefault("tasks", [])
     if not isinstance(data["workflow"], dict):
         raise ValueError("'workflow' must be a mapping.")
     _reject_unknown_keys(data["workflow"], {"name"}, "'workflow'")
-    if "name" in data["workflow"] and (
-        not isinstance(data["workflow"]["name"], str) or not data["workflow"]["name"]
-    ):
-        raise ValueError("'workflow.name' must be a non-empty string.")
+    if not isinstance(data["workflow"].get("name"), str) or not data["workflow"]["name"]:
+        raise ValueError("'workflow.name' is required and must be a non-empty string.")
     if not isinstance(data["context"], dict):
         raise ValueError("'context' must be a mapping.")
     if any(not isinstance(key, str) or not key for key in data["context"]):

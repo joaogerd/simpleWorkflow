@@ -13,12 +13,12 @@ reproducible workflow that can be installed and understood quickly.
 
 - YAML task definitions with explicit `argv` arguments, never shell command strings;
 - dependency-aware, sequential execution;
-- `plan`, `run`, `status` and `reset` commands;
-- persistent SQLite task state and safe restart/reuse;
+- `plan`, `validate`, `run`, `status`, `explain` and `reset` commands;
+- exclusive execution, persistent state and conservative restart/reuse;
 - required input/output artifact validation;
 - per-attempt logs and provenance records;
 - ISO-8601 cycle expansion for scientific cases;
-- local execution and a small blocking PBS backend;
+- controlled local execution and a small PBS foreground-wait backend;
 - friendly, color-aware progress output with no runtime dependency.
 
 ## Deliberate limits
@@ -45,8 +45,10 @@ python -m pip install -e ".[dev]"
 
 ```bash
 swf plan examples/hello.yaml
+swf validate examples/hello.yaml
 swf run examples/hello.yaml
 swf status examples/hello.yaml
+swf explain examples/hello.yaml
 swf reset examples/hello.yaml
 ```
 
@@ -79,6 +81,8 @@ A task uses `argv`, never a shell command string. Each list item is exactly one
 program argument:
 
 ```yaml
+format_version: 1
+
 workflow:
   name: hello
 
@@ -96,10 +100,9 @@ use context placeholders such as `{python}`, `{case_name}` and
 
 ## PBS execution
 
-PBS tasks remain intentionally simple. The runner creates one `job.pbs` file,
-submits it with `qsub -W block=true`, and waits for its final result before
-advancing the DAG. This preserves the same success/failure semantics used by
-local tasks.
+PBS tasks remain intentionally simple. The runner creates one `job.pbs`, submits
+it with `qsub`, records the job identifier immediately and consults `qstat` in
+the foreground until a final result is available. No service or daemon is used.
 
 ```yaml
 - name: analysis
@@ -139,8 +142,13 @@ Runtime files are written below `.simpleworkflow/` by default:
 ```
 
 A successful task is reused only when its signature still matches and required
-outputs still exist. Signatures include the rendered invocation, declared
-environment, workflow file and declared input fingerprints.
+outputs pass their declared checks. Signatures include the effective task,
+execution backend, declared environment, safe hashes of relevant inherited
+environment values, executable identity and declared input fingerprints. Each
+run also preserves the effective YAML.
+
+See [operations and recovery](docs/operations.md) before using a workflow for a
+scientific baseline or PBS campaign.
 
 ## Development
 
@@ -152,8 +160,8 @@ python -m pytest --cov=simpleworkflow
 
 ## Legacy implementation
 
-The `app/` and `unittests/` directories are historical code from before the
-package redesign. They are not distributed, not run by CI and must not be used
+The `legacy/` directory contains historical code from before the package
+redesign. It is not distributed, not run by CI and must not be used
 by new workflows. See [legacy notes](docs/legacy.md).
 
 ## License

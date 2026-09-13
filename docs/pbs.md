@@ -9,13 +9,12 @@ database, polling loop or a second workflow language.
 A PBS task generates an auditable `job.pbs` script and submits it with:
 
 ```bash
-qsub -W block=true -V job.pbs
+qsub -V job.pbs
 ```
 
-The `-W block=true` behavior is essential: `simpleWorkflow` advances only after
-the PBS job has reached its final result. The task is therefore marked as
-successful only when the underlying job completed successfully, rather than
-when it was merely accepted by the queue.
+The returned identifier is recorded immediately. The same foreground process
+then runs `qstat -xf JOB_ID` until the job has a final state. The task is marked
+successful only when PBS reports `Exit_status = 0`.
 
 ## Example
 
@@ -49,6 +48,7 @@ tasks:
       omp_threads: 1
       inherit_environment: true
       block: true
+      poll_interval: 5
 ```
 
 The runner creates a PBS script with the corresponding `#PBS` directives and a
@@ -68,13 +68,15 @@ still never accepts a free-form shell command string.
 | `omp_threads` | unset | Exports `OMP_NUM_THREADS` unless explicitly set in `env`. |
 | `job_name` | task name | PBS job name. |
 | `qsub` | `qsub` | Submission command, useful for site wrappers or tests. |
+| `qstat` | `qstat` | Status command used with `-xf JOB_ID`. |
+| `qdel` | `qdel` | Cancellation command used after an interactive interruption. |
+| `poll_interval` | `5` | Seconds between status queries. |
 | `inherit_environment` | `true` | Adds `-V` to export the submission environment. |
-| `block` | `true` | Must remain true in this version. |
+| `block` | `true` | The controller remains in the foreground until completion. |
 
-Non-blocking submission is intentionally rejected. Supporting it correctly
-would require a durable scheduler state machine, monitoring, cancellation and
-recovery logic; that would violate the project goal of remaining small and easy
-to trust.
+Detached submission is intentionally rejected. Waiting remains inside the
+foreground command and requires no service. If scheduler state cannot be
+confirmed after an interruption, automatic repetition is blocked.
 
 ## Runtime records
 
@@ -100,12 +102,12 @@ credentials or machine-specific values.
 Before using the backend for a scientific baseline, run one small job on the
 target system and confirm that:
 
-1. `qsub -W block=true` waits for the job and propagates a non-zero job exit
-   status;
-2. the compute nodes can see the workflow working directory and the attempt
+1. `qsub` returns a parseable job identifier;
+2. `qstat -xf JOB_ID` reports final state and `Exit_status`;
+3. the compute nodes can see the workflow working directory and the attempt
    directory;
-3. PBS honors the requested `-o` and `-e` paths;
-4. the intended module/environment setup reaches the job through `-V` or is
+4. PBS honors the requested `-o` and `-e` paths;
+5. the intended module/environment setup reaches the job through `-V` or is
    initialized by the explicit task wrapper.
 
 For JACI, keep the HPC environment setup in a versioned wrapper from the

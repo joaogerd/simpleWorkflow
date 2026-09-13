@@ -129,3 +129,39 @@ def test_success_state_is_invalidated_when_required_input_disappears(tmp_path: P
 
     assert engine.run() == 2
     assert engine.state.get_status("stale-input", "task") == "invalid-input"
+
+
+def test_local_timeout_terminates_process_group(tmp_path: Path) -> None:
+    config = {
+        "workflow": {"name": "timeout"},
+        "tasks": [
+            {
+                "name": "slow",
+                "argv": [sys.executable, "-c", "import time; time.sleep(30)"],
+                "timeout": 0.05,
+            }
+        ],
+    }
+    engine = WorkflowEngine(config, workdir=tmp_path / ".simpleworkflow")
+    assert engine.run() == 124
+    state = engine.state.get_task_state("timeout", "slow")
+    assert state is not None and state.status == "failed"
+    attempt = next((tmp_path / ".simpleworkflow" / "runs").glob("*/tasks/*/attempt-001"))
+    assert (attempt / "process.json").is_file()
+
+
+def test_same_workflow_name_from_different_files_uses_independent_state(tmp_path: Path) -> None:
+    first = tmp_path / "first.yaml"
+    second = tmp_path / "second.yaml"
+    first.write_text("workflow: {name: repeated}\n", encoding="utf-8")
+    second.write_text("workflow: {name: repeated}\n", encoding="utf-8")
+    base = {"workflow": {"name": "repeated"}, "tasks": []}
+    first_engine = WorkflowEngine(
+        {**base, "__simpleworkflow__": {"source_path": str(first), "source_dir": str(tmp_path)}},
+        workdir=tmp_path / ".simpleworkflow",
+    )
+    second_engine = WorkflowEngine(
+        {**base, "__simpleworkflow__": {"source_path": str(second), "source_dir": str(tmp_path)}},
+        workdir=tmp_path / ".simpleworkflow",
+    )
+    assert first_engine.state_key != second_engine.state_key

@@ -1,10 +1,13 @@
-"""Small blocking PBS execution backend for simpleWorkflow."""
+"""Small foreground-wait PBS execution backend for simpleWorkflow."""
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import shlex
 import subprocess
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -14,18 +17,91 @@ from .executor import ExecutionResult
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _JOB_ID = re.compile(r"(?m)^\s*([0-9]+(?:\.[A-Za-z0-9_.-]+)?)\s*$")
 _WALLTIME = re.compile(r"^\d{1,3}:\d{2}:\d{2}$")
+_DIRECTIVE_VALUE = re.compile(r"^[A-Za-z0-9_.@/+:-]+$")
+_JOB_STATE = re.compile(r"(?m)^\s*job_state\s*=\s*([A-Za-z])\s*$")
+_EXIT_STATUS = re.compile(r"(?m)^\s*Exit_status\s*=\s*(-?\d+)\s*$")
 
 
 class PbsExecutor:
     """Submit one task to PBS and wait for the final job result.
 
-    This backend intentionally supports only blocking submission through
-    ``qsub -W block=true``. A successful simpleWorkflow task therefore means
-    the PBS job completed successfully, not merely that it entered a queue.
+    Submission returns a job identifier immediately; this foreground process
+    then consults PBS until completion. Success means that the job completed
+    successfully, not merely that it entered a queue.
     """
 
     def __init__(self, options: Mapping[str, Any]):
         self.options = dict(options)
+        self._validate_options()
+
+    @staticmethod
+    def _directive_value(value: Any, field: str) -> str:
+        if not isinstance(value, str) or not value or not _DIRECTIVE_VALUE.fullmatch(value):
+            raise ValueError(
+                f"PBS field '{field}' contains characters that are not safe in a directive."
+            )
+        return value
+
+    def _validate_options(self) -> None:
+        for field in ("queue", "project"):
+            if field in self.options:
+                self._directive_value(self.options[field], field)
+        if "qsub" in self.options:
+            value = self.options["qsub"]
+            if not isinstance(value, str) or not value or any(ord(char) < 32 for char in value):
+                raise ValueError("PBS field 'qsub' must be a safe non-empty command.")
+            if not shlex.split(value):
+                raise ValueError("PBS field 'qsub' must resolve to a command.")
+        for field in ("qstat", "qdel"):
+            if field in self.options:
+                value = self.options[field]
+                if not isinstance(value, str) or not value or any(ord(char) < 32 for char in value):
+                    raise ValueError(f"PBS field '{field}' must be a safe non-empty command.")
+                if not shlex.split(value):
+                    raise ValueError(f"PBS field '{field}' must resolve to a command.")
+        if "walltime" in self.options:
+            self._walltime(self.options["walltime"])
+        for field in ("select", "ncpus", "mpiprocs", "omp_threads"):
+            if field in self.options:
+                self._positive_integer(self.options[field], field)
+        if self.options.get("block", True) is not True:
+            raise ValueError("PBS non-blocking submission is intentionally unsupported.")
+        interval = self.options.get("poll_interval", 5)
+        try:
+            interval = float(interval)
+        except (TypeError, ValueError) as error:
+            raise ValueError("PBS field 'poll_interval' must be a positive number.") from error
+        if interval <= 0:
+            raise ValueError("PBS field 'poll_interval' must be a positive number.")
+        self.options["poll_interval"] = interval
+
+    @staticmethod
+    def _write_scheduler_record(path: Path, payload: Mapping[str, Any]) -> None:
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(dict(payload), sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+
+    @staticmethod
+    def _pbs_result(output: str) -> int | None:
+        state = _JOB_STATE.search(output)
+        if not state or state.group(1).upper() not in {"F", "X"}:
+            return None
+        status = _EXIT_STATUS.search(output)
+        return int(status.group(1)) if status else 75
+
+    @staticmethod
+    def _scheduler_status_line(job_id: str, output: str) -> str:
+        """Return a compact scheduler status without persisting qstat payloads."""
+        state_match = _JOB_STATE.search(output)
+        exit_match = _EXIT_STATUS.search(output)
+
+        state = state_match.group(1).upper() if state_match else "?"
+        fields = [f"job_id={job_id}", f"state={state}"]
+
+        if exit_match:
+            fields.append(f"exit_status={exit_match.group(1)}")
+
+        return "[simpleworkflow] qstat: " + " ".join(fields) + "\n"
 
     @staticmethod
     def _safe_job_name(value: str) -> str:
@@ -73,26 +149,22 @@ class PbsExecutor:
 
         queue = self.options.get("queue")
         if queue:
-            lines.append(f"#PBS -q {queue}")
+            lines.append(f"#PBS -q {self._directive_value(queue, 'queue')}")
 
         project = self.options.get("project")
         if project:
-            lines.append(f"#PBS -A {project}")
+            lines.append(f"#PBS -A {self._directive_value(project, 'project')}")
 
         if "walltime" in self.options:
             lines.append(f"#PBS -l walltime={self._walltime(self.options['walltime'])}")
 
-        has_select = any(
-            key in self.options for key in ("select", "ncpus", "mpiprocs")
-        )
+        has_select = any(key in self.options for key in ("select", "ncpus", "mpiprocs"))
         if has_select:
             select = self._positive_integer(self.options.get("select", 1), "select")
             resources = [f"select={select}"]
             for key in ("ncpus", "mpiprocs"):
                 if key in self.options:
-                    resources.append(
-                        f"{key}={self._positive_integer(self.options[key], key)}"
-                    )
+                    resources.append(f"{key}={self._positive_integer(self.options[key], key)}")
             lines.append(f"#PBS -l {':'.join(resources)}")
 
         lines.extend(
@@ -108,9 +180,7 @@ class PbsExecutor:
 
         task_env = dict(env or {})
         if "omp_threads" in self.options:
-            omp_threads = self._positive_integer(
-                self.options["omp_threads"], "omp_threads"
-            )
+            omp_threads = self._positive_integer(self.options["omp_threads"], "omp_threads")
             task_env.setdefault("OMP_NUM_THREADS", str(omp_threads))
         for key, value in sorted(task_env.items()):
             if not _ENV_NAME.fullmatch(key):
@@ -134,8 +204,10 @@ class PbsExecutor:
         env: Mapping[str, str] | None = None,
         stdout_path: str | Path | None = None,
         stderr_path: str | Path | None = None,
+        timeout: float | None = None,
     ) -> ExecutionResult:
-        """Render a PBS script, submit it in blocking mode and return its result."""
+        """Submit one PBS job, persist its ID and wait in the foreground."""
+        del timeout
         if stdout_path is None or stderr_path is None:
             raise ValueError("PBS execution requires attempt stdout and stderr paths.")
         if self.options.get("block", True) is not True:
@@ -162,7 +234,7 @@ class PbsExecutor:
         qsub = shlex.split(str(self.options.get("qsub", "qsub")))
         if not qsub:
             raise ValueError("PBS field 'qsub' must resolve to a command.")
-        command = [*qsub, "-W", "block=true"]
+        command = [*qsub]
         if self.options.get("inherit_environment", True):
             command.append("-V")
         command.append(str(script_path.resolve(strict=False)))
@@ -181,7 +253,7 @@ class PbsExecutor:
                 return_code=127,
                 metadata={
                     "executor": "pbs",
-                    "wait_mode": "block",
+                    "wait_mode": "foreground-poll",
                     "qsub_argv": command,
                     "script": str(script_path.resolve(strict=False)),
                     "job_stdout": str(worker_stdout.resolve(strict=False)),
@@ -193,15 +265,69 @@ class PbsExecutor:
         self._write(submit_stdout, completed.stdout)
         self._write(submit_stderr, completed.stderr)
         combined_output = f"{completed.stdout}\n{completed.stderr}"
-        return ExecutionResult(
-            return_code=completed.returncode,
-            metadata={
-                "executor": "pbs",
-                "wait_mode": "block",
-                "qsub_argv": command,
-                "script": str(script_path.resolve(strict=False)),
-                "job_id": self._job_id(combined_output),
-                "job_stdout": str(worker_stdout.resolve(strict=False)),
-                "job_stderr": str(worker_stderr.resolve(strict=False)),
-            },
-        )
+        job_id = self._job_id(combined_output)
+        base_metadata = {
+            "executor": "pbs",
+            "wait_mode": "foreground-poll",
+            "qsub_argv": command,
+            "script": str(script_path.resolve(strict=False)),
+            "job_id": job_id,
+            "job_stdout": str(worker_stdout.resolve(strict=False)),
+            "job_stderr": str(worker_stderr.resolve(strict=False)),
+        }
+        if completed.returncode != 0 or job_id is None:
+            return ExecutionResult(return_code=completed.returncode or 75, metadata=base_metadata)
+
+        scheduler_record = attempt_dir / "scheduler.json"
+        self._write_scheduler_record(scheduler_record, base_metadata)
+        qstat = shlex.split(str(self.options.get("qstat", "qstat")))
+        qdel = shlex.split(str(self.options.get("qdel", "qdel")))
+        interval = float(self.options["poll_interval"])
+        try:
+            while True:
+                try:
+                    status = subprocess.run(
+                        [*qstat, "-xf", job_id], text=True, capture_output=True, check=False
+                    )
+                except OSError as error:
+                    self._write(submit_stderr, f"simpleWorkflow could not run qstat: {error}\n")
+                    return ExecutionResult(return_code=75, metadata=base_metadata)
+                status_output = f"{status.stdout}\n{status.stderr}"
+                self._write(submit_stdout, self._scheduler_status_line(job_id, status_output))
+                result = self._pbs_result(status_output)
+                if result is not None:
+                    return ExecutionResult(return_code=result, metadata=base_metadata)
+                if status.returncode != 0:
+                    if status.stderr:
+                        self._write(submit_stderr, status.stderr)
+                    return ExecutionResult(return_code=75, metadata=base_metadata)
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            cancel_command = [*qdel, job_id]
+            cancellation: dict[str, Any] = {
+                **base_metadata,
+                "cancel_requested": True,
+                "qdel_argv": cancel_command,
+            }
+            self._write_scheduler_record(scheduler_record, cancellation)
+            try:
+                cancelled = subprocess.run(
+                    cancel_command,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+            except OSError as error:
+                cancellation["qdel_return_code"] = 127
+                cancellation["qdel_error"] = str(error)
+                self._write(submit_stderr, f"simpleWorkflow could not run qdel: {error}\n")
+            else:
+                cancellation["qdel_return_code"] = cancelled.returncode
+                self._write(
+                    submit_stdout,
+                    f"[simpleworkflow] qdel: job_id={job_id} return_code={cancelled.returncode}\n",
+                )
+                if cancelled.stderr:
+                    self._write(submit_stderr, cancelled.stderr)
+            self._write_scheduler_record(scheduler_record, cancellation)
+            raise

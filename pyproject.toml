@@ -4,9 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simpleworkflow"
-version = "0.2.0"
+version = "0.3.0"
 description = "Lightweight YAML workflow runner for scientific pipelines."
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
   "PyYAML>=6.0",
@@ -41,6 +42,7 @@ source = ["simpleworkflow"]
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
+fail_under = 75
 
 [tool.ruff]
 target-version = "py310"
@@ -53,12 +55,7 @@ ignore = ["E501"]
 
 [tool.mypy]
 python_version = "3.10"
-files = [
-  "simpleworkflow/console.py",
-  "simpleworkflow/engine.py",
-  "simpleworkflow/executor.py",
-  "simpleworkflow/pbs.py",
-]
+files = ["simpleworkflow"]
 follow_imports = "skip"
 warn_unused_ignores = true
 warn_redundant_casts = true

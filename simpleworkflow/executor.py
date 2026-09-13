@@ -1,11 +1,24 @@
 from __future__ import annotations
 
+import json
 import os
+import signal
+import socket
 import subprocess
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
+
+
+class _TerminationSignal(Exception):
+    def __init__(self, signum: int):
+        self.signum = signum
+
+
+def _raise_termination(signum: int, _frame: object) -> None:
+    raise _TerminationSignal(signum)
 
 
 @dataclass(frozen=True)
@@ -34,6 +47,7 @@ class TaskExecutor(Protocol):
         env: Mapping[str, str] | None = None,
         stdout_path: str | Path | None = None,
         stderr_path: str | Path | None = None,
+        timeout: float | None = None,
     ) -> ExecutionResult:
         """Execute one rendered task and return its outcome."""
         ...
@@ -55,6 +69,7 @@ class LocalExecutor:
         env: Mapping[str, str] | None = None,
         stdout_path: str | Path | None = None,
         stderr_path: str | Path | None = None,
+        timeout: float | None = None,
     ) -> ExecutionResult:
         """Run a task without a shell and return its process outcome."""
         if (stdout_path is None) != (stderr_path is None):
@@ -81,7 +96,8 @@ class LocalExecutor:
             log_mode, encoding="utf-8"
         ) as stderr:
             try:
-                process = subprocess.run(
+                started_at = time.time()
+                process = subprocess.Popen(
                     list(argv),
                     shell=False,
                     cwd=str(cwd) if cwd is not None else None,
@@ -89,13 +105,71 @@ class LocalExecutor:
                     stdout=stdout,
                     stderr=stderr,
                     text=True,
-                    check=False,
+                    start_new_session=True,
                 )
+                process_record = stdout_file.parent / "process.json"
+                temporary_record = process_record.with_suffix(".json.tmp")
+                temporary_record.write_text(
+                    json.dumps(
+                        {
+                            "pid": process.pid,
+                            "process_group": process.pid,
+                            "host": socket.gethostname(),
+                            "started_at_epoch": started_at,
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                os.replace(temporary_record, process_record)
+                timed_out = False
+                interrupted_signal: int | None = None
+                previous_handlers: dict[signal.Signals, Any] = {}
+                try:
+                    for signum in (signal.SIGINT, signal.SIGTERM):
+                        previous_handlers[signum] = signal.signal(signum, _raise_termination)
+                except ValueError:
+                    previous_handlers = {}
+                try:
+                    return_code = process.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    os.killpg(process.pid, signal.SIGTERM)
+                    try:
+                        return_code = process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(process.pid, signal.SIGKILL)
+                        return_code = process.wait()
+                except _TerminationSignal as interruption:
+                    interrupted_signal = interruption.signum
+                    os.killpg(process.pid, signal.SIGTERM)
+                    try:
+                        return_code = process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(process.pid, signal.SIGKILL)
+                        return_code = process.wait()
+                finally:
+                    for signum, handler in previous_handlers.items():
+                        signal.signal(signum, handler)
             except OSError as error:
                 stderr.write(f"simpleWorkflow could not start task: {error}\n")
                 return ExecutionResult(return_code=127, metadata={"executor": "local"})
 
         return ExecutionResult(
-            return_code=process.returncode,
-            metadata={"executor": "local"},
+            return_code=(
+                128 + interrupted_signal
+                if interrupted_signal is not None
+                else 124 if timed_out else return_code
+            ),
+            metadata={
+                "executor": "local",
+                "pid": process.pid,
+                "process_group": process.pid,
+                "started_at_epoch": started_at,
+                "finished_at_epoch": time.time(),
+                "timed_out": timed_out,
+                "interrupted_signal": interrupted_signal,
+                "process_return_code": return_code,
+            },
         )

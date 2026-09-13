@@ -1,11 +1,13 @@
 # Workflow format
 
-`simpleWorkflow` defines dependency-aware tasks that execute explicit program
+Version 1 of `simpleWorkflow` defines dependency-aware tasks that execute explicit program
 argument vectors. It does not parse a shell command language.
 
 ## Minimal workflow
 
 ```yaml
+format_version: 1
+
 workflow:
   name: example
 
@@ -43,6 +45,7 @@ misspellings do not silently alter an experiment.
 | `inputs` | Declared input artifact contract. |
 | `outputs` | Declared output artifact contract. |
 | `input_fingerprint` | `metadata` (default) or `sha256`. |
+| `timeout` | Optional local time limit in seconds; stops the whole process group. |
 
 The historical `run` field is deliberately unsupported. A single command string
 would require shell parsing and could introduce implicit redirection, pipelines
@@ -86,17 +89,39 @@ containing the workflow YAML file.
 
 `input_fingerprint: metadata` records path, size and modification time.
 `input_fingerprint: sha256` adds a SHA-256 digest and is appropriate for smaller,
-critical file inputs.
+critical inputs. Directories are represented by their recursively listed files.
+
+Required products may also receive small, generic checks:
+
+```yaml
+outputs:
+  required: ["{case_dir}/analysis.nc"]
+  checks:
+    - path: "{case_dir}/analysis.nc"
+      kind: file
+      nonempty: true
+      min_size: 1024
+```
+
+Scientific validity remains in a versioned program or wrapper and can be an
+ordinary task. The runner does not embed NetCDF, GRIB or model-specific rules.
 
 ## Context
 
 `context` is a mapping used to render string elements of `argv`, `cwd`, `env`,
 PBS values, inputs and outputs using Python-format placeholders. Referencing an
 unknown placeholder fails with an explicit error before execution.
+Literal braces in an argument use doubled braces (`{{` and `}}`).
+
+`format_version: 1` is recommended in every file. Files from version 0.2 without
+this field are read as version 1; explicitly unsupported versions are rejected.
+
+A disabled task is recorded as `skipped`. A dependent task is then `blocked`;
+disabling a prerequisite never silently authorizes downstream execution.
 
 ## Cycles
 
-A workflow can declare an inclusive ISO-8601 cycle range. The same task DAG is
+A workflow can declare an inclusive ISO-8601 cycle range. The same task set is
 executed sequentially for each cycle, with independent workflow state, logs and
 provenance.
 
