@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 import sys
@@ -56,15 +55,31 @@ def test_cycle_expansion_renders_per_cycle_context_and_state(tmp_path: Path) -> 
     assert (tmp_path / "products" / "cycle_2018041506.txt").read_text() == "2018-04-15T06:00:00Z"
     assert (tmp_path / "products" / "cycle_2018041512.txt").read_text() == "2018-04-15T12:00:00Z"
 
-    source_digest = hashlib.sha256(str(workflow.resolve()).encode("utf-8")).hexdigest()[:12]
     connection = sqlite3.connect(workdir / "state.sqlite3")
-    rows = connection.execute("SELECT workflow, task, status FROM task_state ORDER BY workflow").fetchall()
+    rows = connection.execute(
+        "SELECT cycle_id, task, status FROM task_state ORDER BY cycle_id"
+    ).fetchall()
+    cycles = connection.execute(
+        "SELECT cycle_id, cycle_time FROM cycle_state ORDER BY cycle_id"
+    ).fetchall()
+    instance_count = connection.execute("SELECT COUNT(*) FROM workflow_instance").fetchone()[0]
+    workflow_name = connection.execute(
+        "SELECT workflow_name FROM workflow_instance WHERE singleton = 1"
+    ).fetchone()[0]
     connection.close()
+
     assert rows == [
-        (f"cycle_test__20180415T000000Z@{source_digest}", "write_cycle", "success"),
-        (f"cycle_test__20180415T060000Z@{source_digest}", "write_cycle", "success"),
-        (f"cycle_test__20180415T120000Z@{source_digest}", "write_cycle", "success"),
+        ("20180415T000000Z", "write_cycle", "success"),
+        ("20180415T060000Z", "write_cycle", "success"),
+        ("20180415T120000Z", "write_cycle", "success"),
     ]
+    assert cycles == [
+        ("20180415T000000Z", "2018-04-15T00:00:00Z"),
+        ("20180415T060000Z", "2018-04-15T06:00:00Z"),
+        ("20180415T120000Z", "2018-04-15T12:00:00Z"),
+    ]
+    assert instance_count == 1
+    assert workflow_name == "cycle_test"
 
 
 def test_cycle_time_selects_one_cycle(tmp_path: Path) -> None:
