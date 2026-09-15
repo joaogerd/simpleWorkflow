@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from simpleworkflow.monitor import load_monitor_snapshot
+from simpleworkflow.runs import RunRecorder
 from simpleworkflow.state import WorkflowState
 
 
@@ -131,3 +133,159 @@ def test_snapshot_reads_existing_state_without_modifying_database(tmp_path: Path
     state.close()
     assert snapshot.tasks[0].status == "success"
     assert after == before
+
+
+def test_snapshot_loads_latest_attempt_command_logs_and_pbs_metadata(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: campaign\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    state = WorkflowState(
+        workdir / "state.sqlite3",
+        workflow_name="campaign",
+        source_path=workflow,
+    )
+    state.ensure_cycle("2018041506", "2018-04-15T06:00:00Z")
+    recorder = RunRecorder(
+        workdir,
+        "campaign",
+        instance_id=state.instance_id,
+        cycle_id="2018041506",
+        cycle_time="2018-04-15T06:00:00Z",
+        run_id="run-1",
+    )
+    state.record_run(
+        recorder.run_id,
+        recorder.directory,
+        cycle_id="2018041506",
+        cycle_time="2018-04-15T06:00:00Z",
+    )
+    attempt = recorder.begin_attempt("analysis")
+    recorder.write_started(
+        attempt,
+        {
+            "status": "running",
+            "command": {
+                "argv": ["mpiexec", "jedi", "analysis.yaml"],
+                "cwd": "/case/work",
+                "env": {},
+            },
+            "signature": "sig",
+        },
+    )
+    attempt.stdout_path.write_text("qsub output\n", encoding="utf-8")
+    attempt.stderr_path.write_text("", encoding="utf-8")
+    (attempt.directory / "pbs.stdout.log").write_text("JEDI output\n", encoding="utf-8")
+    (attempt.directory / "pbs.stderr.log").write_text("JEDI warning\n", encoding="utf-8")
+    (attempt.directory / "scheduler.json").write_text(
+        json.dumps({"executor": "pbs", "job_id": "381922.pbs-ha"}) + "\n",
+        encoding="utf-8",
+    )
+    state.record_attempt_started(
+        run_id=attempt.run_id,
+        task="analysis",
+        attempt=attempt.attempt,
+        attempt_path=attempt.directory,
+        signature="sig",
+        cycle_id="2018041506",
+        started_at="2018-04-15T06:01:04Z",
+    )
+    state.set_status(
+        "analysis",
+        "running",
+        None,
+        "sig",
+        "tarefa iniciada",
+        attempt.directory,
+        cycle_id="2018041506",
+    )
+    state.close()
+
+    snapshot = load_monitor_snapshot(_config(workflow), workflow, workdir)
+    task = next(task for task in snapshot.cycles[0].tasks if task.name == "analysis")
+
+    assert task.attempt is not None
+    assert task.attempt.attempt == 1
+    assert task.attempt.executor == "pbs"
+    assert task.attempt.job_id == "381922.pbs-ha"
+    assert task.attempt.command == ("mpiexec", "jedi", "analysis.yaml")
+    assert task.attempt.cwd == "/case/work"
+    assert task.attempt.started_at == "2018-04-15T06:01:04Z"
+    assert task.attempt.finished_at is None
+    assert task.attempt.log_paths["stdout"].name == "stdout.log"
+    assert task.attempt.log_paths["pbs_stdout"].read_text(encoding="utf-8") == "JEDI output\n"
+
+
+def test_snapshot_prefers_newest_retry_and_tolerates_missing_files(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: campaign\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    state = WorkflowState(
+        workdir / "state.sqlite3",
+        workflow_name="campaign",
+        source_path=workflow,
+    )
+    state.ensure_cycle("2018041506", "2018-04-15T06:00:00Z")
+    recorder = RunRecorder(
+        workdir,
+        "campaign",
+        instance_id=state.instance_id,
+        cycle_id="2018041506",
+        cycle_time="2018-04-15T06:00:00Z",
+        run_id="run-retry",
+    )
+    state.record_run(
+        recorder.run_id,
+        recorder.directory,
+        cycle_id="2018041506",
+        cycle_time="2018-04-15T06:00:00Z",
+    )
+    first = recorder.begin_attempt("analysis")
+    state.record_attempt_started(
+        run_id=first.run_id,
+        task="analysis",
+        attempt=first.attempt,
+        attempt_path=first.directory,
+        signature="sig-1",
+        cycle_id="2018041506",
+        started_at="2018-04-15T06:00:00Z",
+    )
+    state.record_attempt_finished(
+        run_id=first.run_id,
+        task="analysis",
+        attempt=first.attempt,
+        status="failed",
+        return_code=7,
+        reason="first failure",
+    )
+    second = recorder.begin_attempt("analysis")
+    state.record_attempt_started(
+        run_id=second.run_id,
+        task="analysis",
+        attempt=second.attempt,
+        attempt_path=second.directory,
+        signature="sig-2",
+        cycle_id="2018041506",
+        started_at="2018-04-15T06:05:00Z",
+    )
+    # Simulate incomplete filesystem provenance. SQLite remains the source of truth.
+    (second.directory / "started.json").unlink(missing_ok=True)
+    second.stdout_path.unlink(missing_ok=True)
+    state.set_status(
+        "analysis",
+        "running",
+        None,
+        "sig-2",
+        "retry in progress",
+        second.directory,
+        cycle_id="2018041506",
+    )
+    state.close()
+
+    snapshot = load_monitor_snapshot(_config(workflow), workflow, workdir)
+    task = next(task for task in snapshot.cycles[0].tasks if task.name == "analysis")
+
+    assert task.attempt is not None
+    assert task.attempt.attempt == 2
+    assert task.attempt.status == "running"
+    assert task.attempt.command is None
+    assert task.attempt.log_paths["stdout"].exists() is False
