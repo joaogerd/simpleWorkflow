@@ -12,12 +12,16 @@
   into workflow identity.
 - Store portable state paths and location-independent task signatures so moving
   the complete workflow root does not itself invalidate restart state.
-- Keep `plan` and `validate` stateless; they do not create `.simpleworkflow`.
-- Use one workflow lock per state directory.
+- Keep `plan`, `validate`, `status`, `explain` and `run --dry-run` free of
+  persistent-state creation; inspect existing state read-only where applicable.
+- Use one local workflow lock per state directory for `run`, `reset` and legacy
+  migration so state-changing operations cannot overlap.
 - Add `swf migrate` and `swf migrate --check` for protected 0.2.x and 0.3.x
   state upgrades.
-- Create automatic SQLite backups before migration and replace the active
-  database only after successful transactional conversion.
+- Create durable SQLite backups before migration, build the replacement database
+  transactionally under a temporary name and install it only with atomic replace.
+- Preserve the legacy database and backup if final replacement fails, remove the
+  abandoned migration temporary file and allow a later retry.
 - Detect shared/ambiguous legacy databases and refuse silent merging; support
   explicit extraction of one legacy workflow instance.
 - Convert 0.3.x cycle keys into explicit cycle state and preserve available run,
@@ -26,7 +30,10 @@
   compatibility; otherwise rerun conservatively.
 - Convert unverifiable 0.2.x `running` tasks to `unknown` rather than assuming
   completion or automatically repeating them.
-- Preserve historical state events, runs and attempts across `reset`.
+- Preserve historical state events, runs, attempts and migration history across
+  `reset`, while clearing current reusable task state.
+- Reject future state schemas with a clear requirement for a newer
+  simpleWorkflow rather than interpreting them optimistically.
 - Add upgrade and state-model documentation for existing scientific campaigns.
 
 ## 0.3.0
