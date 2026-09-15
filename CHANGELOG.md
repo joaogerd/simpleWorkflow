@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.5.0
+
+- Restore the professional full-screen terminal monitor that was developed and
+  refined on `ux/professional-terminal`, adapted to the 0.4 persistent-state
+  model instead of reviving the legacy state API.
+- Add a presentation-independent monitor read model over `state.sqlite3` so the
+  TUI can reconstruct workflow, cycle, task, run, attempt and problem state
+  without owning a second source of truth.
+- Add `swf monitor workflow.yaml` for read-only attachment to an existing
+  workflow instance, including reopening after the original monitor has exited.
+- Add `swf run --ui auto|tui|plain`; `auto` uses the TUI only on a capable
+  interactive terminal with the optional dependencies installed and otherwise
+  preserves the traditional `TerminalReporter` output.
+- Keep Rich and Textual optional under the `simpleworkflow[tui]` extra so the
+  core runner remains lightweight for HPC, PBS, CI and redirected log use.
+- Restore the five approved operational views: Monitor, Ciclos, Campanha,
+  Problemas and Logs, with a workflow tree, Inspector and compact cycle timeline.
+- Read command, working directory, PBS job ID and available stdout/stderr files
+  from immutable attempt provenance while keeping SQLite task state authoritative.
+- Make attempt-file discovery defensive: absent or incomplete metadata and log
+  files reduce the displayed detail rather than breaking the monitor.
+- Add wide/narrow terminal behavior, a compact help overlay, a limited semantic
+  palette, `NO_COLOR` handling and symbols that keep state understandable without
+  color.
+- Define `q` as a presentation action only. Closing the TUI never silently
+  cancels a local process or PBS job; an attached run continues to its normal
+  result.
+- Add restart-safe/headless TUI coverage, automatic UI selection tests, persisted
+  cycle/problem/log tests and package validation for both core-only and `[tui]`
+  installations.
+- Preserve the 0.4.0 SQLite schema and workflow-engine execution semantics; no
+  daemon, socket service, web server or centralized scheduler is introduced.
+
 ## 0.4.0
 
 - Redefine `.simpleworkflow` as the persistent state directory of exactly one
