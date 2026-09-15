@@ -472,7 +472,8 @@ class WorkflowEngine:
                     reason=reason,
                     cycle_id=self.cycle_id,
                 )
-                return BLOCKED_EXIT_CODE
+                exit_code = BLOCKED_EXIT_CODE
+                break
             if task.get("enabled", True) is False:
                 self.reporter.event("skip", task_name, "disabled", executor=executor_name)
                 self.state.set_status(
@@ -497,7 +498,8 @@ class WorkflowEngine:
                     INVALID_INPUT_EXIT_CODE,
                     cycle_id=self.cycle_id,
                 )
-                return INVALID_INPUT_EXIT_CODE
+                exit_code = INVALID_INPUT_EXIT_CODE
+                break
 
             argv = render_argv(task["argv"], self.context)
             cwd = self._task_cwd(task)
