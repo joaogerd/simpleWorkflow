@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -12,9 +13,18 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Label, RichLog, Static, TabbedContent, TabPane, Tree
+from textual.widgets import (
+    Button,
+    DataTable,
+    Label,
+    RichLog,
+    Static,
+    TabbedContent,
+    TabPane,
+    Tree,
+)
 
-from .monitor import CycleSnapshot, MonitorSnapshot, TaskSnapshot, load_monitor_snapshot
+from .monitor import AttemptSnapshot, CycleSnapshot, MonitorSnapshot, TaskSnapshot, load_monitor_snapshot
 
 _STATUS = {
     "pending": ("○", "PENDING", "dim"),
@@ -28,20 +38,37 @@ _STATUS = {
     "interrupted": ("!", "INTERRUPTED", "yellow"),
     "unknown": ("?", "UNKNOWN", "yellow"),
     "skipped": ("–", "SKIPPED", "dim"),
+    "partial": ("◐", "PARTIAL", "yellow"),
 }
 _ATTENTION = {"failed", "invalid-input", "invalid-output", "blocked", "interrupted", "unknown"}
 _COMPLETE = {"success", "skipped"}
 _VIEW_IDS = ("monitor", "cycles", "campaign", "problems", "logs")
+_LOG_ORDER = ("pbs_stdout", "stdout", "pbs_stderr", "stderr")
+_LOG_ERROR_ORDER = ("pbs_stderr", "stderr", "pbs_stdout", "stdout")
+_LOG_BUTTONS = {
+    "log-pbs-stdout": "pbs_stdout",
+    "log-stdout": "stdout",
+    "log-pbs-stderr": "pbs_stderr",
+    "log-stderr": "stderr",
+}
+_LOG_LABELS = {
+    "pbs_stdout": "pbs.stdout",
+    "stdout": "stdout",
+    "pbs_stderr": "pbs.stderr",
+    "stderr": "stderr",
+}
 
 _HELP_TEXT = """[bold]simpleWorkflow monitor[/bold]
 
 ↑ / ↓        select task
 ← / →        previous / next cycle
 Enter        inspect on narrow terminals
+Esc          return to workflow on narrow terminals
 Tab          next view
 Shift+Tab    previous view
 1..5         Monitor / Ciclos / Campanha / Problemas / Logs
 l            logs for selected task
+o / e        output / error log
 r            refresh
 ?            help
 q            close monitor
@@ -54,7 +81,7 @@ class HelpScreen(ModalScreen[None]):
     CSS = """
     HelpScreen { align: center middle; background: rgba(0, 0, 0, 55%); }
     #help-dialog {
-        width: 68; height: auto; max-height: 30; padding: 1 2;
+        width: 68; height: auto; max-height: 32; padding: 1 2;
         border: solid #394150; background: #111318; color: #d7dae0;
     }
     """
@@ -97,6 +124,37 @@ def _format_cycle_time(value: str) -> str:
     return parsed.strftime("%Y-%m-%d %HZ")
 
 
+def _format_duration(seconds: float | None) -> str:
+    if seconds is None:
+        return "—"
+    total = max(0, int(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _elapsed(started_at: str | None, finished_at: str | None = None) -> float | None:
+    if not started_at:
+        return None
+    try:
+        started = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+        if finished_at:
+            finished = datetime.fromisoformat(finished_at.replace("Z", "+00:00"))
+        else:
+            finished = datetime.now(started.tzinfo)
+    except ValueError:
+        return None
+    return max(0.0, (finished - started).total_seconds())
+
+
+def _tail(path: Path, max_lines: int = 1000) -> str:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    return "\n".join(lines[-max_lines:])
+
+
 class WorkflowTui(App[None]):
     """Full-screen, read-only monitor for one logical workflow instance."""
 
@@ -122,7 +180,13 @@ class WorkflowTui(App[None]):
     #inspector { height: 1fr; padding: 1 2; }
     #cycles-table, #problems-table { height: 1fr; margin: 1 0; }
     #campaign-view { height: 1fr; padding: 1 2; }
-    #log-title { height: 2; padding: 0 1; border-bottom: solid #303744; color: #9fb9ff; content-align: left middle; }
+    #log-toolbar { height: 2; padding: 0 1; border-bottom: solid #303744; background: #111318; }
+    #log-title { width: 1fr; height: 1; color: #9fb9ff; content-align: left middle; }
+    .log-button {
+        width: auto; min-width: 10; height: 1; min-height: 1; padding: 0 1;
+        margin-left: 1; border: none; background: #111318; color: #8c93a1;
+    }
+    .log-button.selected-log { color: #67e8f9; text-style: bold underline; }
     #full-log { height: 1fr; padding: 1; background: #0d0f13; }
     #shortcut-line { height: 1; padding: 0 1; border-top: solid #252b35; background: #111318; color: #697180; }
     """
@@ -139,6 +203,8 @@ class WorkflowTui(App[None]):
         ("4", "select_view('problems')", "Problems"),
         ("5", "select_view('logs')", "Logs"),
         ("l", "open_logs", "Logs"),
+        ("o", "select_output", "Output"),
+        ("e", "select_error", "Error"),
         ("r", "refresh_now", "Refresh"),
         ("enter", "inspect", "Inspect"),
         ("escape", "workflow_panel", "Workflow"),
@@ -161,11 +227,19 @@ class WorkflowTui(App[None]):
         self.refresh_seconds = max(0.5, float(refresh_seconds))
         self.color_enabled = bool(color) and not bool(os.environ.get("NO_COLOR"))
         self.task_order = _task_names(config)
+        self.task_map = {
+            str(task["name"]): task
+            for task in config.get("tasks", [])
+            if isinstance(task, dict) and isinstance(task.get("name"), str)
+        }
         self.snapshot = self._load_snapshot()
         self.selected_cycle_id: str | None = None
         self.selected_task: str | None = None
+        self.selected_log_key: str | None = None
+        self.current_log_text = ""
         self.task_nodes: dict[tuple[str | None, str], Any] = {}
         self._tree_signature: tuple[Any, ...] | None = None
+        self._last_log_signature: tuple[str, int, int] | None = None
         self._choose_initial_selection()
 
     def _load_snapshot(self) -> MonitorSnapshot:
@@ -192,10 +266,13 @@ class WorkflowTui(App[None]):
             with TabPane("Problemas", id="problems"):
                 yield DataTable(id="problems-table", cursor_type="row", zebra_stripes=True)
             with TabPane("Logs", id="logs"):
-                yield Static(id="log-title")
+                with Horizontal(id="log-toolbar"):
+                    yield Static(id="log-title")
+                    for button_id, key in _LOG_BUTTONS.items():
+                        yield Button(_LOG_LABELS[key], id=button_id, classes="log-button")
                 yield RichLog(id="full-log", highlight=False, markup=False, wrap=False, max_lines=1500)
         yield Static(
-            "↑↓ navigate   ←→ cycle   Enter inspect   Tab switch   l logs   r refresh   ? help   q quit",
+            "↑↓ navigate   ←→ cycle   Enter inspect   Tab switch   l logs   o/e output/error   r refresh   ? help   q quit",
             id="shortcut-line",
         )
 
@@ -226,17 +303,19 @@ class WorkflowTui(App[None]):
     def _choose_initial_selection(self) -> None:
         if self.snapshot.cycles:
             preferred = next(
-                (cycle for cycle in self.snapshot.cycles if cycle.status == "running"),
-                None,
+                (cycle for cycle in self.snapshot.cycles if cycle.status == "running"), None
             )
             if preferred is None:
                 preferred = next(
-                    (cycle for cycle in self.snapshot.cycles if cycle.status == "failed"),
-                    None,
+                    (cycle for cycle in self.snapshot.cycles if cycle.status == "failed"), None
                 )
             if preferred is None:
                 preferred = next(
-                    (cycle for cycle in self.snapshot.cycles if cycle.status in {"partial", "pending"}),
+                    (
+                        cycle
+                        for cycle in self.snapshot.cycles
+                        if cycle.status in {"partial", "pending"}
+                    ),
                     None,
                 )
             preferred = preferred or self.snapshot.cycles[-1]
@@ -293,12 +372,14 @@ class WorkflowTui(App[None]):
         if self.snapshot.cycles:
             for cycle in self.snapshot.cycles:
                 symbol = _STATUS.get(cycle.status, ("•", "", ""))[0]
-                label = f"{symbol} {_format_cycle_time(cycle.cycle_time)}"
-                node = tree.root.add(label, expand=cycle.cycle_id == self.selected_cycle_id)
+                node = tree.root.add(
+                    f"{symbol} {_format_cycle_time(cycle.cycle_time)}",
+                    expand=cycle.cycle_id == self.selected_cycle_id,
+                )
                 for task in cycle.tasks:
-                    symbol = _STATUS.get(task.status, ("•", "", ""))[0]
+                    task_symbol = _STATUS.get(task.status, ("•", "", ""))[0]
                     leaf = node.add_leaf(
-                        f"{symbol} {_task_label(task.name)}",
+                        f"{task_symbol} {_task_label(task.name)}",
                         data=(cycle.cycle_id, task.name),
                     )
                     self.task_nodes[(cycle.cycle_id, task.name)] = leaf
@@ -306,8 +387,7 @@ class WorkflowTui(App[None]):
             for task in self.snapshot.tasks:
                 symbol = _STATUS.get(task.status, ("•", "", ""))[0]
                 leaf = tree.root.add_leaf(
-                    f"{symbol} {_task_label(task.name)}",
-                    data=(None, task.name),
+                    f"{symbol} {_task_label(task.name)}", data=(None, task.name)
                 )
                 self.task_nodes[(None, task.name)] = leaf
 
@@ -325,17 +405,34 @@ class WorkflowTui(App[None]):
             return
         self.selected_cycle_id = str(cycle_id) if cycle_id is not None else None
         self.selected_task = str(task_name)
+        self.selected_log_key = None
+        self._last_log_signature = None
         self._refresh_inspector()
+        self._refresh_logs(force=True)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        key = _LOG_BUTTONS.get(event.button.id or "")
+        if key is None:
+            return
+        task = self._selected_task_snapshot()
+        attempt = task.attempt if task is not None else None
+        if attempt is None or key not in attempt.available_logs:
+            return
+        self.selected_log_key = key
+        self._last_log_signature = None
         self._refresh_logs(force=True)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table.id == "cycles-table":
             cycle_id = str(event.row_key.value)
-            cycle = next((item for item in self.snapshot.cycles if item.cycle_id == cycle_id), None)
+            cycle = next(
+                (item for item in self.snapshot.cycles if item.cycle_id == cycle_id), None
+            )
             if cycle is None:
                 return
             self.selected_cycle_id = cycle_id
             self.selected_task = self._preferred_task(cycle.tasks)
+            self.selected_log_key = None
             self._tree_signature = None
             self._rebuild_tree(force=True)
             self.query_one("#views", TabbedContent).active = "monitor"
@@ -347,6 +444,8 @@ class WorkflowTui(App[None]):
             cycle_id, task_name = value.split("::", 1)
             self.selected_cycle_id = cycle_id or None
             self.selected_task = task_name
+            self.selected_log_key = None
+            self._select_preferred_log(error=True)
             self.action_open_logs()
 
     def action_previous_cycle(self) -> None:
@@ -369,6 +468,8 @@ class WorkflowTui(App[None]):
         cycle = self.snapshot.cycles[target]
         self.selected_cycle_id = cycle.cycle_id
         self.selected_task = self._preferred_task(cycle.tasks)
+        self.selected_log_key = None
+        self._last_log_signature = None
         self._tree_signature = None
         self.refresh_runtime(force=True)
 
@@ -392,6 +493,25 @@ class WorkflowTui(App[None]):
         if self.selected_task is not None:
             self.query_one("#views", TabbedContent).active = "logs"
             self._refresh_logs(force=True)
+
+    def action_select_output(self) -> None:
+        self._select_preferred_log(error=False)
+        self._refresh_logs(force=True)
+
+    def action_select_error(self) -> None:
+        self._select_preferred_log(error=True)
+        self._refresh_logs(force=True)
+
+    def _select_preferred_log(self, *, error: bool) -> None:
+        task = self._selected_task_snapshot()
+        attempt = task.attempt if task is not None else None
+        if attempt is None:
+            self.selected_log_key = None
+            return
+        available = attempt.available_logs
+        order = _LOG_ERROR_ORDER if error else _LOG_ORDER
+        self.selected_log_key = next((key for key in order if key in available), None)
+        self._last_log_signature = None
 
     def action_refresh_now(self) -> None:
         self.refresh_runtime(force=True)
@@ -433,7 +553,9 @@ class WorkflowTui(App[None]):
         )
         cycle = self._selected_cycle()
         self.query_one("#current-cycle", Static).update(
-            escape(_format_cycle_time(cycle.cycle_time)) if cycle else "[dim]no cycle[/dim]"
+            escape(_format_cycle_time(cycle.cycle_time))
+            if cycle
+            else "[dim]no cycle[/dim]"
         )
 
     def _refresh_cycle_line(self) -> None:
@@ -451,20 +573,13 @@ class WorkflowTui(App[None]):
         start = max(0, end - 5)
         parts: list[str] = []
         for cycle in self.snapshot.cycles[start:end]:
-            symbol = {
-                "success": "✓",
-                "running": "●",
-                "failed": "!",
-                "partial": "◐",
-                "pending": "○",
-            }.get(cycle.status, "○")
-            label = _format_cycle_time(cycle.cycle_time)
-            text = f"{symbol} {label}"
-            if cycle.cycle_id == self.selected_cycle_id:
-                text = f"[reverse]{escape(text)}[/reverse]"
-            else:
-                text = escape(text)
-            parts.append(text)
+            symbol = _STATUS.get(cycle.status, ("○", "", ""))[0]
+            text = f"{symbol} {_format_cycle_time(cycle.cycle_time)}"
+            parts.append(
+                f"[reverse]{escape(text)}[/reverse]"
+                if cycle.cycle_id == self.selected_cycle_id
+                else escape(text)
+            )
         line.update("  ──  ".join(parts))
 
     def _refresh_cycles(self) -> None:
@@ -483,16 +598,31 @@ class WorkflowTui(App[None]):
 
     def _refresh_campaign(self) -> None:
         view = self.query_one("#campaign-view", Static)
-        if not self.snapshot.cycles:
-            view.update("[dim]No cycle campaign is recorded yet.[/dim]")
-            return
+        run = self.snapshot.current_run
         lines = ["[bold]Campaign[/bold]", ""]
-        for cycle in self.snapshot.cycles:
-            lines.append(
-                f"{escape(_format_cycle_time(cycle.cycle_time)):<20} "
-                f"{_status_markup(cycle.status, color=self.color_enabled)}   "
-                f"{cycle.completed_tasks}/{len(cycle.tasks)} done"
-            )
+        lines.extend(
+            [
+                f"workflow          {escape(self.snapshot.workflow_name)}",
+                f"workflow instance {escape(self.snapshot.instance_id or '—')}",
+                f"run               {escape(run.run_id if run else '—')}",
+                f"run status        {escape(run.status if run else '—')}",
+                f"start             {escape(run.created_at if run else '—')}",
+                f"elapsed           {_format_duration(_elapsed(run.created_at, run.finished_at) if run else None)}",
+                f"cycles            {len(self.snapshot.cycles)}",
+                f"tasks             {self.snapshot.total_tasks}",
+                f"completed         {self.snapshot.completed_tasks}",
+                f"running           {self.snapshot.running_tasks}",
+                f"failed            {self.snapshot.failed_tasks}",
+            ]
+        )
+        if self.snapshot.cycles:
+            lines.extend(["", "[dim]Cycle overview[/dim]"])
+            for cycle in self.snapshot.cycles:
+                lines.append(
+                    f"{escape(_format_cycle_time(cycle.cycle_time)):<20} "
+                    f"{_status_markup(cycle.status, color=self.color_enabled)}   "
+                    f"{cycle.completed_tasks}/{len(cycle.tasks)} done"
+                )
         view.update("\n".join(lines))
 
     def _refresh_problems(self) -> None:
@@ -510,40 +640,154 @@ class WorkflowTui(App[None]):
         if table.row_count == 0:
             table.add_row("—", "No problems detected.", "", "")
 
+    def _task_resources(self, task_name: str) -> str | None:
+        task = self.task_map.get(task_name)
+        if not isinstance(task, dict):
+            return None
+        if task.get("executor", "local") != "pbs":
+            return "local"
+        pbs = task.get("pbs")
+        if not isinstance(pbs, dict):
+            return "PBS"
+        parts: list[str] = []
+        for key, label in (
+            ("queue", "queue"),
+            ("select", "nodes"),
+            ("ncpus", "cpus"),
+            ("mpiprocs", "ranks"),
+            ("walltime", "walltime"),
+        ):
+            if pbs.get(key) is not None:
+                parts.append(f"{label} {pbs[key]}")
+        return " · ".join(parts) or "PBS"
+
+    def _task_dependencies(self, task_name: str) -> str | None:
+        task = self.task_map.get(task_name)
+        if not isinstance(task, dict):
+            return None
+        dependencies = task.get("depends_on", []) or []
+        if isinstance(dependencies, str):
+            dependencies = [dependencies]
+        if not isinstance(dependencies, list) or not dependencies:
+            return None
+        return ", ".join(str(item) for item in dependencies)
+
+    def _task_outputs(self, task_name: str) -> str | None:
+        task = self.task_map.get(task_name)
+        if not isinstance(task, dict):
+            return None
+        outputs = task.get("outputs")
+        if outputs is None:
+            return None
+        if isinstance(outputs, list):
+            return ", ".join(str(item) for item in outputs)
+        return str(outputs)
+
     def _refresh_inspector(self) -> None:
         inspector = self.query_one("#inspector", Static)
         task = self._selected_task_snapshot()
         if task is None:
             inspector.update("[dim]No task selected.[/dim]")
             return
-        fields = [
+        attempt: AttemptSnapshot | None = task.attempt
+        backend = attempt.executor if attempt and attempt.executor else None
+        if backend is None:
+            config_task = self.task_map.get(task.name, {})
+            backend = str(config_task.get("executor", "local")) if isinstance(config_task, dict) else "local"
+
+        fields: list[tuple[str, str]] = [
             ("task", escape(task.name)),
             ("cycle", escape(task.cycle_id or "—")),
             ("status", _status_markup(task.status, color=self.color_enabled)),
+            ("backend", escape(backend)),
         ]
+        if attempt is not None:
+            fields.append(("attempt", str(attempt.attempt)))
+            if attempt.started_at:
+                fields.append(("started", escape(attempt.started_at)))
+            if attempt.finished_at:
+                fields.append(("finished", escape(attempt.finished_at)))
+            elapsed = _elapsed(attempt.started_at, attempt.finished_at)
+            if elapsed is not None:
+                fields.append(("elapsed", _format_duration(elapsed)))
+            if attempt.command:
+                fields.append(("command", escape(shlex.join(attempt.command))))
+            if attempt.cwd:
+                fields.append(("working dir", escape(attempt.cwd)))
+            if attempt.job_id:
+                fields.append(("PBS job id", escape(attempt.job_id)))
         if task.return_code is not None:
             fields.append(("return code", str(task.return_code)))
-        if task.updated_at:
-            fields.append(("updated", escape(task.updated_at)))
-        if task.reason:
+        dependencies = self._task_dependencies(task.name)
+        if dependencies:
+            fields.append(("dependencies", escape(dependencies)))
+        outputs = self._task_outputs(task.name)
+        if outputs:
+            fields.append(("outputs", escape(outputs)))
+        resources = self._task_resources(task.name)
+        if resources and backend == "pbs":
+            fields.append(("resources", escape(resources)))
+        if task.reason and task.status in _ATTENTION:
             fields.append(("reason", escape(task.reason)))
         if task.attempt_path:
-            fields.append(("attempt", escape(task.attempt_path)))
-        inspector.update("\n\n".join(f"[dim]{name:<12}[/dim] {value}" for name, value in fields))
+            fields.append(("attempt path", escape(task.attempt_path)))
+        inspector.update(
+            "\n\n".join(f"[dim]{name:<12}[/dim] {value}" for name, value in fields)
+        )
+
+    def _refresh_log_buttons(self, attempt: AttemptSnapshot | None) -> None:
+        available = attempt.available_logs if attempt is not None else {}
+        for button_id, key in _LOG_BUTTONS.items():
+            button = self.query_one(f"#{button_id}", Button)
+            button.display = key in available
+            button.set_class(key == self.selected_log_key, "selected-log")
 
     def _refresh_logs(self, *, force: bool = False) -> None:
         title = self.query_one("#log-title", Static)
         log = self.query_one("#full-log", RichLog)
-        title.update(f"[bold]{escape(self.selected_task or 'No task selected')}[/bold]")
-        if not force:
-            return
-        log.clear()
         task = self._selected_task_snapshot()
-        if task is None or not task.attempt_path:
-            log.write("No runtime log is available for this task yet.")
+        attempt = task.attempt if task is not None else None
+        self._refresh_log_buttons(attempt)
+        title.update(f"[bold]{escape(self.selected_task or 'No task selected')}[/bold]")
+
+        if attempt is None:
+            self.current_log_text = "No runtime log is available for this task yet."
+            if force:
+                log.clear()
+                log.write(self.current_log_text)
             return
-        log.write(f"Attempt: {task.attempt_path}")
-        log.write("Log file discovery is available when attempt provenance is present.")
+
+        available = attempt.available_logs
+        if self.selected_log_key not in available:
+            self.selected_log_key = next((key for key in _LOG_ORDER if key in available), None)
+            self._last_log_signature = None
+        self._refresh_log_buttons(attempt)
+        if self.selected_log_key is None:
+            self.current_log_text = f"Attempt exists at {attempt.directory}, but no log file is available."
+            if force:
+                log.clear()
+                log.write(self.current_log_text)
+            return
+
+        path = available[self.selected_log_key]
+        try:
+            stat = path.stat()
+        except OSError:
+            self.current_log_text = f"Unable to read {path}."
+            if force:
+                log.clear()
+                log.write(self.current_log_text)
+            return
+        signature = (str(path), stat.st_size, stat.st_mtime_ns)
+        if not force and signature == self._last_log_signature:
+            return
+        self._last_log_signature = signature
+        self.current_log_text = _tail(path) or "(empty)"
+        title.update(
+            f"[bold]{escape(self.selected_task or '')}[/bold]  [dim]{escape(path.name)}[/dim]"
+        )
+        log.clear()
+        log.write(self.current_log_text)
 
 
 def run_monitor(
