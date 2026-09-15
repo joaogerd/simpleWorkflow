@@ -306,21 +306,6 @@ class WorkflowEngine:
                     pending.append(name)
         return descendants
 
-    def _signature_matches(self, previous: Any, current: TaskSignature) -> bool:
-        if previous.signature == current.value:
-            return True
-        if not legacy_signature_compatible(
-            previous.signature_payload,
-            current.payload,
-            workflow_path=self._workflow_path(),
-        ):
-            return False
-        self.state.set_status(
-            previous_task := "",
-            "success",
-        )
-        return True
-
     def _adopt_legacy_signature(
         self,
         task_name: str,
