@@ -62,7 +62,7 @@ def test_explicit_relative_workdir_remains_relative_to_current_directory(
     assert not (case / ".simpleworkflow").exists()
 
 
-def test_plan_and_validate_share_same_default_resolution_without_using_cwd_state(
+def test_plan_and_validate_do_not_create_persistent_state(
     tmp_path: Path, monkeypatch: object
 ) -> None:
     case = tmp_path / "case"
@@ -75,7 +75,7 @@ def test_plan_and_validate_share_same_default_resolution_without_using_cwd_state
 
     assert main(["plan", str(workflow), "--color", "never"]) == 0
     assert main(["validate", str(workflow), "--color", "never"]) == 0
-    assert (case / ".simpleworkflow" / "state.sqlite3").is_file()
+    assert not (case / ".simpleworkflow").exists()
     assert not (caller / ".simpleworkflow").exists()
 
 
