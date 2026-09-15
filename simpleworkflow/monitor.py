@@ -1,13 +1,18 @@
 """Read-only presentation model for workflow monitoring.
 
-The monitor layer deliberately owns presentation-oriented aggregation.  It reads
+The monitor layer deliberately owns presentation-oriented aggregation. It reads
 schema-1 state through :class:`WorkflowState` and never mutates workflow state.
-Textual and other frontends consume the immutable snapshots defined here rather
-than issuing SQL or reconstructing workflow semantics themselves.
+Textual and other frontends consume immutable snapshots rather than issuing SQL
+or reconstructing workflow semantics themselves.
+
+Attempt rows are loaded from SQLite in one query. Filesystem provenance is read
+lazily from an attempt only when the Inspector or Logs view asks for it; this
+keeps the normal one-second monitor refresh inexpensive on shared HPC storage.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,6 +32,113 @@ _ATTENTION_STATES = frozenset(
 )
 
 
+def _read_json(path: Path) -> dict[str, Any] | None:
+    """Read an optional JSON mapping without making monitoring fragile."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+@dataclass(frozen=True)
+class AttemptSnapshot:
+    """Persisted identity plus lazily read provenance for one task attempt."""
+
+    run_id: str
+    task_name: str
+    cycle_id: str | None
+    attempt: int
+    status: str
+    return_code: int | None
+    reason: str | None
+    directory: Path
+    started_at: str | None
+    finished_at: str | None
+
+    @property
+    def started_record(self) -> dict[str, Any] | None:
+        return _read_json(self.directory / "started.json")
+
+    @property
+    def metadata(self) -> dict[str, Any] | None:
+        return _read_json(self.directory / "metadata.json")
+
+    @property
+    def scheduler(self) -> dict[str, Any] | None:
+        return _read_json(self.directory / "scheduler.json")
+
+    @property
+    def command_record(self) -> dict[str, Any]:
+        metadata = _mapping(self.metadata)
+        command = metadata.get("command")
+        if isinstance(command, dict):
+            return command
+        started = _mapping(self.started_record)
+        return _mapping(started.get("command"))
+
+    @property
+    def command(self) -> tuple[str, ...] | None:
+        raw = self.command_record.get("argv")
+        if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+            return None
+        return tuple(raw)
+
+    @property
+    def cwd(self) -> str | None:
+        raw = self.command_record.get("cwd")
+        return str(raw) if raw else None
+
+    @property
+    def execution(self) -> dict[str, Any]:
+        metadata = _mapping(self.metadata)
+        execution = metadata.get("execution")
+        if isinstance(execution, dict):
+            return execution
+        return _mapping(self.scheduler)
+
+    @property
+    def executor(self) -> str | None:
+        raw = self.execution.get("executor")
+        return str(raw) if raw else None
+
+    @property
+    def job_id(self) -> str | None:
+        raw = self.execution.get("job_id")
+        return str(raw) if raw else None
+
+    @property
+    def log_paths(self) -> dict[str, Path]:
+        execution = self.execution
+        pbs_stdout = execution.get("job_stdout")
+        pbs_stderr = execution.get("job_stderr")
+        return {
+            "stdout": self.directory / "stdout.log",
+            "stderr": self.directory / "stderr.log",
+            "pbs_stdout": (
+                Path(str(pbs_stdout)) if pbs_stdout else self.directory / "pbs.stdout.log"
+            ),
+            "pbs_stderr": (
+                Path(str(pbs_stderr)) if pbs_stderr else self.directory / "pbs.stderr.log"
+            ),
+        }
+
+    @property
+    def available_logs(self) -> dict[str, Path]:
+        available: dict[str, Path] = {}
+        for name, path in self.log_paths.items():
+            try:
+                if path.is_file():
+                    available[name] = path
+            except OSError:
+                continue
+        return available
+
+
 @dataclass(frozen=True)
 class TaskSnapshot:
     """Current persisted state of one task in one optional cycle."""
@@ -38,6 +150,7 @@ class TaskSnapshot:
     reason: str | None = None
     attempt_path: str | None = None
     updated_at: str | None = None
+    attempt: AttemptSnapshot | None = None
 
 
 @dataclass(frozen=True)
@@ -151,9 +264,10 @@ def _task_snapshot(
     row: tuple[Any, ...] | None,
     *,
     cycle_id: str | None,
+    attempt: AttemptSnapshot | None = None,
 ) -> TaskSnapshot:
     if row is None:
-        return TaskSnapshot(name=name, status="pending", cycle_id=cycle_id)
+        return TaskSnapshot(name=name, status="pending", cycle_id=cycle_id, attempt=attempt)
     return TaskSnapshot(
         name=name,
         status=str(row[0]),
@@ -162,6 +276,7 @@ def _task_snapshot(
         reason=row[2],
         attempt_path=row[3],
         updated_at=row[4],
+        attempt=attempt,
     )
 
 
@@ -182,6 +297,38 @@ def _max_timestamp(*values: str | None) -> str | None:
     return max(present) if present else None
 
 
+def _latest_attempts(state: WorkflowState) -> dict[tuple[str, str], AttemptSnapshot]:
+    rows = state.connection.execute(
+        """
+        SELECT run_id, cycle_id, task, attempt, status, return_code, reason,
+               attempt_path, started_at, finished_at
+        FROM attempt_history
+        ORDER BY cycle_id, task, COALESCE(started_at, '') DESC, run_id DESC, attempt DESC
+        """
+    ).fetchall()
+    attempts: dict[tuple[str, str], AttemptSnapshot] = {}
+    for row in rows:
+        key = (str(row[1] or ""), str(row[2]))
+        if key in attempts:
+            continue
+        directory = state.resolve_path(str(row[7]))
+        if directory is None:
+            continue
+        attempts[key] = AttemptSnapshot(
+            run_id=str(row[0]),
+            cycle_id=str(row[1]) if row[1] else None,
+            task_name=str(row[2]),
+            attempt=int(row[3]),
+            status=str(row[4]),
+            return_code=row[5],
+            reason=str(row[6]) if row[6] else None,
+            directory=directory,
+            started_at=str(row[8]) if row[8] else None,
+            finished_at=str(row[9]) if row[9] else None,
+        )
+    return attempts
+
+
 def load_monitor_snapshot(
     config: dict[str, Any],
     workflow_path: str | Path,
@@ -190,7 +337,7 @@ def load_monitor_snapshot(
     """Build a monitor snapshot from configuration and existing persisted state.
 
     Missing state is represented as an all-pending workflow and is never created
-    by this function.  Existing state is opened read-only.
+    by this function. Existing state is opened read-only.
     """
 
     workflow = Path(workflow_path).resolve(strict=False)
@@ -222,6 +369,7 @@ def load_monitor_snapshot(
     try:
         instance = state.instance
         connection = state.connection
+        attempts = _latest_attempts(state)
 
         cycle_rows = connection.execute(
             """
@@ -247,14 +395,20 @@ def load_monitor_snapshot(
 
         cycles: list[CycleSnapshot] = []
         for cycle_id, cycle_time, cycle_updated_at in cycle_rows:
-            task_rows = rows_for_cycle(str(cycle_id))
+            cycle_key = str(cycle_id)
+            task_rows = rows_for_cycle(cycle_key)
             cycle_tasks = tuple(
-                _task_snapshot(name, task_rows.get(name), cycle_id=str(cycle_id))
+                _task_snapshot(
+                    name,
+                    task_rows.get(name),
+                    cycle_id=cycle_key,
+                    attempt=attempts.get((cycle_key, name)),
+                )
                 for name in names
             )
             cycles.append(
                 CycleSnapshot(
-                    cycle_id=str(cycle_id),
+                    cycle_id=cycle_key,
                     cycle_time=str(cycle_time),
                     tasks=cycle_tasks,
                     status=_cycle_status(cycle_tasks),
@@ -267,7 +421,13 @@ def load_monitor_snapshot(
 
         root_rows = rows_for_cycle("")
         root_tasks = tuple(
-            _task_snapshot(name, root_rows.get(name), cycle_id=None) for name in names
+            _task_snapshot(
+                name,
+                root_rows.get(name),
+                cycle_id=None,
+                attempt=attempts.get(("", name)),
+            )
+            for name in names
         )
 
         run_rows = connection.execute(
