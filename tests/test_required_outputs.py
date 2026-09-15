@@ -25,7 +25,8 @@ def test_run_marks_task_invalid_when_required_output_is_missing(tmp_path: Path) 
     engine = WorkflowEngine(config=config, workdir=tmp_path / ".simpleworkflow")
 
     assert engine.run() == INVALID_OUTPUT_EXIT_CODE
-    assert engine.state.get_status("missing-output", "run") == "invalid-output"
+    assert engine.state.get_status("run") == "invalid-output"
+    engine.state.close()
 
 
 def test_successful_task_reruns_when_required_output_disappears(tmp_path: Path) -> None:
@@ -50,12 +51,13 @@ def test_successful_task_reruns_when_required_output_disappears(tmp_path: Path) 
         "__simpleworkflow__": {"source_dir": str(tmp_path)},
     }
     engine = WorkflowEngine(config=config, workdir=tmp_path / ".simpleworkflow")
-    engine.state.set_status("rerun-output", "run", "success", 0)
+    engine.state.set_status("run", "success", 0)
 
     assert not output.exists()
     assert engine.run() == 0
     assert output.read_text(encoding="utf-8") == "analysis"
-    assert engine.state.get_status("rerun-output", "run") == "success"
+    assert engine.state.get_status("run") == "success"
+    engine.state.close()
 
 
 def test_nonempty_output_check_rejects_empty_file(tmp_path: Path) -> None:
@@ -75,6 +77,7 @@ def test_nonempty_output_check_rejects_empty_file(tmp_path: Path) -> None:
     }
     engine = WorkflowEngine(config, workdir=tmp_path / ".simpleworkflow")
     assert engine.run() == INVALID_OUTPUT_EXIT_CODE
-    state = engine.state.get_task_state("empty-output", "run")
+    state = engine.state.get_task_state("run")
     assert state is not None and state.status == "invalid-output"
     assert state.reason and "empty" in state.reason
+    engine.state.close()
