@@ -9,7 +9,7 @@ from typing import TextIO
 
 
 class WorkflowLockedError(RuntimeError):
-    """Raised when another controller owns the workflow execution lock."""
+    """Raised when another local controller owns the workflow lock."""
 
 
 class WorkflowLock:
@@ -30,7 +30,8 @@ class WorkflowLock:
             details = stream.read().strip() or "controlador não identificado"
             stream.close()
             raise WorkflowLockedError(
-                f"Workflow '{self.workflow}' já está em execução ({details})."
+                f"Workflow '{self.workflow}' já está sob controle de outro processo "
+                f"({details})."
             ) from error
         stream.seek(0)
         stream.truncate()
