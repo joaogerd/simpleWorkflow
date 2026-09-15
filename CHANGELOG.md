@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.4.0
+
+- Redefine `.simpleworkflow` as the persistent state directory of exactly one
+  logical workflow instance.
+- Resolve the default state directory beside the workflow YAML rather than from
+  the shell's current directory.
+- Add an explicit, versioned SQLite schema with workflow instance UUID, cycles,
+  task state, state history, runs, attempts and migration history.
+- Model cycles explicitly inside one workflow instance instead of encoding them
+  into workflow identity.
+- Store portable state paths and location-independent task signatures so moving
+  the complete workflow root does not itself invalidate restart state.
+- Keep `plan` and `validate` stateless; they do not create `.simpleworkflow`.
+- Use one workflow lock per state directory.
+- Add `swf migrate` and `swf migrate --check` for protected 0.2.x and 0.3.x
+  state upgrades.
+- Create automatic SQLite backups before migration and replace the active
+  database only after successful transactional conversion.
+- Detect shared/ambiguous legacy databases and refuse silent merging; support
+  explicit extraction of one legacy workflow instance.
+- Convert 0.3.x cycle keys into explicit cycle state and preserve available run,
+  attempt, status, timestamp and provenance information.
+- Reuse migrated successful work only when legacy provenance proves semantic
+  compatibility; otherwise rerun conservatively.
+- Convert unverifiable 0.2.x `running` tasks to `unknown` rather than assuming
+  completion or automatically repeating them.
+- Preserve historical state events, runs and attempts across `reset`.
+- Add upgrade and state-model documentation for existing scientific campaigns.
+
 ## 0.3.0
 
 - Prevent concurrent controllers for the same workflow and work directory.
