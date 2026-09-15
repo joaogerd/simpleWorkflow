@@ -79,7 +79,7 @@ Only a safe technical subset of inherited environment variables participates in
 the signature, as hashes rather than clear text. Keep complete environment setup
 in a versioned wrapper and never place credentials in workflow YAML.
 
-## Moving or cloning a case
+## Moving or copying a case
 
 To move an existing execution, move the complete workflow root:
 
@@ -92,15 +92,19 @@ where `case-A` contains both `workflow.yaml` and `.simpleworkflow/`.
 Moving only the YAML does not move the execution state. simpleWorkflow does not
 maintain a machine-wide registry that tries to rediscover detached state.
 
-Copying the complete root copies the execution history as well. If the copy must
-start as a new independent experiment, remove the copied `.simpleworkflow`
-before its first run.
+A filesystem copy of the complete root also copies the UUID and execution
+history. 0.4.0 deliberately does not support using the original and that copied
+state as two simultaneously active workflow instances: while the original bound
+YAML still exists, the copied state is rejected from another YAML path as an
+ambiguous binding. For an independent copy, remove the copied `.simpleworkflow`
+before its first run so it receives a new workflow instance and history.
 
 When `--workdir` points outside the workflow root, simpleWorkflow records the
-last source path only as diagnostic metadata. If that old YAML still exists, a
+last source path as diagnostic/safety metadata. If that old YAML still exists, a
 different existing YAML is rejected from using the same state directory. If the
 old source no longer exists, the new location can be accepted as a legitimate
-move.
+move. The path is not the workflow's database key and is never part of task or
+cycle identity.
 
 ## PBS
 
