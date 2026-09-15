@@ -80,17 +80,29 @@ class WorkflowState:
         *,
         workflow_name: str,
         source_path: str | Path | None = None,
+        read_only: bool = False,
     ) -> None:
         self.path = Path(path)
         self.workdir = self.path.parent.resolve(strict=False)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(self.path)
+        self.read_only = read_only
+        if read_only:
+            if not self.path.is_file():
+                raise FileNotFoundError(f"state database not found: {self.path}")
+            uri = self.path.resolve(strict=False).as_uri() + "?mode=ro"
+            self.connection = sqlite3.connect(uri, uri=True)
+        else:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.connection = sqlite3.connect(self.path)
         self.connection.execute("PRAGMA foreign_keys = ON")
         try:
             self._open_or_initialize(workflow_name, source_path)
         except Exception:
             self.connection.close()
             raise
+
+    def _require_writable(self) -> None:
+        if self.read_only:
+            raise RuntimeError("state database was opened read-only")
 
     def _table_exists(self, name: str) -> bool:
         row = self.connection.execute(
@@ -116,6 +128,8 @@ class WorkflowState:
         source_path: str | Path | None,
     ) -> None:
         if not self._has_user_tables():
+            if self.read_only:
+                raise StateSchemaError(f"state database {self.path} does not contain a schema")
             self._create_schema()
             self._create_instance(workflow_name, source_path)
             return
@@ -130,14 +144,20 @@ class WorkflowState:
         if row is None:
             raise StateSchemaError("state database has schema_info but no schema version record")
         version = int(row[0])
-        if version != STATE_SCHEMA_VERSION:
+        if version > STATE_SCHEMA_VERSION:
             raise StateSchemaError(
-                f"state schema {version} is unsupported by this simpleWorkflow; "
-                f"expected schema {STATE_SCHEMA_VERSION}"
+                f"state schema {version} requires a newer version of simpleWorkflow; "
+                f"this version supports schema {STATE_SCHEMA_VERSION}"
+            )
+        if version < STATE_SCHEMA_VERSION:
+            raise StateSchemaError(
+                f"state schema {version} is older than the supported schema "
+                f"{STATE_SCHEMA_VERSION}; migrate the state before continuing"
             )
         self._bind_instance(workflow_name, source_path)
 
     def _create_schema(self) -> None:
+        self._require_writable()
         now = _utc_timestamp()
         self.connection.executescript(
             """
@@ -243,6 +263,7 @@ class WorkflowState:
         instance_id: str | None = None,
         created_at: str | None = None,
     ) -> None:
+        self._require_writable()
         now = _utc_timestamp()
         source = Path(source_path).resolve(strict=False) if source_path is not None else None
         self.connection.execute(
@@ -270,30 +291,52 @@ class WorkflowState:
     ) -> None:
         row = self.connection.execute(
             """
-            SELECT source_filename
+            SELECT source_filename, last_source_path
             FROM workflow_instance
             WHERE singleton = 1
             """
         ).fetchone()
         if row is None:
             raise StateSchemaError("state database has no workflow_instance record")
-        stored_filename = row[0]
+        stored_filename, stored_source_path = row
         source = Path(source_path).resolve(strict=False) if source_path is not None else None
-        if source is not None and stored_filename and source.name != stored_filename:
-            raise StateBindingError(
-                f"{self.workdir} pertence ao workflow '{stored_filename}', mas o arquivo atual "
-                f"é '{source.name}'. Use um .simpleworkflow separado ou --workdir explícito."
-            )
+        stored_source = (
+            Path(stored_source_path).resolve(strict=False) if stored_source_path else None
+        )
+
+        if source is not None and stored_source is not None and source != stored_source:
+            same_existing_file = False
+            if stored_source.exists() and source.exists():
+                try:
+                    same_existing_file = stored_source.samefile(source)
+                except OSError:
+                    same_existing_file = False
+            if stored_source.exists() and not same_existing_file:
+                raise StateBindingError(
+                    f"{self.workdir} já pertence ao workflow em '{stored_source}', que ainda "
+                    f"existe; recusando o arquivo '{source}'. Use um .simpleworkflow separado "
+                    "ou outro --workdir."
+                )
+
+        if self.read_only:
+            return
+
         now = _utc_timestamp()
         self.connection.execute(
             """
             UPDATE workflow_instance
             SET workflow_name = ?,
+                source_filename = COALESCE(?, source_filename),
                 last_source_path = COALESCE(?, last_source_path),
                 updated_at = ?
             WHERE singleton = 1
             """,
-            (workflow_name, str(source) if source is not None else None, now),
+            (
+                workflow_name,
+                source.name if source is not None else stored_filename,
+                str(source) if source is not None else None,
+                now,
+            ),
         )
         self.connection.commit()
 
@@ -316,6 +359,7 @@ class WorkflowState:
         return self.instance.instance_id
 
     def ensure_cycle(self, cycle_id: str | None, cycle_time: str | None) -> None:
+        self._require_writable()
         if not cycle_id:
             return
         if not cycle_time:
@@ -374,6 +418,7 @@ class WorkflowState:
         signature_payload: Mapping[str, Any] | None = None,
         updated_at: str | None = None,
     ) -> None:
+        self._require_writable()
         timestamp = updated_at or _utc_timestamp()
         portable_attempt = self.portable_path(attempt_path) if attempt_path is not None else None
         encoded_payload = (
@@ -429,6 +474,7 @@ class WorkflowState:
         *,
         cycle_id: str | None = None,
     ) -> None:
+        self._require_writable()
         for task in tasks:
             previous = self.get_task_state(task, cycle_id=cycle_id)
             self.set_status(
@@ -466,6 +512,7 @@ class WorkflowState:
         return path if path.is_absolute() else self.workdir / path
 
     def reconcile_running(self, *, cycle_id: str | None = None) -> None:
+        self._require_writable()
         rows = self.connection.execute(
             """
             SELECT task, signature, signature_schema, signature_payload, attempt_path
@@ -569,6 +616,7 @@ class WorkflowState:
         *,
         cycle_id: str | None = None,
     ) -> None:
+        self._require_writable()
         key = _cycle_key(cycle_id)
         if tasks is None:
             self.connection.execute("DELETE FROM task_state WHERE cycle_id = ?", (key,))
@@ -588,6 +636,7 @@ class WorkflowState:
         cycle_time: str | None = None,
         created_at: str | None = None,
     ) -> None:
+        self._require_writable()
         self.ensure_cycle(cycle_id, cycle_time)
         self.connection.execute(
             """
@@ -605,6 +654,7 @@ class WorkflowState:
         self.connection.commit()
 
     def finish_run(self, run_id: str, status: str) -> None:
+        self._require_writable()
         self.connection.execute(
             "UPDATE run_history SET status = ?, finished_at = ? WHERE run_id = ?",
             (status, _utc_timestamp(), run_id),
@@ -622,6 +672,7 @@ class WorkflowState:
         cycle_id: str | None = None,
         started_at: str | None = None,
     ) -> None:
+        self._require_writable()
         self.connection.execute(
             """
             INSERT OR REPLACE INTO attempt_history(
@@ -651,6 +702,7 @@ class WorkflowState:
         return_code: int | None,
         reason: str | None,
     ) -> None:
+        self._require_writable()
         self.connection.execute(
             """
             UPDATE attempt_history
@@ -669,6 +721,7 @@ class WorkflowState:
         source_workflow_keys: Iterable[str],
         backup_path: str | Path,
     ) -> None:
+        self._require_writable()
         self.connection.execute(
             """
             INSERT INTO migration_history(
