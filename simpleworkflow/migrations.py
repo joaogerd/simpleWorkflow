@@ -141,7 +141,8 @@ def inspect_state(path: str | Path) -> StateInspection:
     state_path = Path(path)
     if not state_path.exists():
         return StateInspection(kind="missing")
-    connection = sqlite3.connect(state_path)
+    uri = state_path.resolve(strict=False).as_uri() + "?mode=ro"
+    connection = sqlite3.connect(uri, uri=True)
     try:
         tables = _table_names(connection)
         if not tables:
@@ -177,10 +178,24 @@ def inspect_state(path: str | Path) -> StateInspection:
 def _select_group(
     inspection: StateInspection,
     selector: str | None,
+    *,
+    fallback_name: str | None = None,
 ) -> LegacyGroup:
     groups = inspection.groups
     if not groups:
-        raise MigrationError("o banco legado não contém estado de tarefas para migrar")
+        if fallback_name is None:
+            raise MigrationError("o banco legado não contém identidade de workflow para migrar")
+        if selector is not None and selector != fallback_name:
+            raise AmbiguousLegacyState(
+                f"--legacy-workflow {selector!r} não corresponde ao workflow vazio "
+                f"{fallback_name!r} informado pelo YAML"
+            )
+        return LegacyGroup(
+            selector=fallback_name,
+            base_name=fallback_name,
+            workflow_keys=(),
+            cycle_by_key={},
+        )
     if selector is None:
         if len(groups) == 1:
             return groups[0]
@@ -346,6 +361,8 @@ def _legacy_rows(
     inspection: StateInspection,
     group: LegacyGroup,
 ) -> list[dict[str, Any]]:
+    if not group.workflow_keys:
+        return []
     columns = _table_columns(connection, "task_state")
     selected = ["workflow", "task", "status", "return_code", "signature", "updated_at"]
     if "reason" in columns:
@@ -436,7 +453,11 @@ def _migrate_state_locked(
     _validate_migratable(inspection, state_file)
     assert inspection.legacy_version is not None
 
-    group = _select_group(inspection, legacy_selector)
+    group = _select_group(
+        inspection,
+        legacy_selector,
+        fallback_name=workflow_name,
+    )
     legacy_connection = sqlite3.connect(state_file)
     try:
         task_rows = _legacy_rows(legacy_connection, inspection, group)
@@ -588,7 +609,7 @@ def _migrate_state_locked(
                     inspection.legacy_version,
                     group.selector,
                     json.dumps(sorted(group.workflow_keys)),
-                    str(backup_path),
+                    new_state.portable_path(backup_path),
                     _utc_timestamp(),
                 ),
             )
