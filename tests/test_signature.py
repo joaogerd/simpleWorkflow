@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 import simpleworkflow.signature as signature_module
@@ -122,7 +123,7 @@ def test_runtime_identity_uses_task_path_override(tmp_path: Path, monkeypatch: o
     )
 
     assert seen_paths == [task_path]
-    assert result.payload["task"]["runtime"]["resolved"] == str(tool.resolve())
+    assert result.payload["task"]["runtime"]["resolved"] == "$WORKFLOW/science-tool"
 
 
 def test_runtime_identity_resolves_relative_executable_from_task_cwd(tmp_path: Path) -> None:
@@ -140,7 +141,7 @@ def test_runtime_identity_resolves_relative_executable_from_task_cwd(tmp_path: P
         artifacts=ResolvedArtifacts(),
     )
 
-    assert result.payload["task"]["runtime"]["resolved"] == str(tool.resolve())
+    assert result.payload["task"]["runtime"]["resolved"] == "$WORKFLOW/case/bin/science-tool"
 
 
 def test_signature_changes_when_resolved_executable_metadata_changes(
@@ -167,3 +168,23 @@ def test_signature_changes_when_resolved_executable_metadata_changes(
     after = compute_task_signature(**common)
 
     assert before.value != after.value
+
+
+def test_signature_survives_move_of_complete_workflow_root(tmp_path: Path) -> None:
+    first_root = tmp_path / "case-a"
+    first_root.mkdir()
+    workflow = first_root / "workflow.yaml"
+    source = first_root / "background.nc"
+    workflow.write_text("workflow: {name: portable}\n", encoding="utf-8")
+    source.write_text("background", encoding="utf-8")
+    before = signature_for(workflow, source)
+
+    second_root = tmp_path / "case-b"
+    shutil.move(str(first_root), second_root)
+    after = signature_for(second_root / "workflow.yaml", second_root / "background.nc")
+
+    assert before.value == after.value
+    assert before.payload == after.payload
+    assert "simpleworkflow_version" not in after.payload
+    assert "workflow_source" not in after.payload
+    assert after.payload["task"]["inputs"]["required"][0]["path"] == "$WORKFLOW/background.nc"
