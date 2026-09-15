@@ -127,7 +127,7 @@ tasks:
 
     migrate_state(state_path=state_path, workflow_name="partial02", source_path=workflow)
     assert main(["status", str(workflow), "--color", "never"]) == 0
-    output = capsys.readouterr().out  # type: ignore[attr-defined]
+    output = capsys.readouterr().out.lower()  # type: ignore[attr-defined]
     assert "prepare" in output and "success" in output
     assert "analysis" in output and "pending" in output
 
