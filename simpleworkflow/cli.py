@@ -5,12 +5,14 @@ import sys
 import traceback
 from collections.abc import Iterable
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 from .config import load_workflow
 from .console import TerminalReporter
 from .cycles import CycleContext, resolve_cycle_contexts
 from .engine import WorkflowEngine
+from .migrations import MigrationError, StateInspection, inspect_state, migrate_state
 
 
 def _add_cycle_options(parser: argparse.ArgumentParser) -> None:
@@ -50,6 +52,18 @@ def _add_display_options(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_workdir_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--workdir",
+        default=None,
+        metavar="PATH",
+        help=(
+            "State directory. Defaults to .simpleworkflow beside the workflow YAML; "
+            "an explicit relative path is resolved from the current directory."
+        ),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="simpleworkflow",
@@ -60,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     for command in ("run", "plan", "status", "reset", "validate", "explain"):
         command_parser = subparsers.add_parser(command)
         command_parser.add_argument("workflow")
-        command_parser.add_argument("--workdir", default=".simpleworkflow")
+        _add_workdir_option(command_parser)
         command_parser.add_argument(
             "--debug", action="store_true", help="Show technical traceback details."
         )
@@ -77,7 +91,40 @@ def build_parser() -> argparse.ArgumentParser:
                 metavar="NAME",
                 help="Select a task and include all of its dependencies; repeat as needed.",
             )
+
+    migrate_parser = subparsers.add_parser(
+        "migrate",
+        help="Inspect or migrate a pre-0.4 state database.",
+    )
+    migrate_parser.add_argument("workflow")
+    _add_workdir_option(migrate_parser)
+    _add_display_options(migrate_parser)
+    migrate_parser.add_argument(
+        "--legacy-workflow",
+        metavar="INSTANCE",
+        help="Select one explicitly listed legacy instance when a shared DB is ambiguous.",
+    )
+    migrate_parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Inspect the state format and possible legacy instances without modifying files.",
+    )
+    migrate_parser.add_argument(
+        "--debug", action="store_true", help="Show technical traceback details."
+    )
     return parser
+
+
+def _resolve_workdir(config: dict[str, Any], requested: str | None) -> Path:
+    if requested is None:
+        source_dir = Path(
+            config.get("__simpleworkflow__", {}).get("source_dir", Path.cwd())
+        )
+        return (source_dir / ".simpleworkflow").resolve(strict=False)
+    path = Path(requested).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    return path.resolve(strict=False)
 
 
 def _cycle_engines(
@@ -92,35 +139,34 @@ def _cycle_engines(
         end=args.cycle_end,
         step=args.cycle_step,
     )
+    workdir = _resolve_workdir(config, args.workdir)
+    selected = set(args.selected_tasks) if getattr(args, "selected_tasks", None) else None
     if not cycles:
         yield None, WorkflowEngine(
             config=config,
-            workdir=args.workdir,
+            workdir=workdir,
             force=getattr(args, "force", False),
             dry_run=getattr(args, "dry_run", False),
             reporter=reporter,
-            selected_tasks=set(args.selected_tasks) if getattr(args, "selected_tasks", None) else None,
+            selected_tasks=selected,
         )
         return
 
-    base_name = config.get("workflow", {}).get("name", "workflow")
     for cycle in cycles:
         resolved = deepcopy(config)
-        resolved["workflow"] = {
-            **resolved.get("workflow", {}),
-            "name": f"{base_name}__{cycle.cycle_id}",
-        }
         resolved["context"] = {
             **resolved.get("context", {}),
             **cycle.render_context(),
         }
         yield cycle, WorkflowEngine(
             config=resolved,
-            workdir=args.workdir,
+            workdir=workdir,
             force=getattr(args, "force", False),
             dry_run=getattr(args, "dry_run", False),
             reporter=reporter,
-            selected_tasks=set(args.selected_tasks) if getattr(args, "selected_tasks", None) else None,
+            selected_tasks=selected,
+            cycle_id=cycle.cycle_id,
+            cycle_time=cycle.cycle_time,
         )
 
 
@@ -136,27 +182,86 @@ def _reconcile_after_interrupt(engine: WorkflowEngine) -> None:
         task["name"]
         for task in engine.tasks
         if task.get("executor", "local") == "pbs"
-        and engine.state.get_status(engine.state_key, task["name"]) == "running"
+        and engine.state.get_status(task["name"], cycle_id=engine.cycle_id) == "running"
     }
-    engine.state.reconcile_running(engine.state_key)
+    engine.state.reconcile_running(cycle_id=engine.cycle_id)
     for task_name in running_pbs:
-        state = engine.state.get_task_state(engine.state_key, task_name)
+        state = engine.state.get_task_state(task_name, cycle_id=engine.cycle_id)
         if state is not None and state.status == "interrupted":
             engine.state.set_status(
-                engine.state_key,
                 task_name,
                 "unknown",
                 None,
                 state.signature,
                 "submissão PBS interrompida antes de confirmar o job; verifique o escalonador",
-                state.attempt_dir,
+                state.attempt_path,
+                cycle_id=engine.cycle_id,
+                signature_schema=state.signature_schema,
+                signature_payload=state.signature_payload,
             )
+
+
+def _inspection_lines(inspection: StateInspection) -> list[str]:
+    if inspection.kind == "missing":
+        return ["Nenhum state.sqlite3 encontrado."]
+    if inspection.kind == "empty":
+        return ["O state.sqlite3 existe, mas ainda não contém schema."]
+    if inspection.kind == "versioned":
+        return [f"State schema versionado: {inspection.schema_version}."]
+    if inspection.kind == "legacy":
+        lines = [f"Estado legado detectado: simpleWorkflow {inspection.legacy_version}."]
+        if inspection.groups:
+            lines.append("Instâncias lógicas encontradas:")
+            lines.extend(f"  - {group.selector}" for group in inspection.groups)
+        return lines
+    return ["Formato de state.sqlite3 não reconhecido com segurança."]
+
+
+def _run_migration(
+    config: dict[str, Any],
+    args: argparse.Namespace,
+    reporter: TerminalReporter,
+) -> int:
+    workdir = _resolve_workdir(config, args.workdir)
+    state_path = workdir / "state.sqlite3"
+    reporter.heading(_heading("migrate", config, None))
+    inspection = inspect_state(state_path)
+    if args.check:
+        for line in _inspection_lines(inspection):
+            reporter.note(line)
+        reporter.note(f"Estado: {state_path}")
+        return 0 if inspection.kind not in {"unknown", "invalid"} else 2
+
+    source_path = config.get("__simpleworkflow__", {}).get("source_path")
+    if not source_path:
+        raise MigrationError("migration requires a workflow loaded from a YAML file")
+    result = migrate_state(
+        state_path=state_path,
+        workflow_name=config["workflow"]["name"],
+        source_path=source_path,
+        legacy_selector=args.legacy_workflow,
+    )
+    if not result.migrated:
+        reporter.note("O banco já usa o schema atual; nenhuma alteração foi necessária.")
+        return 0
+    reporter.note(
+        f"Migração concluída: {result.inspection.legacy_version} -> schema atual."
+    )
+    if result.selected_group:
+        reporter.note(f"Instância migrada: {result.selected_group.selector}")
+    if result.backup_path:
+        reporter.note(f"Backup preservado em: {result.backup_path}")
+    reporter.note("Use 'swf status <workflow.yaml>' para verificar o estado migrado.")
+    return 0
 
 
 def _main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_workflow(args.workflow)
     reporter = TerminalReporter(color=args.color)
+
+    if args.command == "migrate":
+        return _run_migration(config, args, reporter)
 
     if args.command == "plan":
         index = 1
@@ -200,7 +305,7 @@ def _main(argv: list[str] | None = None) -> int:
                 engine.reset()
             finally:
                 engine.state.close()
-        reporter.note("Workflow state reset.")
+        reporter.note("Workflow state reset; run and attempt history was preserved.")
         return 0
 
     if args.command == "validate":
@@ -246,7 +351,7 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
         return 130
-    except (FileNotFoundError, ValueError, RuntimeError) as error:
+    except (FileNotFoundError, ValueError, RuntimeError, MigrationError) as error:
         if debug:
             traceback.print_exc()
         else:
