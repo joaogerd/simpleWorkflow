@@ -37,7 +37,7 @@ misspellings do not silently alter an experiment.
 | `name` | Unique task identifier. |
 | `argv` | Required list of explicit program arguments. |
 | `depends_on` | One task name or a list of upstream task names. |
-| `enabled` | Optional boolean; disabled tasks are recorded as skipped. |
+| `enabled` | Optional boolean; disabled tasks are recorded as skipped during real execution. |
 | `cwd` | Optional working directory, relative to the workflow YAML when not absolute. |
 | `env` | Optional mapping of task-specific string environment variables. |
 | `executor` | `local` (default) or `pbs`. |
@@ -116,14 +116,17 @@ Literal braces in an argument use doubled braces (`{{` and `}}`).
 `format_version: 1` is recommended in every file. Files from version 0.2 without
 this field are read as version 1; explicitly unsupported versions are rejected.
 
-A disabled task is recorded as `skipped`. A dependent task is then `blocked`;
-disabling a prerequisite never silently authorizes downstream execution.
+A disabled task is recorded as `skipped` during real execution. A dependent task
+is then `blocked`; disabling a prerequisite never silently authorizes downstream
+execution. `swf run --dry-run` only renders and validates the planned invocation;
+it does not write task state.
 
 ## Cycles
 
 A workflow can declare an inclusive ISO-8601 cycle range. The same task set is
-executed sequentially for each cycle, with independent workflow state, logs and
-provenance.
+executed sequentially for each cycle. All cycles belong to the same logical
+workflow instance and the same `.simpleworkflow/state.sqlite3`; task state is
+separated by the explicit `cycle_id` dimension.
 
 ```yaml
 cycle:
@@ -145,8 +148,9 @@ For every cycle, these context values are added:
 ```
 
 Cycle execution is sequential and fail-fast. A successful task in one cycle is
-never reused as the success state of another cycle. The effective workflow name
-and state namespace include the cycle identifier.
+never reused as the success state of another cycle. `workflow.name` remains the
+name from the YAML; cycle identity is stored separately rather than being
+encoded into another workflow name.
 
 CLI selection overrides YAML:
 
@@ -166,7 +170,16 @@ combined with `--from`, `--to` or `--step`.
 
 ## State and logs
 
-Task state is stored in `.simpleworkflow/state.sqlite3` by default. Successful
-tasks are skipped only when the previous signature still matches and declared
-outputs still exist. Every executed task receives immutable logs and provenance
-under `.simpleworkflow/runs/<run-id>/`.
+Without an explicit `--workdir`, task state is stored in
+`.simpleworkflow/state.sqlite3` beside the workflow YAML, not relative to the
+shell's current directory. One state directory represents one logical workflow
+instance.
+
+Successful tasks are skipped only when the previous signature still matches and
+declared outputs still exist. Every executed task receives immutable logs and
+provenance under `.simpleworkflow/runs/<run-id>/`.
+
+`plan`, `validate`, `status`, `explain` and `run --dry-run` are inspection/planning
+operations and do not create state when none exists. `status` and `explain` open
+existing state read-only. `reset` changes reusable task state but preserves run,
+attempt, state-event and migration history.
