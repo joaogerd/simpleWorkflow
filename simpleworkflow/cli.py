@@ -5,6 +5,7 @@ import os
 import sys
 import traceback
 from collections.abc import Iterable
+from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -296,6 +297,7 @@ def _launch_monitor(
     *,
     refresh_seconds: float,
     color: bool,
+    completion_future: Future[int] | None = None,
 ) -> None:
     """Import the optional Textual frontend only when it is explicitly needed."""
     if not tui_available():
@@ -310,7 +312,18 @@ def _launch_monitor(
         workdir,
         refresh_seconds=refresh_seconds,
         color=color,
+        completion_future=completion_future,
     )
+
+
+class _QuietTerminalReporter(TerminalReporter):
+    """Reporter used while the Textual frontend owns the terminal."""
+
+    def __init__(self) -> None:
+        super().__init__(color="never")
+
+    def _write(self, text: str = "") -> None:
+        del text
 
 
 def _run_plain(
@@ -328,6 +341,27 @@ def _run_plain(
         finally:
             engine.state.close()
     return 0
+
+
+def _run_interactive(config: dict[str, Any], args: argparse.Namespace) -> int:
+    """Run the engine in a worker while Textual reads the same persisted state."""
+    workflow_path = Path(
+        config.get("__simpleworkflow__", {}).get("source_path", args.workflow)
+    ).resolve(strict=False)
+    workdir = _resolve_workdir(config, args.workdir)
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="simpleworkflow-engine") as pool:
+        future = pool.submit(_run_plain, config, args, _QuietTerminalReporter())
+        _launch_monitor(
+            config,
+            workflow_path,
+            workdir,
+            refresh_seconds=1.0,
+            color=_tui_color_enabled(args.color),
+            completion_future=future,
+        )
+        # If the user closes the TUI with q before execution completes, the
+        # worker is deliberately allowed to finish. q is never cancellation.
+        return future.result()
 
 
 def _main(argv: list[str] | None = None) -> int:
@@ -377,10 +411,7 @@ def _main(argv: list[str] | None = None) -> int:
         if mode == "tui":
             if args.dry_run:
                 raise RuntimeError("--ui tui is not available with --dry-run; use --ui plain")
-            raise RuntimeError(
-                "interactive run integration is not enabled yet on this development branch; "
-                "use --ui plain"
-            )
+            return _run_interactive(config, args)
         return _run_plain(config, args, reporter)
 
     if args.command == "status":
