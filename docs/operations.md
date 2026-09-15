@@ -18,10 +18,13 @@ case/
 `swf run /path/case/workflow.yaml` therefore uses
 `/path/case/.simpleworkflow` even when the command is launched from another
 directory. Use `--workdir` only when you deliberately need a different state
-location.
+location. An explicit state directory still belongs to one logical workflow; a
+second existing YAML cannot silently take ownership of it.
 
-One lock protects the workflow state directory from concurrent controllers and
-records the computer, process identifier and workflow name for diagnosis.
+One local advisory lock protects the workflow state directory from concurrent
+mutations and records the computer, process identifier and workflow name for
+diagnosis. `run`, `reset` and legacy `migrate` use this same lock. Read-only
+commands do not need it.
 
 | State | Meaning | Safe action |
 | --- | --- | --- |
@@ -38,9 +41,15 @@ records the computer, process identifier and workflow name for diagnosis.
 | `unknown` | A process or PBS job may still exist. | Verify it before `reset`. |
 
 `swf explain workflow.yaml` shows reasons, missing files and attempt directories.
-`swf validate workflow.yaml` validates without executing scientific programs or
-creating persistent state. `swf plan` is also stateless. `--task NAME` selects a
-task together with all prerequisites.
+`swf validate workflow.yaml` validates without executing scientific programs.
+`swf plan` renders dependency order. `status`, `explain`, `plan`, `validate`,
+`run --dry-run` and `migrate --check` do not create persistent workflow state;
+`status` and `explain` open an existing database read-only. `--task NAME` selects
+a task together with all prerequisites.
+
+`swf reset` is a mutating operation when state exists, but is a no-op for a
+workflow that has never created state. It does not create an empty database just
+to reset it.
 
 ## Cycles
 
@@ -57,11 +66,14 @@ Final metadata is published before successful task state is committed.
 
 The SQLite database also indexes runs and attempts and records state transitions.
 `swf reset` clears the current reusable task state for the selected workflow/cycle
-but deliberately keeps historical runs, attempts and state events.
+but deliberately keeps historical runs, attempts, state events and migration
+history. A later run executes the cleared task again rather than reusing history
+as current state.
 
 Paths below `.simpleworkflow` are stored relatively when possible. Task
 signatures represent paths inside the workflow root using a stable workflow-root
-token. Moving the whole case therefore keeps restart information usable.
+token. Moving the whole case therefore keeps restart information usable. A real
+change to an input fingerprint still invalidates the task after the move.
 
 Only a safe technical subset of inherited environment variables participates in
 the signature, as hashes rather than clear text. Keep complete environment setup
@@ -84,6 +96,12 @@ Copying the complete root copies the execution history as well. If the copy must
 start as a new independent experiment, remove the copied `.simpleworkflow`
 before its first run.
 
+When `--workdir` points outside the workflow root, simpleWorkflow records the
+last source path only as diagnostic metadata. If that old YAML still exists, a
+different existing YAML is rejected from using the same state directory. If the
+old source no longer exists, the new location can be accepted as a legitimate
+move.
+
 ## PBS
 
 PBS submission stores the returned job identifier in `scheduler.json`. The
@@ -105,18 +123,24 @@ swf migrate workflow.yaml --check
 swf migrate workflow.yaml
 ```
 
-Migration creates an automatic backup before replacement. If an old database
-contains more than one logical workflow, migration stops rather than combining
-them silently. See [upgrading to 0.4.0](upgrade-0.4.md) for the complete
-procedure, including shared legacy databases and rollback.
+Migration and normal execution cannot mutate the same state concurrently because
+both use the workflow lock. Migration creates an automatic SQLite backup before
+building the replacement database. If an old database contains more than one
+logical workflow, migration stops rather than combining them silently. See
+[upgrading to 0.4.0](upgrade-0.4.md) for the complete procedure, including shared
+legacy databases and rollback.
 
 ## Failure boundaries
 
 SQLite protects state updates. Legacy migration builds the new database
-separately and populates it transactionally before an atomic replacement of the
-active `state.sqlite3`; the pre-migration database is also preserved as a
-backup. Attempt records use temporary files, filesystem synchronization and
-atomic publication.
+separately and populates it transactionally. The backup is synchronized to disk,
+the completed temporary database is synchronized, and an atomic filesystem
+replacement installs it only after conversion succeeds. If that replacement
+fails before the rename completes, the legacy `state.sqlite3` remains active,
+the temporary database is removed and the backup remains available. Attempt
+records use temporary files, filesystem synchronization and atomic publication.
 
-Storage-system failure outside those boundaries still requires the backup and
-retention policy of the institution.
+Storage-system or hardware failure after an atomic replacement but before all
+storage layers have acknowledged writes is still subject to the guarantees of
+the underlying filesystem and institutional backup policy. The pre-migration
+backup remains the rollback source.
