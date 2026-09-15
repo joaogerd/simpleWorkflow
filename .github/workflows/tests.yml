@@ -43,3 +43,51 @@ jobs:
           for workflow in examples/*.yaml examples/cycle/*.yaml; do
             swf plan "$workflow" --color never
           done
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel and source distribution
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+      - name: Install core-only wheel in a clean environment
+        run: |
+          python -m venv /tmp/simpleworkflow-core
+          /tmp/simpleworkflow-core/bin/python -m pip install --upgrade pip
+          WHEEL="$(ls dist/*.whl)"
+          /tmp/simpleworkflow-core/bin/python -m pip install "$WHEEL"
+          /tmp/simpleworkflow-core/bin/python - <<'PY'
+          import importlib.util
+          import simpleworkflow.cli
+          assert importlib.util.find_spec("textual") is None
+          assert importlib.util.find_spec("rich") is None
+          PY
+          cat > /tmp/core-workflow.yaml <<'YAML'
+          workflow:
+            name: clean_core_install
+          tasks:
+            - name: hello
+              argv: [python, -c, "print('core ok')"]
+          YAML
+          /tmp/simpleworkflow-core/bin/swf run /tmp/core-workflow.yaml --ui plain --color never
+      - name: Install TUI extra from the built wheel
+        run: |
+          python -m venv /tmp/simpleworkflow-tui
+          /tmp/simpleworkflow-tui/bin/python -m pip install --upgrade pip
+          WHEEL="$(ls dist/*.whl)"
+          /tmp/simpleworkflow-tui/bin/python -m pip install "${WHEEL}[tui]"
+          /tmp/simpleworkflow-tui/bin/python - <<'PY'
+          import rich
+          import textual
+          import simpleworkflow.tui
+          assert rich is not None
+          assert textual is not None
+          PY
+          /tmp/simpleworkflow-tui/bin/swf monitor --help
+      - name: Verify checkout stayed clean
+        run: test -z "$(git status --porcelain)"
