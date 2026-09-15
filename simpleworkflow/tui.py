@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shlex
+from concurrent.futures import Future
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,13 @@ from textual.widgets import (
     Tree,
 )
 
-from .monitor import AttemptSnapshot, CycleSnapshot, MonitorSnapshot, TaskSnapshot, load_monitor_snapshot
+from .monitor import (
+    AttemptSnapshot,
+    CycleSnapshot,
+    MonitorSnapshot,
+    TaskSnapshot,
+    load_monitor_snapshot,
+)
 
 _STATUS = {
     "pending": ("○", "PENDING", "dim"),
@@ -40,7 +47,14 @@ _STATUS = {
     "skipped": ("–", "SKIPPED", "dim"),
     "partial": ("◐", "PARTIAL", "yellow"),
 }
-_ATTENTION = {"failed", "invalid-input", "invalid-output", "blocked", "interrupted", "unknown"}
+_ATTENTION = {
+    "failed",
+    "invalid-input",
+    "invalid-output",
+    "blocked",
+    "interrupted",
+    "unknown",
+}
 _COMPLETE = {"success", "skipped"}
 _VIEW_IDS = ("monitor", "cycles", "campaign", "problems", "logs")
 _LOG_ORDER = ("pbs_stdout", "stdout", "pbs_stderr", "stderr")
@@ -164,31 +178,52 @@ class WorkflowTui(App[None]):
         height: 4; padding: 0 1; border-bottom: solid #303744; background: #111318;
     }
     #summary { width: 1fr; height: 3; content-align: left middle; }
-    #current-cycle { width: 28; height: 3; text-align: right; content-align: right middle; color: #9fb9ff; }
-    #cycle-line { height: 2; padding: 0 1; background: #171a21; content-align: left middle; }
+    #current-cycle {
+        width: 28; height: 3; text-align: right; content-align: right middle;
+        color: #9fb9ff;
+    }
+    #cycle-line {
+        height: 2; padding: 0 1; background: #171a21; content-align: left middle;
+    }
     TabbedContent { height: 1fr; }
     #monitor-main { height: 1fr; }
-    #left { width: 48%; min-width: 28; border-right: solid #303744; background: #0f1116; }
+    #left {
+        width: 48%; min-width: 28; border-right: solid #303744; background: #0f1116;
+    }
     #right { width: 52%; background: #0d0f13; }
     #monitor-main.narrow { layout: vertical; }
-    #monitor-main.narrow #left { width: 1fr; min-width: 1; height: 1fr; border-right: none; }
+    #monitor-main.narrow #left {
+        width: 1fr; min-width: 1; height: 1fr; border-right: none;
+    }
     #monitor-main.narrow #right { display: none; }
     #monitor-main.narrow.inspecting #left { display: none; }
-    #monitor-main.narrow.inspecting #right { display: block; width: 1fr; height: 1fr; }
-    .pane-title { height: 2; padding: 0 1; color: #9fb9ff; text-style: bold; content-align: left middle; }
+    #monitor-main.narrow.inspecting #right {
+        display: block; width: 1fr; height: 1fr;
+    }
+    .pane-title {
+        height: 2; padding: 0 1; color: #9fb9ff; text-style: bold;
+        content-align: left middle;
+    }
     #task-tree { height: 1fr; padding: 0 1; }
     #inspector { height: 1fr; padding: 1 2; }
     #cycles-table, #problems-table { height: 1fr; margin: 1 0; }
     #campaign-view { height: 1fr; padding: 1 2; }
-    #log-toolbar { height: 2; padding: 0 1; border-bottom: solid #303744; background: #111318; }
-    #log-title { width: 1fr; height: 1; color: #9fb9ff; content-align: left middle; }
+    #log-toolbar {
+        height: 2; padding: 0 1; border-bottom: solid #303744; background: #111318;
+    }
+    #log-title {
+        width: 1fr; height: 1; color: #9fb9ff; content-align: left middle;
+    }
     .log-button {
         width: auto; min-width: 10; height: 1; min-height: 1; padding: 0 1;
         margin-left: 1; border: none; background: #111318; color: #8c93a1;
     }
     .log-button.selected-log { color: #67e8f9; text-style: bold underline; }
     #full-log { height: 1fr; padding: 1; background: #0d0f13; }
-    #shortcut-line { height: 1; padding: 0 1; border-top: solid #252b35; background: #111318; color: #697180; }
+    #shortcut-line {
+        height: 1; padding: 0 1; border-top: solid #252b35;
+        background: #111318; color: #697180;
+    }
     """
 
     BINDINGS = [
@@ -219,6 +254,7 @@ class WorkflowTui(App[None]):
         workdir: str | Path,
         refresh_seconds: float = 1.0,
         color: bool = True,
+        completion_future: Future[int] | None = None,
     ) -> None:
         super().__init__()
         self.config = config
@@ -226,11 +262,15 @@ class WorkflowTui(App[None]):
         self.workdir = Path(workdir).resolve(strict=False)
         self.refresh_seconds = max(0.5, float(refresh_seconds))
         self.color_enabled = bool(color) and not bool(os.environ.get("NO_COLOR"))
+        self.completion_future = completion_future
         self.task_order = _task_names(config)
+        raw_tasks = config.get("tasks", [])
         self.task_map = {
             str(task["name"]): task
-            for task in config.get("tasks", [])
-            if isinstance(task, dict) and isinstance(task.get("name"), str)
+            for task in raw_tasks
+            if isinstance(raw_tasks, list)
+            and isinstance(task, dict)
+            and isinstance(task.get("name"), str)
         }
         self.snapshot = self._load_snapshot()
         self.selected_cycle_id: str | None = None
@@ -270,9 +310,16 @@ class WorkflowTui(App[None]):
                     yield Static(id="log-title")
                     for button_id, key in _LOG_BUTTONS.items():
                         yield Button(_LOG_LABELS[key], id=button_id, classes="log-button")
-                yield RichLog(id="full-log", highlight=False, markup=False, wrap=False, max_lines=1500)
+                yield RichLog(
+                    id="full-log",
+                    highlight=False,
+                    markup=False,
+                    wrap=False,
+                    max_lines=1500,
+                )
         yield Static(
-            "↑↓ navigate   ←→ cycle   Enter inspect   Tab switch   l logs   o/e output/error   r refresh   ? help   q quit",
+            "↑↓ navigate   ←→ cycle   Enter inspect   Tab switch   l logs   "
+            "o/e output/error   r refresh   ? help   q quit",
             id="shortcut-line",
         )
 
@@ -281,6 +328,13 @@ class WorkflowTui(App[None]):
         self._apply_responsive_layout()
         self.refresh_runtime(force=True)
         self.set_interval(self.refresh_seconds, self.refresh_runtime)
+        if self.completion_future is not None:
+            self.set_interval(0.2, self._check_completion)
+
+    def _check_completion(self) -> None:
+        if self.completion_future is not None and self.completion_future.done():
+            self.refresh_runtime(force=True)
+            self.exit()
 
     def on_resize(self) -> None:
         self._apply_responsive_layout()
@@ -303,11 +357,13 @@ class WorkflowTui(App[None]):
     def _choose_initial_selection(self) -> None:
         if self.snapshot.cycles:
             preferred = next(
-                (cycle for cycle in self.snapshot.cycles if cycle.status == "running"), None
+                (cycle for cycle in self.snapshot.cycles if cycle.status == "running"),
+                None,
             )
             if preferred is None:
                 preferred = next(
-                    (cycle for cycle in self.snapshot.cycles if cycle.status == "failed"), None
+                    (cycle for cycle in self.snapshot.cycles if cycle.status == "failed"),
+                    None,
                 )
             if preferred is None:
                 preferred = next(
@@ -339,7 +395,11 @@ class WorkflowTui(App[None]):
 
     def _selected_cycle(self) -> CycleSnapshot | None:
         return next(
-            (cycle for cycle in self.snapshot.cycles if cycle.cycle_id == self.selected_cycle_id),
+            (
+                cycle
+                for cycle in self.snapshot.cycles
+                if cycle.cycle_id == self.selected_cycle_id
+            ),
             None,
         )
 
@@ -352,7 +412,10 @@ class WorkflowTui(App[None]):
         return (
             self.selected_cycle_id,
             tuple(
-                (cycle.cycle_id, tuple((task.name, task.status) for task in cycle.tasks))
+                (
+                    cycle.cycle_id,
+                    tuple((task.name, task.status) for task in cycle.tasks),
+                )
                 for cycle in self.snapshot.cycles
             ),
             tuple((task.name, task.status) for task in self.snapshot.tasks),
@@ -387,7 +450,8 @@ class WorkflowTui(App[None]):
             for task in self.snapshot.tasks:
                 symbol = _STATUS.get(task.status, ("•", "", ""))[0]
                 leaf = tree.root.add_leaf(
-                    f"{symbol} {_task_label(task.name)}", data=(None, task.name)
+                    f"{symbol} {_task_label(task.name)}",
+                    data=(None, task.name),
                 )
                 self.task_nodes[(None, task.name)] = leaf
 
@@ -426,7 +490,12 @@ class WorkflowTui(App[None]):
         if event.data_table.id == "cycles-table":
             cycle_id = str(event.row_key.value)
             cycle = next(
-                (item for item in self.snapshot.cycles if item.cycle_id == cycle_id), None
+                (
+                    item
+                    for item in self.snapshot.cycles
+                    if item.cycle_id == cycle_id
+                ),
+                None,
             )
             if cycle is None:
                 return
@@ -437,7 +506,9 @@ class WorkflowTui(App[None]):
             self._rebuild_tree(force=True)
             self.query_one("#views", TabbedContent).active = "monitor"
             self._refresh_inspector()
-        elif event.data_table.id == "problems-table":
+            return
+
+        if event.data_table.id == "problems-table":
             value = event.row_key.value
             if not isinstance(value, str) or "::" not in value:
                 return
@@ -525,8 +596,7 @@ class WorkflowTui(App[None]):
             body.add_class("inspecting")
 
     def action_workflow_panel(self) -> None:
-        body = self.query_one("#monitor-main")
-        body.remove_class("inspecting")
+        self.query_one("#monitor-main").remove_class("inspecting")
 
     def refresh_runtime(self, *, force: bool = False) -> None:
         self.snapshot = self._load_snapshot()
@@ -549,7 +619,8 @@ class WorkflowTui(App[None]):
             f"[bold]{escape(self.snapshot.workflow_name)}[/bold]\n"
             f"{self.snapshot.completed_tasks}/{self.snapshot.total_tasks} tasks   "
             f"{self.snapshot.running_tasks} running   "
-            f"{self.snapshot.failed_tasks} failed   [dim]updated {now}[/dim]"
+            f"{self.snapshot.failed_tasks} failed   "
+            f"[dim]updated {now}[/dim]"
         )
         cycle = self._selected_cycle()
         self.query_one("#current-cycle", Static).update(
@@ -607,7 +678,10 @@ class WorkflowTui(App[None]):
                 f"run               {escape(run.run_id if run else '—')}",
                 f"run status        {escape(run.status if run else '—')}",
                 f"start             {escape(run.created_at if run else '—')}",
-                f"elapsed           {_format_duration(_elapsed(run.created_at, run.finished_at) if run else None)}",
+                "elapsed           "
+                + _format_duration(
+                    _elapsed(run.created_at, run.finished_at) if run else None
+                ),
                 f"cycles            {len(self.snapshot.cycles)}",
                 f"tasks             {self.snapshot.total_tasks}",
                 f"completed         {self.snapshot.completed_tasks}",
@@ -693,7 +767,11 @@ class WorkflowTui(App[None]):
         backend = attempt.executor if attempt and attempt.executor else None
         if backend is None:
             config_task = self.task_map.get(task.name, {})
-            backend = str(config_task.get("executor", "local")) if isinstance(config_task, dict) else "local"
+            backend = (
+                str(config_task.get("executor", "local"))
+                if isinstance(config_task, dict)
+                else "local"
+            )
 
         fields: list[tuple[str, str]] = [
             ("task", escape(task.name)),
@@ -732,7 +810,9 @@ class WorkflowTui(App[None]):
         if task.attempt_path:
             fields.append(("attempt path", escape(task.attempt_path)))
         inspector.update(
-            "\n\n".join(f"[dim]{name:<12}[/dim] {value}" for name, value in fields)
+            "\n\n".join(
+                f"[dim]{name:<12}[/dim] {value}" for name, value in fields
+            )
         )
 
     def _refresh_log_buttons(self, attempt: AttemptSnapshot | None) -> None:
@@ -759,11 +839,16 @@ class WorkflowTui(App[None]):
 
         available = attempt.available_logs
         if self.selected_log_key not in available:
-            self.selected_log_key = next((key for key in _LOG_ORDER if key in available), None)
+            self.selected_log_key = next(
+                (key for key in _LOG_ORDER if key in available),
+                None,
+            )
             self._last_log_signature = None
         self._refresh_log_buttons(attempt)
         if self.selected_log_key is None:
-            self.current_log_text = f"Attempt exists at {attempt.directory}, but no log file is available."
+            self.current_log_text = (
+                f"Attempt exists at {attempt.directory}, but no log file is available."
+            )
             if force:
                 log.clear()
                 log.write(self.current_log_text)
@@ -784,7 +869,8 @@ class WorkflowTui(App[None]):
         self._last_log_signature = signature
         self.current_log_text = _tail(path) or "(empty)"
         title.update(
-            f"[bold]{escape(self.selected_task or '')}[/bold]  [dim]{escape(path.name)}[/dim]"
+            f"[bold]{escape(self.selected_task or '')}[/bold]  "
+            f"[dim]{escape(path.name)}[/dim]"
         )
         log.clear()
         log.write(self.current_log_text)
@@ -797,6 +883,7 @@ def run_monitor(
     *,
     refresh_seconds: float = 1.0,
     color: bool = True,
+    completion_future: Future[int] | None = None,
 ) -> None:
     """Launch the interactive workflow monitor."""
     WorkflowTui(
@@ -805,4 +892,5 @@ def run_monitor(
         workdir=workdir,
         refresh_seconds=refresh_seconds,
         color=color,
+        completion_future=completion_future,
     ).run()
