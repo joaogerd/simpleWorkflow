@@ -52,6 +52,45 @@ def _render_value(value: Any, context: dict[str, Any]) -> Any:
     return value
 
 
+class _LazyWorkflowState:
+    """Open SQLite only when an operation actually needs persistent state."""
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        workflow_name: str,
+        source_path: str | Path | None,
+        cycle_id: str | None,
+        cycle_time: str | None,
+    ) -> None:
+        self.path = path
+        self.workflow_name = workflow_name
+        self.source_path = source_path
+        self.cycle_id = cycle_id
+        self.cycle_time = cycle_time
+        self._state: WorkflowState | None = None
+
+    def _open(self) -> WorkflowState:
+        if self._state is None:
+            state = WorkflowState(
+                self.path,
+                workflow_name=self.workflow_name,
+                source_path=self.source_path,
+            )
+            state.ensure_cycle(self.cycle_id, self.cycle_time)
+            self._state = state
+        return self._state
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._open(), name)
+
+    def close(self) -> None:
+        if self._state is not None:
+            self._state.close()
+            self._state = None
+
+
 class WorkflowEngine:
     """Small dependency-aware workflow engine for one logical workflow instance."""
 
@@ -86,12 +125,13 @@ class WorkflowEngine:
             else (self.source_dir / ".simpleworkflow").resolve(strict=False)
         )
         self.log_dir = self.workdir / "logs"
-        self.state = WorkflowState(
+        self.state = _LazyWorkflowState(
             self.workdir / "state.sqlite3",
             workflow_name=self.workflow_name,
             source_path=source_path,
+            cycle_id=self.cycle_id,
+            cycle_time=self.cycle_time,
         )
-        self.state.ensure_cycle(self.cycle_id, self.cycle_time)
         self.executor: TaskExecutor = LocalExecutor(self.log_dir)
 
     def plan(self) -> list[str]:
