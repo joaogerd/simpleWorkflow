@@ -105,11 +105,13 @@ tasks.
 Moving only `workflow.yaml` does not move its state. This is intentional: the
 state belongs to the workflow root, not to a globally searchable registry.
 
-Copying the complete root, including `.simpleworkflow`, creates a clone that
-contains the same execution history. If the original source still exists and the
-copy is pointed at the same external `--workdir`, the binding check rejects that
-ambiguous sharing. Removing the copied `.simpleworkflow` before the first run
-starts a new workflow instance.
+Copying the complete root also copies the UUID and execution history, but 0.4.0
+does not treat that as a supported way to create two simultaneously active
+workflow instances. While the original bound YAML still exists, opening the
+copied state from another YAML path is rejected as ambiguous. For an independent
+copy, remove the copied `.simpleworkflow` before its first run so a new instance
+is created. For archival or relocation, move the root rather than branching the
+same persistent identity into two active locations.
 
 ## Cycles
 
