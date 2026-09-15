@@ -142,7 +142,7 @@ tasks:
     argv:
       - "{{python}}"
       - -c
-      - "from pathlib import Path; root=Path(r'{{products}}'); root.mkdir(parents=True, exist_ok=True); (root/'cycle_{{cycle_yyyymmddhh}}.txt').write_text('{{cycle_time}}'); Path(r'{{marker}}').open('a').write('{{cycle_id}}\\n')"
+      - "from pathlib import Path; root=Path(r'{{products}}'); root.mkdir(parents=True, exist_ok=True); (root/'cycle_{{cycle_yyyymmddhh}}.txt').write_text('{{cycle_time}}'); Path(r'{{marker}}').open('a').write('{{cycle_id}}'+chr(10))"
     outputs:
       required:
         - "{{products}}/cycle_{{cycle_yyyymmddhh}}.txt"
