@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import fcntl
-import hashlib
 import json
 import os
 import socket
@@ -14,11 +13,10 @@ class WorkflowLockedError(RuntimeError):
 
 
 class WorkflowLock:
-    """Advisory, process-scoped lock for one workflow in one work directory."""
+    """Advisory process lock for the single workflow represented by a work directory."""
 
     def __init__(self, workdir: str | Path, workflow: str) -> None:
-        digest = hashlib.sha256(workflow.encode("utf-8")).hexdigest()[:16]
-        self.path = Path(workdir) / "locks" / f"{digest}.lock"
+        self.path = Path(workdir) / "lock"
         self.workflow = workflow
         self._stream: TextIO | None = None
 
