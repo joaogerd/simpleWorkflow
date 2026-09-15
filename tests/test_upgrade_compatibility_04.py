@@ -208,12 +208,15 @@ def test_v03_cli_selector_extracts_one_instance_and_backup_keeps_both(tmp_path: 
     migration = state.connection.execute(
         "SELECT source_selector, source_workflow_keys, backup_path FROM migration_history"
     ).fetchone()
-    state.close()
     assert migration is not None
+    backup_path = state.resolve_path(migration[2])
+    state.close()
     assert migration[0] == "forecast@aaaaaaaaaaaa"
     assert json.loads(migration[1]) == ["forecast@aaaaaaaaaaaa"]
+    assert not Path(migration[2]).is_absolute()
+    assert backup_path is not None
 
-    backup = sqlite3.connect(migration[2])
+    backup = sqlite3.connect(backup_path)
     assert backup.execute("SELECT DISTINCT workflow FROM task_state ORDER BY workflow").fetchall() == [
         ("forecast@aaaaaaaaaaaa",),
         ("forecast@bbbbbbbbbbbb",),
