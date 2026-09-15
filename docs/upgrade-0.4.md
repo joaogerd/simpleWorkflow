@@ -42,7 +42,9 @@ swf migrate /work/case/workflow.yaml \
 ```
 
 Continue using the same explicit `--workdir` unless you subsequently move the
-entire state directory beside the YAML.
+entire state directory beside the YAML. A custom state directory still belongs
+to one logical workflow. Do not point two active YAML files at the same custom
+`--workdir`.
 
 ## Step 1: inspect without changing anything
 
@@ -58,13 +60,17 @@ Typical output identifies one of:
 - more than one legacy logical workflow in the same database;
 - an unknown format that simpleWorkflow will not modify.
 
-`--check` is read-only and does not create a backup or replace the database.
+`--check` is read-only and does not create a backup, lock or replacement
+database.
 
 ## Step 2: migrate a single unambiguous workflow
 
 ```bash
 swf migrate workflow.yaml
 ```
+
+Migration uses the same `.simpleworkflow/lock` as `swf run` and `swf reset`, so
+those state-changing operations cannot modify the same database concurrently.
 
 Before replacement, simpleWorkflow creates a SQLite backup below:
 
@@ -84,9 +90,16 @@ or:
 state-v0-3-x-before-migration-20260915T003000Z.sqlite3
 ```
 
-The new database is built separately, populated in a transaction, closed and
-then atomically replaces `state.sqlite3`. The original database is therefore not
-partially rewritten in place.
+The backup is completed and synchronized before the active state is touched. The
+new database is then built under a temporary name, populated in a SQLite
+transaction, closed and synchronized. Only after all of that succeeds does an
+atomic filesystem replacement install it as `state.sqlite3`.
+
+If conversion fails before replacement, the legacy database remains untouched.
+If the final atomic replacement itself fails, simpleWorkflow removes the
+migration temporary file, leaves the legacy `state.sqlite3` active and keeps the
+backup. A later migration attempt can therefore start again from the original
+state.
 
 Running `swf migrate` again on the already current schema is a protected no-op.
 
@@ -96,6 +109,9 @@ Running `swf migrate` again on the already current schema is a protected no-op.
 swf status workflow.yaml
 swf explain workflow.yaml
 ```
+
+Both commands inspect an existing 0.4 database read-only. They do not change
+`last_source_path`, create runs or alter task state.
 
 For a cyclic workflow, optionally inspect an explicit cycle:
 
@@ -144,6 +160,13 @@ is rerun when necessary. This is intentionally conservative.
 A legacy `failed` task remains failed after migration and is eligible to run
 again normally after the cause is corrected.
 
+### Tasks with no legacy state row
+
+Older schemas represent a never-executed task by the absence of a row. After
+migration such a task remains `pending`. This is what allows a partially
+completed 0.2.x experiment to keep a safely reusable completed prerequisite and
+continue only the remaining work.
+
 ### 0.2.x tasks left as `running`
 
 0.2.x did not store enough process/scheduler information to safely determine
@@ -169,7 +192,8 @@ forecast__20180415T060000Z@012345abcdef
 Migration groups keys with the same legacy path digest and base workflow name
 into one logical workflow instance and converts the timestamps into explicit
 cycle rows. Completed cycles can therefore remain completed while later cycles
-continue.
+continue. The old `workflow__cycle` representation is migration input only; it
+is not the identity model of the 0.4 database.
 
 ## Shared legacy databases: do not merge them
 
@@ -203,7 +227,8 @@ a single-workflow 0.4 database.
 
 ## Recovering the old database
 
-Do not restore state while a `swf run` process is active.
+Do not restore state while a `swf run`, `swf reset` or `swf migrate` process is
+active.
 
 Locate the backup created by migration:
 
@@ -248,8 +273,9 @@ swf explain workflow.yaml
 swf run workflow.yaml
 ```
 
-Expect old `running` records to become `unknown` unless later provenance is
-sufficient to reconcile them.
+Expect old `running` records to become `unknown`. A `success` is reused only when
+legacy provenance proves compatibility; `failed` tasks can retry and tasks that
+had no row remain pending.
 
 ## 0.3.x checklist
 
