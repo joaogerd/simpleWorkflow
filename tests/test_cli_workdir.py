@@ -89,6 +89,6 @@ def test_absolute_explicit_workdir_is_preserved(tmp_path: Path, monkeypatch: obj
     _write_workflow(workflow)
     monkeypatch.chdir(caller)  # type: ignore[attr-defined]
 
-    assert main(["status", str(workflow), "--workdir", str(state), "--color", "never"]) == 0
+    assert main(["run", str(workflow), "--workdir", str(state), "--color", "never"]) == 0
     assert (state / "state.sqlite3").is_file()
     assert os.path.samefile(state, state.resolve())
