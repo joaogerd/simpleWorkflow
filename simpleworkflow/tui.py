@@ -265,7 +265,8 @@ class WorkflowTui(App[None]):
         )
 
     def _selected_task_snapshot(self) -> TaskSnapshot | None:
-        tasks = self._selected_cycle().tasks if self._selected_cycle() else self.snapshot.tasks
+        cycle = self._selected_cycle()
+        tasks = cycle.tasks if cycle is not None else self.snapshot.tasks
         return next((task for task in tasks if task.name == self.selected_task), None)
 
     def _tree_state_signature(self) -> tuple[Any, ...]:
@@ -450,7 +451,13 @@ class WorkflowTui(App[None]):
         start = max(0, end - 5)
         parts: list[str] = []
         for cycle in self.snapshot.cycles[start:end]:
-            symbol = {"success": "✓", "running": "●", "failed": "!", "partial": "◐", "pending": "○"}.get(cycle.status, "○")
+            symbol = {
+                "success": "✓",
+                "running": "●",
+                "failed": "!",
+                "partial": "◐",
+                "pending": "○",
+            }.get(cycle.status, "○")
             label = _format_cycle_time(cycle.cycle_time)
             text = f"{symbol} {label}"
             if cycle.cycle_id == self.selected_cycle_id:
@@ -510,26 +517,24 @@ class WorkflowTui(App[None]):
             inspector.update("[dim]No task selected.[/dim]")
             return
         fields = [
-            ("task", task.name),
-            ("cycle", task.cycle_id or "—"),
+            ("task", escape(task.name)),
+            ("cycle", escape(task.cycle_id or "—")),
             ("status", _status_markup(task.status, color=self.color_enabled)),
         ]
         if task.return_code is not None:
             fields.append(("return code", str(task.return_code)))
         if task.updated_at:
-            fields.append(("updated", task.updated_at))
+            fields.append(("updated", escape(task.updated_at)))
         if task.reason:
-            fields.append(("reason", task.reason))
+            fields.append(("reason", escape(task.reason)))
         if task.attempt_path:
-            fields.append(("attempt", task.attempt_path))
+            fields.append(("attempt", escape(task.attempt_path)))
         inspector.update("\n\n".join(f"[dim]{name:<12}[/dim] {value}" for name, value in fields))
 
     def _refresh_logs(self, *, force: bool = False) -> None:
         title = self.query_one("#log-title", Static)
         log = self.query_one("#full-log", RichLog)
-        title.update(
-            f"[bold]{escape(self.selected_task or 'No task selected')}[/bold]"
-        )
+        title.update(f"[bold]{escape(self.selected_task or 'No task selected')}[/bold]")
         if not force:
             return
         log.clear()
