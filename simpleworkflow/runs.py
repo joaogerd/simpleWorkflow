@@ -14,7 +14,7 @@ from typing import Any, Mapping
 
 import yaml
 
-RUN_SCHEMA_VERSION = 1
+RUN_SCHEMA_VERSION = 2
 
 
 def _utc_timestamp() -> str:
@@ -56,9 +56,15 @@ class RunRecorder:
         workdir: str | Path,
         workflow_name: str,
         *,
+        instance_id: str | None = None,
+        cycle_id: str | None = None,
+        cycle_time: str | None = None,
         run_id: str | None = None,
     ) -> None:
         self.workflow_name = workflow_name
+        self.instance_id = instance_id
+        self.cycle_id = cycle_id
+        self.cycle_time = cycle_time
         self.run_id = run_id or _default_run_id()
         self.root = Path(workdir) / "runs"
         self.directory = self.root / self.run_id
@@ -71,6 +77,9 @@ class RunRecorder:
                 "schema_version": RUN_SCHEMA_VERSION,
                 "run_id": self.run_id,
                 "workflow": workflow_name,
+                "workflow_instance": instance_id,
+                "cycle_id": cycle_id,
+                "cycle_time": cycle_time,
                 "created_at": _utc_timestamp(),
             },
         )
@@ -118,6 +127,9 @@ class RunRecorder:
                 "schema_version": RUN_SCHEMA_VERSION,
                 "run_id": attempt.run_id,
                 "workflow": self.workflow_name,
+                "workflow_instance": self.instance_id,
+                "cycle_id": self.cycle_id,
+                "cycle_time": self.cycle_time,
                 "task": attempt.task_name,
                 "attempt": attempt.attempt,
                 "started_at": _utc_timestamp(),
@@ -134,6 +146,9 @@ class RunRecorder:
             "schema_version": RUN_SCHEMA_VERSION,
             "run_id": attempt.run_id,
             "workflow": self.workflow_name,
+            "workflow_instance": self.instance_id,
+            "cycle_id": self.cycle_id,
+            "cycle_time": self.cycle_time,
             "task": attempt.task_name,
             "attempt": attempt.attempt,
             "recorded_at": _utc_timestamp(),

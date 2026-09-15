@@ -3,7 +3,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 from simpleworkflow.engine import WorkflowEngine
+from simpleworkflow.state import StateBindingError
 
 
 def test_plan_orders_dependencies(tmp_path: Path) -> None:
@@ -21,6 +24,7 @@ def test_plan_orders_dependencies(tmp_path: Path) -> None:
     }
     engine = WorkflowEngine(config=config, workdir=tmp_path / ".simpleworkflow")
     assert engine.plan() == ["first", "second"]
+    engine.state.close()
 
 
 def test_run_executes_argv_with_cwd_and_environment(tmp_path: Path) -> None:
@@ -49,7 +53,8 @@ def test_run_executes_argv_with_cwd_and_environment(tmp_path: Path) -> None:
     engine = WorkflowEngine(config=config, workdir=tmp_path / ".simpleworkflow")
     assert engine.run() == 0
     assert (execution_dir / "result.txt").read_text(encoding="utf-8") == "expected"
-    assert engine.state.get_status("run-test", "write-result") == "success"
+    assert engine.state.get_status("write-result") == "success"
+    engine.state.close()
 
 
 def test_run_rejects_missing_required_input(tmp_path: Path) -> None:
@@ -81,7 +86,8 @@ def test_run_rejects_missing_required_input(tmp_path: Path) -> None:
     engine = WorkflowEngine(config=config, workdir=tmp_path / ".simpleworkflow")
     assert engine.run() == 2
     assert not result.exists()
-    assert engine.state.get_status("missing-input", "write-result") == "invalid-input"
+    assert engine.state.get_status("write-result") == "invalid-input"
+    engine.state.close()
 
 
 def test_run_allows_unmatched_optional_input_glob(tmp_path: Path) -> None:
@@ -108,6 +114,7 @@ def test_run_allows_unmatched_optional_input_glob(tmp_path: Path) -> None:
     engine = WorkflowEngine(config=config, workdir=tmp_path / ".simpleworkflow")
     assert engine.run() == 0
     assert (execution_dir / "result.txt").read_text(encoding="utf-8") == "ok"
+    engine.state.close()
 
 
 def test_success_state_is_invalidated_when_required_input_disappears(tmp_path: Path) -> None:
@@ -125,10 +132,11 @@ def test_success_state_is_invalidated_when_required_input_disappears(tmp_path: P
     }
 
     engine = WorkflowEngine(config=config, workdir=tmp_path / ".simpleworkflow")
-    engine.state.set_status("stale-input", "task", "success", 0)
+    engine.state.set_status("task", "success", 0)
 
     assert engine.run() == 2
-    assert engine.state.get_status("stale-input", "task") == "invalid-input"
+    assert engine.state.get_status("task") == "invalid-input"
+    engine.state.close()
 
 
 def test_local_timeout_terminates_process_group(tmp_path: Path) -> None:
@@ -144,24 +152,44 @@ def test_local_timeout_terminates_process_group(tmp_path: Path) -> None:
     }
     engine = WorkflowEngine(config, workdir=tmp_path / ".simpleworkflow")
     assert engine.run() == 124
-    state = engine.state.get_task_state("timeout", "slow")
+    state = engine.state.get_task_state("slow")
     assert state is not None and state.status == "failed"
     attempt = next((tmp_path / ".simpleworkflow" / "runs").glob("*/tasks/*/attempt-001"))
     assert (attempt / "process.json").is_file()
+    engine.state.close()
 
 
-def test_same_workflow_name_from_different_files_uses_independent_state(tmp_path: Path) -> None:
+def test_same_state_directory_rejects_a_different_workflow_file(tmp_path: Path) -> None:
     first = tmp_path / "first.yaml"
     second = tmp_path / "second.yaml"
     first.write_text("workflow: {name: repeated}\n", encoding="utf-8")
     second.write_text("workflow: {name: repeated}\n", encoding="utf-8")
     base = {"workflow": {"name": "repeated"}, "tasks": []}
+    workdir = tmp_path / ".simpleworkflow"
     first_engine = WorkflowEngine(
         {**base, "__simpleworkflow__": {"source_path": str(first), "source_dir": str(tmp_path)}},
-        workdir=tmp_path / ".simpleworkflow",
+        workdir=workdir,
     )
+    first_id = first_engine.state.instance_id
+    first_engine.state.close()
+
     second_engine = WorkflowEngine(
-        {**base, "__simpleworkflow__": {"source_path": str(second), "source_dir": str(tmp_path)}},
-        workdir=tmp_path / ".simpleworkflow",
+        {
+            **base,
+            "__simpleworkflow__": {
+                "source_path": str(second),
+                "source_dir": str(tmp_path),
+            },
+        },
+        workdir=workdir,
     )
-    assert first_engine.state_key != second_engine.state_key
+    with pytest.raises(StateBindingError):
+        _ = second_engine.state.instance_id
+    second_engine.state.close()
+
+    reopened = WorkflowEngine(
+        {**base, "__simpleworkflow__": {"source_path": str(first), "source_dir": str(tmp_path)}},
+        workdir=workdir,
+    )
+    assert reopened.state.instance_id == first_id
+    reopened.state.close()

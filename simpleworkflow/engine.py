@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import shlex
 from collections.abc import Mapping
 from pathlib import Path
@@ -13,7 +12,12 @@ from .locking import WorkflowLock
 from .pbs import PbsExecutor
 from .provenance import build_attempt_metadata
 from .runs import AttemptPaths, RunRecorder
-from .signature import TaskSignature, compute_task_signature
+from .signature import (
+    SIGNATURE_SCHEMA_VERSION,
+    TaskSignature,
+    compute_task_signature,
+    legacy_signature_compatible,
+)
 from .state import WorkflowState
 
 INVALID_INPUT_EXIT_CODE = 2
@@ -48,18 +52,64 @@ def _render_value(value: Any, context: dict[str, Any]) -> Any:
     return value
 
 
+class _LazyWorkflowState:
+    """Open SQLite only when an operation actually needs persistent state."""
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        workflow_name: str,
+        source_path: str | Path | None,
+        cycle_id: str | None,
+        cycle_time: str | None,
+    ) -> None:
+        self.path = path
+        self.workflow_name = workflow_name
+        self.source_path = source_path
+        self.cycle_id = cycle_id
+        self.cycle_time = cycle_time
+        self._state: WorkflowState | None = None
+
+    @property
+    def exists(self) -> bool:
+        """Return whether persistent state already exists without creating it."""
+        return self.path.is_file()
+
+    def _open(self) -> WorkflowState:
+        if self._state is None:
+            state = WorkflowState(
+                self.path,
+                workflow_name=self.workflow_name,
+                source_path=self.source_path,
+            )
+            state.ensure_cycle(self.cycle_id, self.cycle_time)
+            self._state = state
+        return self._state
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._open(), name)
+
+    def close(self) -> None:
+        if self._state is not None:
+            self._state.close()
+            self._state = None
+
+
 class WorkflowEngine:
-    """Small dependency-aware workflow engine for explicit program arguments."""
+    """Small dependency-aware workflow engine for one logical workflow instance."""
 
     def __init__(
         self,
         config: dict[str, Any],
-        workdir: str | Path = ".simpleworkflow",
+        workdir: str | Path | None = None,
         force: bool = False,
         dry_run: bool = False,
         reporter: WorkflowReporter | None = None,
         selected_tasks: set[str] | None = None,
-    ):
+        cycle_id: str | None = None,
+        cycle_time: str | None = None,
+    ) -> None:
         self.config = config
         self.workflow_name = config.get("workflow", {}).get("name", "workflow")
         self.context = config.get("context", {})
@@ -68,19 +118,25 @@ class WorkflowEngine:
         self.dry_run = dry_run
         self.reporter = reporter or TerminalReporter()
         self.selected_tasks = selected_tasks
+        self.cycle_id = cycle_id
+        self.cycle_time = cycle_time
         self.source_dir = Path(
             config.get("__simpleworkflow__", {}).get("source_dir", Path.cwd())
         ).resolve()
         source_path = config.get("__simpleworkflow__", {}).get("source_path")
-        if source_path:
-            source_digest = hashlib.sha256(str(source_path).encode("utf-8")).hexdigest()[:12]
-            self.state_key = f"{self.workflow_name}@{source_digest}"
-        else:
-            self.state_key = self.workflow_name
-
-        self.workdir = Path(workdir)
-        self.log_dir = self.workdir / "logs" / self.workflow_name
-        self.state = WorkflowState(self.workdir / "state.sqlite3")
+        self.workdir = (
+            Path(workdir).resolve(strict=False)
+            if workdir is not None
+            else (self.source_dir / ".simpleworkflow").resolve(strict=False)
+        )
+        self.log_dir = self.workdir / "logs"
+        self.state = _LazyWorkflowState(
+            self.workdir / "state.sqlite3",
+            workflow_name=self.workflow_name,
+            source_path=source_path,
+            cycle_id=self.cycle_id,
+            cycle_time=self.cycle_time,
+        )
         self.executor: TaskExecutor = LocalExecutor(self.log_dir)
 
     def plan(self) -> list[str]:
@@ -173,6 +229,17 @@ class WorkflowEngine:
         source_path = self.config.get("__simpleworkflow__", {}).get("source_path")
         return Path(source_path).resolve(strict=False) if source_path else None
 
+    def _open_read_state(self) -> WorkflowState | None:
+        """Open existing state read-only; return None when no state exists yet."""
+        if not self.state.exists:
+            return None
+        return WorkflowState(
+            self.state.path,
+            workflow_name=self.workflow_name,
+            source_path=self._workflow_path(),
+            read_only=True,
+        )
+
     def _task_signature(
         self,
         task_name: str,
@@ -218,7 +285,7 @@ class WorkflowEngine:
 
     @staticmethod
     def _normalize_execution_result(result: ExecutionResult | int) -> ExecutionResult:
-        """Accept legacy integer test doubles while enforcing the new backend contract."""
+        """Accept legacy integer test doubles while enforcing the backend contract."""
         if isinstance(result, ExecutionResult):
             return result
         if isinstance(result, int):
@@ -258,12 +325,22 @@ class WorkflowEngine:
                 reason=reason,
             ),
         )
+        self.state.record_attempt_finished(
+            run_id=attempt.run_id,
+            task=attempt.task_name,
+            attempt=attempt.attempt,
+            status=status,
+            return_code=return_code,
+            reason=reason,
+        )
 
     def run(self) -> int:
-        """Execute pending workflow tasks in dependency order."""
-        with WorkflowLock(self.workdir, self.state_key):
-            self.state.reconcile_running(self.state_key)
-            uncertain = self.state.tasks_with_status(self.state_key, "unknown")
+        """Execute pending tasks, or render a side-effect-free dry run."""
+        if self.dry_run:
+            return self._run_dry()
+        with WorkflowLock(self.workdir, self.workflow_name):
+            self.state.reconcile_running(cycle_id=self.cycle_id)
+            uncertain = self.state.tasks_with_status("unknown", cycle_id=self.cycle_id)
             if uncertain:
                 raise RuntimeError(
                     "não é seguro continuar; a atividade ainda não pôde ser confirmada para: "
@@ -271,6 +348,50 @@ class WorkflowEngine:
                     + ". Verifique o processo ou job antes de usar reset."
                 )
             return self._run_locked()
+
+    def _run_dry(self) -> int:
+        """Render the execution plan without opening state or creating runtime files."""
+        task_map = {task["name"]: task for task in self.tasks}
+        planned_outputs_by_task: dict[str, set[Path]] = {}
+        for task_name in self.plan():
+            task = task_map[task_name]
+            executor_name = str(task.get("executor", "local"))
+            if task.get("enabled", True) is False:
+                self.reporter.event("skip", task_name, "disabled", executor=executor_name)
+                continue
+
+            artifacts = self._task_artifacts(task)
+            dependencies = task.get("depends_on", []) or []
+            if isinstance(dependencies, str):
+                dependencies = [dependencies]
+            planned_dependency_outputs: set[Path] = set()
+            for dependency in dependencies:
+                planned_dependency_outputs.update(
+                    planned_outputs_by_task.get(dependency, set())
+                )
+
+            missing_inputs = tuple(
+                path
+                for path in artifacts.missing_required_inputs()
+                if path not in planned_dependency_outputs
+            )
+            if missing_inputs:
+                message = "missing required input(s): " + ", ".join(
+                    str(path) for path in missing_inputs
+                )
+                self.reporter.event("fail", task_name, message, executor=executor_name)
+                return INVALID_INPUT_EXIT_CODE
+
+            argv = render_argv(task["argv"], self.context)
+            self._task_cwd(task)
+            self._task_env(task)
+            self._task_timeout(task)
+            self._task_executor(task)
+            self.reporter.event("plan", task_name, shlex.join(argv), executor=executor_name)
+            planned_outputs_by_task[task_name] = (
+                planned_dependency_outputs | set(artifacts.required_outputs)
+            )
+        return 0
 
     def _descendants(self, task_name: str) -> list[str]:
         descendants: list[str] = []
@@ -287,11 +408,37 @@ class WorkflowEngine:
                     pending.append(name)
         return descendants
 
+    def _adopt_legacy_signature(
+        self,
+        task_name: str,
+        previous: Any,
+        current: TaskSignature,
+    ) -> bool:
+        if previous.signature == current.value:
+            return True
+        if not legacy_signature_compatible(
+            previous.signature_payload,
+            current.payload,
+            workflow_path=self._workflow_path(),
+        ):
+            return False
+        self.state.set_status(
+            task_name,
+            "success",
+            previous.return_code,
+            current.value,
+            previous.reason or "assinatura legada validada e atualizada",
+            previous.attempt_path,
+            cycle_id=self.cycle_id,
+            signature_schema=SIGNATURE_SCHEMA_VERSION,
+            signature_payload=current.payload,
+        )
+        return True
+
     def _run_locked(self) -> int:
         """Run after acquiring the workflow lock and reconciling interrupted work."""
         recorder: RunRecorder | None = None
         task_map = {task["name"]: task for task in self.tasks}
-        planned_outputs_by_task: dict[str, set[Path]] = {}
         executed_tasks: set[str] = set()
         exit_code = 0
 
@@ -304,75 +451,74 @@ class WorkflowEngine:
             unavailable = [
                 dependency
                 for dependency in dependencies
-                if self.state.get_status(self.state_key, dependency)
-                in {"skipped", "blocked", "failed", "invalid-input", "invalid-output", "unknown"}
+                if self.state.get_status(dependency, cycle_id=self.cycle_id)
+                in {
+                    "skipped",
+                    "blocked",
+                    "failed",
+                    "invalid-input",
+                    "invalid-output",
+                    "interrupted",
+                    "unknown",
+                }
             ]
             if unavailable:
                 reason = "dependência indisponível: " + ", ".join(unavailable)
                 self.reporter.event("fail", task_name, reason, executor=executor_name)
                 self.state.set_status(
-                    self.state_key, task_name, "blocked", BLOCKED_EXIT_CODE, reason=reason
+                    task_name,
+                    "blocked",
+                    BLOCKED_EXIT_CODE,
+                    reason=reason,
+                    cycle_id=self.cycle_id,
                 )
-                return BLOCKED_EXIT_CODE
+                exit_code = BLOCKED_EXIT_CODE
+                break
             if task.get("enabled", True) is False:
                 self.reporter.event("skip", task_name, "disabled", executor=executor_name)
-                self.state.set_status(self.state_key, task_name, "skipped", 0)
+                self.state.set_status(
+                    task_name,
+                    "skipped",
+                    0,
+                    cycle_id=self.cycle_id,
+                )
                 continue
 
             artifacts = self._task_artifacts(task)
             dependency_executed = any(
                 dependency in executed_tasks for dependency in dependencies
             )
-
-            planned_dependency_outputs: set[Path] = set()
-            for dependency in dependencies:
-                planned_dependency_outputs.update(
-                    planned_outputs_by_task.get(dependency, set())
-                )
-
             missing_inputs = artifacts.missing_required_inputs()
-            if self.dry_run:
-                missing_inputs = tuple(
-                    path for path in missing_inputs if path not in planned_dependency_outputs
-                )
-
             if missing_inputs:
                 message = f"missing required input(s): {self._format_missing_inputs(artifacts)}"
                 self.reporter.event("fail", task_name, message, executor=executor_name)
-                if not self.dry_run:
-                    self.state.set_status(
-                        self.state_key,
-                        task_name,
-                        "invalid-input",
-                        INVALID_INPUT_EXIT_CODE,
-                    )
-                return INVALID_INPUT_EXIT_CODE
+                self.state.set_status(
+                    task_name,
+                    "invalid-input",
+                    INVALID_INPUT_EXIT_CODE,
+                    cycle_id=self.cycle_id,
+                )
+                exit_code = INVALID_INPUT_EXIT_CODE
+                break
 
             argv = render_argv(task["argv"], self.context)
             cwd = self._task_cwd(task)
             env = self._task_env(task)
             timeout = self._task_timeout(task)
             rendered = shlex.join(argv)
-
-            if self.dry_run:
-                self.reporter.event("plan", task_name, rendered, executor=executor_name)
-                planned_outputs_by_task[task_name] = (
-                    planned_dependency_outputs | set(artifacts.required_outputs)
-                )
-                continue
-
             signature = self._task_signature(task_name, task, argv, cwd, env, artifacts)
-
-            # Build and validate the backend before a durable attempt is marked running.
             task_executor = self._task_executor(task)
 
-            previous = self.state.get_task_state(self.state_key, task_name)
+            previous = self.state.get_task_state(task_name, cycle_id=self.cycle_id)
             if not self.force and previous and previous.status == "success":
                 missing_outputs = artifacts.missing_required_outputs()
                 invalid_outputs = artifacts.invalid_outputs()
+                signature_matches = self._adopt_legacy_signature(
+                    task_name, previous, signature
+                )
                 if (
                     not dependency_executed
-                    and previous.signature == signature.value
+                    and signature_matches
                     and not missing_outputs
                     and not invalid_outputs
                 ):
@@ -404,10 +550,10 @@ class WorkflowEngine:
             descendants = self._descendants(task_name)
             if descendants:
                 self.state.mark_tasks(
-                    self.state_key,
                     descendants,
                     "stale",
                     f"a dependência '{task_name}' será executada novamente",
+                    cycle_id=self.cycle_id,
                 )
 
             run_message = rendered
@@ -415,8 +561,20 @@ class WorkflowEngine:
                 run_message = f"waiting for scheduler completion · {rendered}"
             self.reporter.event("run", task_name, run_message, executor=executor_name)
             if recorder is None:
-                recorder = RunRecorder(self.workdir, self.workflow_name)
+                recorder = RunRecorder(
+                    self.workdir,
+                    self.workflow_name,
+                    instance_id=self.state.instance_id,
+                    cycle_id=self.cycle_id,
+                    cycle_time=self.cycle_time,
+                )
                 recorder.write_workflow_snapshot(self.config)
+                self.state.record_run(
+                    recorder.run_id,
+                    recorder.directory,
+                    cycle_id=self.cycle_id,
+                    cycle_time=self.cycle_time,
+                )
             attempt = recorder.begin_attempt(task_name)
             recorder.write_started(
                 attempt,
@@ -426,14 +584,24 @@ class WorkflowEngine:
                     "signature": signature.value,
                 },
             )
+            self.state.record_attempt_started(
+                run_id=attempt.run_id,
+                task=task_name,
+                attempt=attempt.attempt,
+                attempt_path=attempt.directory,
+                signature=signature.value,
+                cycle_id=self.cycle_id,
+            )
             self.state.set_status(
-                self.state_key,
                 task_name,
                 "running",
                 None,
                 signature.value,
                 "tarefa iniciada",
-                str(attempt.directory),
+                attempt.directory,
+                cycle_id=self.cycle_id,
+                signature_schema=SIGNATURE_SCHEMA_VERSION,
+                signature_payload=signature.payload,
             )
             execution_options: dict[str, Any] = {
                 "cwd": cwd,
@@ -470,17 +638,22 @@ class WorkflowEngine:
                         reason=reason,
                     )
                     self.state.set_status(
-                        self.state_key,
                         task_name,
                         "invalid-output",
                         INVALID_OUTPUT_EXIT_CODE,
                         signature.value,
                         reason,
-                        str(attempt.directory),
+                        attempt.directory,
+                        cycle_id=self.cycle_id,
+                        signature_schema=SIGNATURE_SCHEMA_VERSION,
+                        signature_payload=signature.payload,
                     )
                     if descendants:
                         self.state.mark_tasks(
-                            self.state_key, descendants, "blocked", reason
+                            descendants,
+                            "blocked",
+                            reason,
+                            cycle_id=self.cycle_id,
                         )
                     exit_code = INVALID_OUTPUT_EXIT_CODE
                     break
@@ -499,13 +672,15 @@ class WorkflowEngine:
                     process_return_code=return_code,
                 )
                 self.state.set_status(
-                    self.state_key,
                     task_name,
                     "success",
                     return_code,
                     signature.value,
                     "concluída com sucesso",
-                    str(attempt.directory),
+                    attempt.directory,
+                    cycle_id=self.cycle_id,
+                    signature_schema=SIGNATURE_SCHEMA_VERSION,
+                    signature_payload=signature.payload,
                 )
                 executed_tasks.add(task_name)
             else:
@@ -531,34 +706,56 @@ class WorkflowEngine:
                     reason=reason,
                 )
                 self.state.set_status(
-                    self.state_key,
                     task_name,
                     "failed",
                     return_code,
                     signature.value,
                     reason,
-                    str(attempt.directory),
+                    attempt.directory,
+                    cycle_id=self.cycle_id,
+                    signature_schema=SIGNATURE_SCHEMA_VERSION,
+                    signature_payload=signature.payload,
                 )
                 if descendants:
                     self.state.mark_tasks(
-                        self.state_key, descendants, "blocked", reason
+                        descendants,
+                        "blocked",
+                        reason,
+                        cycle_id=self.cycle_id,
                     )
                 exit_code = return_code
                 break
 
+        if recorder is not None:
+            self.state.finish_run(recorder.run_id, "success" if exit_code == 0 else "failed")
         return exit_code
 
     def status(self) -> None:
-        """Render current task states in dependency order."""
-        entries = [
-            (task_name, self.state.get_status(self.state_key, task_name) or "pending")
-            for task_name in self.plan()
-        ]
-        self.reporter.status_table(entries)
+        """Render current task states without creating or modifying persistent state."""
+        state = self._open_read_state()
+        try:
+            entries = [
+                (
+                    task_name,
+                    state.get_status(task_name, cycle_id=self.cycle_id)
+                    if state is not None
+                    else "pending",
+                )
+                for task_name in self.plan()
+            ]
+            self.reporter.status_table(
+                [(name, status or "pending") for name, status in entries]
+            )
+        finally:
+            if state is not None:
+                state.close()
 
     def reset(self) -> None:
-        """Reset all persisted state for this workflow."""
-        self.state.reset(self.state_key)
+        """Reset current task state while preserving run and attempt history."""
+        if not self.state.exists:
+            return
+        with WorkflowLock(self.workdir, self.workflow_name):
+            self.state.reset(cycle_id=self.cycle_id)
 
     def validate(self) -> list[str]:
         """Validate dependency order and every rendered task field without execution."""
@@ -594,20 +791,43 @@ class WorkflowEngine:
         return problems
 
     def explain(self) -> None:
-        """Explain current state and the next safe action in researcher-facing terms."""
-        task_map = {task["name"]: task for task in self.tasks}
-        for task_name in self.plan():
-            task = task_map[task_name]
-            state = self.state.get_task_state(self.state_key, task_name)
-            status = state.status if state else "pending"
-            reason = state.reason if state and state.reason else "a tarefa ainda não foi executada"
-            self.reporter.event(status, task_name, reason, executor=str(task.get("executor", "local")))
-            artifacts = self._task_artifacts(task)
-            missing_inputs = artifacts.missing_required_inputs()
-            missing_outputs = artifacts.missing_required_outputs()
-            if missing_inputs:
-                self.reporter.note("  Entradas ausentes: " + ", ".join(map(str, missing_inputs)))
-            if missing_outputs:
-                self.reporter.note("  Produtos ausentes: " + ", ".join(map(str, missing_outputs)))
-            if state and state.attempt_dir:
-                self.reporter.note(f"  Registros da tentativa: {state.attempt_dir}")
+        """Explain current state without creating or modifying persistent state."""
+        state_store = self._open_read_state()
+        try:
+            task_map = {task["name"]: task for task in self.tasks}
+            for task_name in self.plan():
+                task = task_map[task_name]
+                state = (
+                    state_store.get_task_state(task_name, cycle_id=self.cycle_id)
+                    if state_store is not None
+                    else None
+                )
+                status = state.status if state else "pending"
+                reason = (
+                    state.reason
+                    if state and state.reason
+                    else "a tarefa ainda não foi executada"
+                )
+                self.reporter.event(
+                    status,
+                    task_name,
+                    reason,
+                    executor=str(task.get("executor", "local")),
+                )
+                artifacts = self._task_artifacts(task)
+                missing_inputs = artifacts.missing_required_inputs()
+                missing_outputs = artifacts.missing_required_outputs()
+                if missing_inputs:
+                    self.reporter.note(
+                        "  Entradas ausentes: " + ", ".join(map(str, missing_inputs))
+                    )
+                if missing_outputs:
+                    self.reporter.note(
+                        "  Produtos ausentes: " + ", ".join(map(str, missing_outputs))
+                    )
+                if state and state.attempt_path and state_store is not None:
+                    resolved = state_store.resolve_path(state.attempt_path)
+                    self.reporter.note(f"  Registros da tentativa: {resolved}")
+        finally:
+            if state_store is not None:
+                state_store.close()

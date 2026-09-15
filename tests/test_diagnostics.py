@@ -17,6 +17,7 @@ def test_selected_task_includes_dependencies(tmp_path: Path) -> None:
     }
     engine = WorkflowEngine(config, workdir=tmp_path, selected_tasks={"b"})
     assert engine.plan() == ["a", "b"]
+    engine.state.close()
 
 
 def test_disabled_dependency_blocks_dependent_task(tmp_path: Path) -> None:
@@ -29,7 +30,8 @@ def test_disabled_dependency_blocks_dependent_task(tmp_path: Path) -> None:
     }
     engine = WorkflowEngine(config, workdir=tmp_path)
     assert engine.run() == BLOCKED_EXIT_CODE
-    assert engine.state.get_status("disabled", "b") == "blocked"
+    assert engine.state.get_status("b") == "blocked"
+    engine.state.close()
 
 
 def test_validate_reports_missing_input_without_running(tmp_path: Path) -> None:
@@ -47,3 +49,4 @@ def test_validate_reports_missing_input_without_running(tmp_path: Path) -> None:
     engine = WorkflowEngine(config, workdir=tmp_path / ".simpleworkflow")
     problems = engine.validate()
     assert len(problems) == 1 and str(missing) in problems[0]
+    engine.state.close()

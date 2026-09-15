@@ -13,7 +13,7 @@ reproducible workflow that can be installed and understood quickly.
 
 - YAML task definitions with explicit `argv` arguments, never shell command strings;
 - dependency-aware, sequential execution;
-- `plan`, `validate`, `run`, `status`, `explain` and `reset` commands;
+- `plan`, `validate`, `run`, `status`, `explain`, `reset` and `migrate` commands;
 - exclusive execution, persistent state and conservative restart/reuse;
 - required input/output artifact validation;
 - per-attempt logs and provenance records;
@@ -26,6 +26,9 @@ reproducible workflow that can be installed and understood quickly.
 `simpleWorkflow` has no scheduler daemon, web UI, distributed controller,
 implicit shell language, remote worker protocol or generalized event system.
 Those features belong in larger orchestration platforms.
+
+A `.simpleworkflow` directory belongs to one logical workflow instance. It is
+not a registry or manager for many workflows.
 
 ## Installation
 
@@ -54,6 +57,11 @@ swf reset examples/hello.yaml
 
 Use `--force` to rerun successful tasks and `--dry-run` to inspect rendered
 argument vectors without launching processes.
+
+`plan`, `validate`, `status`, `explain` and `run --dry-run` do not create
+persistent state when none exists. `status` and `explain` open existing state
+read-only. Commands that execute or change state use `.simpleworkflow` beside
+the workflow YAML by default, regardless of the shell's current directory.
 
 ## Terminal output
 
@@ -98,6 +106,91 @@ Task arguments, working directories, environment values and artifact paths can
 use context placeholders such as `{python}`, `{case_name}` and
 `{cycle_yyyymmddhh}`. See [the workflow format](docs/workflow_format.md).
 
+## One workflow, one state directory
+
+The normal layout is:
+
+```text
+WORKFLOW ROOT/
+├── workflow.yaml
+└── .simpleworkflow/
+    ├── state.sqlite3
+    ├── lock
+    ├── logs/
+    └── runs/
+```
+
+For example:
+
+```bash
+swf run /work/experiment/workflow.yaml
+```
+
+uses:
+
+```text
+/work/experiment/.simpleworkflow/state.sqlite3
+```
+
+The database stores one workflow instance with its tasks, cycles, current state,
+runs, attempts and history. An internal UUID identifies that instance, but users
+do not put the UUID in YAML and do not use it to run the workflow.
+
+Move the complete workflow root, including `.simpleworkflow`, to preserve the
+same execution naturally. The absolute YAML path is diagnostic metadata, not
+workflow identity, and task signatures use portable paths for files inside the
+workflow root.
+
+An explicit `--workdir` is supported for deliberate external state placement.
+It remains a one-workflow state directory: if the previously bound YAML still
+exists, a different existing YAML is rejected from taking over the same state.
+
+See [persistent state model](docs/state-model.md) for the full contract.
+
+## Cycles
+
+Scientific cycles are part of the same logical workflow, not separate
+workflows. A cycling campaign therefore keeps one `state.sqlite3` and records
+state separately per `(cycle, task)`.
+
+```text
+workflow instance
+├── 20180415T000000Z
+├── 20180415T060000Z
+└── 20180415T120000Z
+```
+
+The human `workflow.name` remains unchanged across cycles.
+
+## Upgrading state from 0.2.x or 0.3.x
+
+0.4.0 introduces the first explicitly versioned state schema. Legacy databases
+are never rewritten automatically.
+
+Inspect first:
+
+```bash
+swf migrate workflow.yaml --check
+```
+
+Then migrate an unambiguous workflow:
+
+```bash
+swf migrate workflow.yaml
+```
+
+Migration uses the same local lock as `run` and `reset`, creates a durable backup,
+builds the new database separately in a transaction and installs it with an
+atomic replacement. If installation fails before replacement completes, the
+legacy `state.sqlite3` remains active and the backup is retained.
+
+Legacy shared databases containing multiple logical workflows are detected and
+refused unless one instance is explicitly selected and migrated from its own
+copy of the legacy state directory.
+
+Read [upgrading to 0.4.0](docs/upgrade-0.4.md) before upgrading an existing
+scientific experiment.
+
 ## PBS execution
 
 PBS tasks remain intentionally simple. The runner creates one `job.pbs`, submits
@@ -125,11 +218,12 @@ The full contract, runtime files and JACI-oriented notes are in
 
 ## State, logs and provenance
 
-Runtime files are written below `.simpleworkflow/` by default:
+Runtime files are written below the workflow's `.simpleworkflow/` by default:
 
 ```text
 .simpleworkflow/
   state.sqlite3
+  lock
   runs/<run-id>/
     run.json
     tasks/<task>-<digest>/attempt-001/
@@ -144,8 +238,13 @@ Runtime files are written below `.simpleworkflow/` by default:
 A successful task is reused only when its signature still matches and required
 outputs pass their declared checks. Signatures include the effective task,
 execution backend, declared environment, safe hashes of relevant inherited
-environment values, executable identity and declared input fingerprints. Each
-run also preserves the effective YAML.
+environment values, executable identity and declared input fingerprints. Paths
+inside the workflow root are location-independent, so moving the complete case
+does not itself force a rerun. Each run also preserves the effective YAML.
+
+`swf reset` removes current reusable task state but preserves run, attempt,
+state-transition and migration history. A later run therefore executes the
+cleared tasks again.
 
 See [operations and recovery](docs/operations.md) before using a workflow for a
 scientific baseline or PBS campaign.

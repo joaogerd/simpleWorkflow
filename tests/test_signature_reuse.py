@@ -4,8 +4,10 @@ import sqlite3
 import sys
 from pathlib import Path
 
+import pytest
+
 from simpleworkflow.engine import WorkflowEngine
-from simpleworkflow.state import WorkflowState
+from simpleworkflow.state import StateMigrationRequired, WorkflowState
 
 
 class WritingExecutor:
@@ -63,7 +65,7 @@ def test_successful_task_is_reused_only_when_signature_matches(tmp_path: Path) -
     assert engine.run() == 0
     assert executor.calls == 1
     assert output.read_text(encoding="utf-8") == "first"
-    first_state = engine.state.get_task_state(engine.state_key, "analysis")
+    first_state = engine.state.get_task_state("analysis")
     assert first_state is not None
     assert first_state.signature
 
@@ -74,9 +76,10 @@ def test_successful_task_is_reused_only_when_signature_matches(tmp_path: Path) -
     assert engine.run() == 0
     assert executor.calls == 2
     assert output.read_text(encoding="utf-8") == "second-value"
+    engine.state.close()
 
 
-def test_state_migrates_legacy_database_and_preserves_signatures(tmp_path: Path) -> None:
+def test_legacy_database_is_never_migrated_implicitly(tmp_path: Path) -> None:
     database = tmp_path / "state.sqlite3"
     connection = sqlite3.connect(database)
     connection.execute(
@@ -98,13 +101,12 @@ def test_state_migrates_legacy_database_and_preserves_signatures(tmp_path: Path)
     connection.commit()
     connection.close()
 
-    state = WorkflowState(database)
-    legacy = state.get_task_state("legacy", "task")
-    assert legacy is not None
-    assert legacy.status == "success"
-    assert legacy.signature is None
+    with pytest.raises(StateMigrationRequired, match="swf migrate"):
+        WorkflowState(database, workflow_name="legacy", source_path=tmp_path / "workflow.yaml")
 
-    state.set_status("legacy", "task", "success", 0, "signature-value")
-    updated = state.get_task_state("legacy", "task")
-    assert updated is not None
-    assert updated.signature == "signature-value"
+    connection = sqlite3.connect(database)
+    columns = [row[1] for row in connection.execute("PRAGMA table_info(task_state)")]
+    rows = connection.execute("SELECT workflow, task, status FROM task_state").fetchall()
+    connection.close()
+    assert "workflow" in columns
+    assert rows == [("legacy", "task", "success")]

@@ -58,7 +58,6 @@ class LocalExecutor:
 
     def __init__(self, log_dir: str | Path):
         self.log_dir = Path(log_dir)
-        self.log_dir.mkdir(parents=True, exist_ok=True)
 
     def run(
         self,
@@ -76,6 +75,7 @@ class LocalExecutor:
             raise ValueError("stdout_path and stderr_path must be provided together.")
 
         if stdout_path is None:
+            self.log_dir.mkdir(parents=True, exist_ok=True)
             safe_name = task_name.replace("/", "_").replace(" ", "_")
             stdout_file = self.log_dir / f"{safe_name}.out"
             stderr_file = self.log_dir / f"{safe_name}.err"

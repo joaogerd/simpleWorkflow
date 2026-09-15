@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import fcntl
-import hashlib
 import json
 import os
 import socket
@@ -10,15 +9,14 @@ from typing import TextIO
 
 
 class WorkflowLockedError(RuntimeError):
-    """Raised when another controller owns the workflow execution lock."""
+    """Raised when another local controller owns the workflow lock."""
 
 
 class WorkflowLock:
-    """Advisory, process-scoped lock for one workflow in one work directory."""
+    """Advisory process lock for the single workflow represented by a work directory."""
 
     def __init__(self, workdir: str | Path, workflow: str) -> None:
-        digest = hashlib.sha256(workflow.encode("utf-8")).hexdigest()[:16]
-        self.path = Path(workdir) / "locks" / f"{digest}.lock"
+        self.path = Path(workdir) / "lock"
         self.workflow = workflow
         self._stream: TextIO | None = None
 
@@ -32,7 +30,8 @@ class WorkflowLock:
             details = stream.read().strip() or "controlador não identificado"
             stream.close()
             raise WorkflowLockedError(
-                f"Workflow '{self.workflow}' já está em execução ({details})."
+                f"Workflow '{self.workflow}' já está sob controle de outro processo "
+                f"({details})."
             ) from error
         stream.seek(0)
         stream.truncate()
