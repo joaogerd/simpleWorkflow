@@ -33,9 +33,6 @@ Implemented:
 - validation that rejects non-blocking PBS submission;
 - Ruff, mypy and coverage-oriented development configuration.
 
-The remaining work for this version is operational validation on JACI with a
-small job and then one MONAN-JEDI smoke case.
-
 ## 0.3.0 — consistency and recovery
 
 Implemented:
@@ -50,11 +47,28 @@ Implemented:
 - generic product checks and recursive directory fingerprints;
 - format versioning, valid examples, package license and broader quality gates.
 
+## 0.4.0 — one workflow instance per state directory
+
+Implemented for release validation:
+
+- one logical workflow instance per `.simpleworkflow/state.sqlite3`;
+- explicit state schema versioning, starting with state schema 1;
+- internal stable workflow UUID independent of the YAML absolute path;
+- cycle identity as a separate state dimension instead of a modified workflow name;
+- default state resolution beside the workflow YAML;
+- portable task signatures and relative runtime/history paths for movable cases;
+- side-effect-free `plan`, `validate`, `status`, `explain` and `run --dry-run`;
+- shared local locking for execution, reset and legacy migration;
+- explicit, backed-up migration from 0.2.x and 0.3.x state databases;
+- refusal of ambiguous shared legacy databases unless one legacy instance is selected;
+- transactional migration into a separate database followed by atomic replacement;
+- preservation of run, attempt, state-transition and migration history across reset.
+
 ## Next, only when demonstrated by use
 
-- operational PBS validation on JACI, including interruption and expired job data;
 - a similarly small SLURM backend only when a real scientific user requires it;
-- narrowly classified retries only after transient failures are identified in practice.
+- narrowly classified retries only after transient failures are identified in practice;
+- future state-schema migrations only when an actual schema change requires them.
 
 Parallel task execution, scheduler polling daemons, web dashboards, remote
 controllers and generalized event processing are intentionally out of scope.
