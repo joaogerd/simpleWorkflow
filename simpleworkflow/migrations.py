@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .locking import WorkflowLock
 from .state import STATE_SCHEMA_VERSION, WorkflowState
 
 _HASHED_STATE_KEY = re.compile(r"^(?P<name>.+)@(?P<digest>[0-9a-f]{12})$")
@@ -60,6 +61,21 @@ def _utc_timestamp() -> str:
 
 def _filename_timestamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _fsync_file(path: Path) -> None:
+    """Force one completed file to stable storage before publishing related metadata."""
+    with path.open("rb") as stream:
+        os.fsync(stream.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    """Persist directory-entry changes on the POSIX filesystems used by simpleWorkflow."""
+    directory_fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
 
 
 def _table_names(connection: sqlite3.Connection) -> set[str]:
@@ -206,7 +222,9 @@ def _load_json(path: Path) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def _signature_parts(record: dict[str, Any] | None) -> tuple[str | None, int | None, dict[str, Any] | None]:
+def _signature_parts(
+    record: dict[str, Any] | None,
+) -> tuple[str | None, int | None, dict[str, Any] | None]:
     if not record:
         return None, None, None
     signature = record.get("signature")
@@ -227,7 +245,11 @@ def _signature_parts(record: dict[str, Any] | None) -> tuple[str | None, int | N
 def _scan_legacy_runs(
     workdir: Path,
     group: LegacyGroup,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[tuple[str, str, str], dict[str, Any]]]:
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[tuple[str, str, str], dict[str, Any]],
+]:
     run_rows: list[dict[str, Any]] = []
     attempt_rows: list[dict[str, Any]] = []
     signature_records: dict[tuple[str, str, str], dict[str, Any]] = {}
@@ -264,7 +286,11 @@ def _scan_legacy_runs(
                     except ValueError:
                         attempt_value = 1
                 sig_value, sig_schema, sig_payload = _signature_parts(metadata or started)
-                status = str(metadata.get("status")) if metadata and metadata.get("status") else "running"
+                status = (
+                    str(metadata.get("status"))
+                    if metadata and metadata.get("status")
+                    else "running"
+                )
                 return_code = metadata.get("return_code") if metadata else None
                 reason = metadata.get("reason") if metadata else None
                 started_at = started.get("started_at") if started else None
@@ -288,9 +314,12 @@ def _scan_legacy_runs(
                 attempts_for_run.append(row)
                 if sig_value and sig_payload:
                     signature_records[(legacy_key, task, sig_value)] = row
-        run_status = "completed" if attempts_for_run and all(
-            row["status"] != "running" for row in attempts_for_run
-        ) else "incomplete"
+        run_status = (
+            "completed"
+            if attempts_for_run
+            and all(row["status"] != "running" for row in attempts_for_run)
+            else "incomplete"
+        )
         run_rows.append(
             {
                 "run_id": str(run_record.get("run_id") or run_dir.name),
@@ -299,7 +328,11 @@ def _scan_legacy_runs(
                 "status": run_status,
                 "created_at": str(run_record.get("created_at") or _utc_timestamp()),
                 "finished_at": max(
-                    (row["finished_at"] for row in attempts_for_run if row["finished_at"]),
+                    (
+                        row["finished_at"]
+                        for row in attempts_for_run
+                        if row["finished_at"]
+                    ),
                     default=None,
                 ),
             }
@@ -334,12 +367,11 @@ def _backup_database(source: Path, legacy_version: str) -> Path:
     backups = source.parent / "backups"
     backups.mkdir(parents=True, exist_ok=True)
     stem = legacy_version.replace(".", "-")
-    candidate = backups / f"state-v{stem}-before-migration-{_filename_timestamp()}.sqlite3"
+    timestamp = _filename_timestamp()
+    candidate = backups / f"state-v{stem}-before-migration-{timestamp}.sqlite3"
     suffix = 1
     while candidate.exists():
-        candidate = backups / (
-            f"state-v{stem}-before-migration-{_filename_timestamp()}-{suffix}.sqlite3"
-        )
+        candidate = backups / f"state-v{stem}-before-migration-{timestamp}-{suffix}.sqlite3"
         suffix += 1
     source_connection = sqlite3.connect(source)
     backup_connection = sqlite3.connect(candidate)
@@ -349,6 +381,8 @@ def _backup_database(source: Path, legacy_version: str) -> Path:
     finally:
         backup_connection.close()
         source_connection.close()
+    _fsync_file(candidate)
+    _fsync_directory(backups)
     return candidate
 
 
@@ -376,15 +410,21 @@ def _portable_legacy_attempt(
     return str(path)
 
 
-def migrate_state(
+def _validate_migratable(inspection: StateInspection, state_file: Path) -> None:
+    if inspection.kind == "missing":
+        raise MigrationError(f"não existe banco de estado em {state_file}")
+    if inspection.kind != "legacy" or not inspection.legacy_version:
+        raise MigrationError(f"o formato do banco {state_file} não é reconhecido")
+
+
+def _migrate_state_locked(
     *,
-    state_path: str | Path,
+    state_file: Path,
     workflow_name: str,
     source_path: str | Path,
-    legacy_selector: str | None = None,
+    legacy_selector: str | None,
 ) -> MigrationResult:
-    """Migrate one legacy database by building a new DB and atomically replacing it."""
-    state_file = Path(state_path)
+    """Perform migration while the workflow lock is already held."""
     inspection = inspect_state(state_file)
     if inspection.kind == "versioned":
         if inspection.schema_version == STATE_SCHEMA_VERSION:
@@ -393,10 +433,8 @@ def migrate_state(
             f"schema {inspection.schema_version} não pode ser migrado por esta versão "
             f"(schema atual: {STATE_SCHEMA_VERSION})"
         )
-    if inspection.kind == "missing":
-        raise MigrationError(f"não existe banco de estado em {state_file}")
-    if inspection.kind != "legacy" or not inspection.legacy_version:
-        raise MigrationError(f"o formato do banco {state_file} não é reconhecido")
+    _validate_migratable(inspection, state_file)
+    assert inspection.legacy_version is not None
 
     group = _select_group(inspection, legacy_selector)
     legacy_connection = sqlite3.connect(state_file)
@@ -408,16 +446,17 @@ def migrate_state(
     backup_path = _backup_database(state_file, inspection.legacy_version)
 
     temporary = state_file.with_name(f".{state_file.name}.migrating-{uuid.uuid4().hex}")
-    new_state = WorkflowState(
-        temporary,
-        workflow_name=workflow_name,
-        source_path=source_path,
-    )
+    new_state: WorkflowState | None = None
     try:
+        new_state = WorkflowState(
+            temporary,
+            workflow_name=workflow_name,
+            source_path=source_path,
+        )
         connection = new_state.connection
         connection.execute("BEGIN IMMEDIATE")
         try:
-            for key, cycle_id in group.cycle_by_key.items():
+            for cycle_id in group.cycle_by_key.values():
                 if cycle_id:
                     now = _utc_timestamp()
                     connection.execute(
@@ -557,22 +596,56 @@ def migrate_state(
         except Exception:
             connection.rollback()
             raise
-    except Exception:
         new_state.close()
+        new_state = None
+        _fsync_file(temporary)
+    except Exception:
+        if new_state is not None:
+            new_state.close()
         temporary.unlink(missing_ok=True)
         raise
-    else:
-        new_state.close()
 
-    os.replace(temporary, state_file)
-    directory_fd = os.open(state_file.parent, os.O_RDONLY)
     try:
-        os.fsync(directory_fd)
-    finally:
-        os.close(directory_fd)
+        os.replace(temporary, state_file)
+    except OSError as error:
+        temporary.unlink(missing_ok=True)
+        raise MigrationError(
+            "não foi possível instalar o banco migrado; o state.sqlite3 legado foi "
+            f"preservado e o backup permanece em {backup_path}"
+        ) from error
+
+    _fsync_directory(state_file.parent)
     return MigrationResult(
         inspection=inspection,
         migrated=True,
         backup_path=backup_path,
         selected_group=group,
     )
+
+
+def migrate_state(
+    *,
+    state_path: str | Path,
+    workflow_name: str,
+    source_path: str | Path,
+    legacy_selector: str | None = None,
+) -> MigrationResult:
+    """Migrate one legacy database safely under the workflow's local lock."""
+    state_file = Path(state_path)
+    inspection = inspect_state(state_file)
+    if inspection.kind == "versioned":
+        if inspection.schema_version == STATE_SCHEMA_VERSION:
+            return MigrationResult(inspection=inspection, migrated=False)
+        raise MigrationError(
+            f"schema {inspection.schema_version} não pode ser migrado por esta versão "
+            f"(schema atual: {STATE_SCHEMA_VERSION})"
+        )
+    _validate_migratable(inspection, state_file)
+
+    with WorkflowLock(state_file.parent, workflow_name):
+        return _migrate_state_locked(
+            state_file=state_file,
+            workflow_name=workflow_name,
+            source_path=source_path,
+            legacy_selector=legacy_selector,
+        )
