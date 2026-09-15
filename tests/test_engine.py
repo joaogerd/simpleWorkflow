@@ -173,17 +173,19 @@ def test_same_state_directory_rejects_a_different_workflow_file(tmp_path: Path) 
     first_id = first_engine.state.instance_id
     first_engine.state.close()
 
-    with pytest.raises(StateBindingError):
-        WorkflowEngine(
-            {
-                **base,
-                "__simpleworkflow__": {
-                    "source_path": str(second),
-                    "source_dir": str(tmp_path),
-                },
+    second_engine = WorkflowEngine(
+        {
+            **base,
+            "__simpleworkflow__": {
+                "source_path": str(second),
+                "source_dir": str(tmp_path),
             },
-            workdir=workdir,
-        )
+        },
+        workdir=workdir,
+    )
+    with pytest.raises(StateBindingError):
+        _ = second_engine.state.instance_id
+    second_engine.state.close()
 
     reopened = WorkflowEngine(
         {**base, "__simpleworkflow__": {"source_path": str(first), "source_dir": str(tmp_path)}},
