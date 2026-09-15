@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import traceback
 from collections.abc import Iterable
@@ -9,10 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from .config import load_workflow
-from .console import TerminalReporter
+from .console import TerminalReporter, WorkflowReporter
 from .cycles import CycleContext, resolve_cycle_contexts
 from .engine import WorkflowEngine
 from .migrations import MigrationError, StateInspection, inspect_state, migrate_state
+from .ui import select_ui_mode, tui_available
 
 
 def _add_cycle_options(parser: argparse.ArgumentParser) -> None:
@@ -83,6 +85,12 @@ def build_parser() -> argparse.ArgumentParser:
         if command == "run":
             command_parser.add_argument("--force", action="store_true")
             command_parser.add_argument("--dry-run", action="store_true")
+            command_parser.add_argument(
+                "--ui",
+                choices=("auto", "tui", "plain"),
+                default="auto",
+                help="Presentation mode: auto (default), tui or plain.",
+            )
         if command in {"run", "plan", "validate", "explain"}:
             command_parser.add_argument(
                 "--task",
@@ -91,6 +99,24 @@ def build_parser() -> argparse.ArgumentParser:
                 metavar="NAME",
                 help="Select a task and include all of its dependencies; repeat as needed.",
             )
+
+    monitor_parser = subparsers.add_parser(
+        "monitor",
+        help="Open the read-only interactive monitor for persisted workflow state.",
+    )
+    monitor_parser.add_argument("workflow")
+    _add_workdir_option(monitor_parser)
+    _add_display_options(monitor_parser)
+    monitor_parser.add_argument(
+        "--refresh-seconds",
+        type=float,
+        default=1.0,
+        metavar="SECONDS",
+        help="Monitor refresh interval in seconds (default: 1.0).",
+    )
+    monitor_parser.add_argument(
+        "--debug", action="store_true", help="Show technical traceback details."
+    )
 
     migrate_parser = subparsers.add_parser(
         "migrate",
@@ -130,14 +156,14 @@ def _resolve_workdir(config: dict[str, Any], requested: str | None) -> Path:
 def _cycle_engines(
     config: dict[str, Any],
     args: argparse.Namespace,
-    reporter: TerminalReporter,
+    reporter: WorkflowReporter,
 ) -> Iterable[tuple[CycleContext | None, WorkflowEngine]]:
     cycles = resolve_cycle_contexts(
         config.get("cycle"),
-        cycle_times=args.cycle_times,
-        start=args.cycle_start,
-        end=args.cycle_end,
-        step=args.cycle_step,
+        cycle_times=getattr(args, "cycle_times", None),
+        start=getattr(args, "cycle_start", None),
+        end=getattr(args, "cycle_end", None),
+        step=getattr(args, "cycle_step", None),
     )
     workdir = _resolve_workdir(config, args.workdir)
     selected = set(args.selected_tasks) if getattr(args, "selected_tasks", None) else None
@@ -255,9 +281,74 @@ def _run_migration(
     return 0
 
 
+def _tui_color_enabled(mode: str) -> bool:
+    if mode == "always":
+        return True
+    if mode == "never":
+        return False
+    return not bool(os.environ.get("NO_COLOR"))
+
+
+def _launch_monitor(
+    config: dict[str, Any],
+    workflow_path: Path,
+    workdir: Path,
+    *,
+    refresh_seconds: float,
+    color: bool,
+) -> None:
+    """Import the optional Textual frontend only when it is explicitly needed."""
+    if not tui_available():
+        raise RuntimeError(
+            'interactive monitor requires pip install "simpleworkflow[tui]"'
+        )
+    from .tui import run_monitor
+
+    run_monitor(
+        config,
+        workflow_path,
+        workdir,
+        refresh_seconds=refresh_seconds,
+        color=color,
+    )
+
+
+def _run_plain(
+    config: dict[str, Any], args: argparse.Namespace, reporter: TerminalReporter
+) -> int:
+    for cycle, engine in _cycle_engines(config, args, reporter):
+        try:
+            reporter.heading(_heading("run", config, cycle))
+            result = engine.run()
+            if result != 0:
+                return result
+        except KeyboardInterrupt:
+            _reconcile_after_interrupt(engine)
+            raise
+        finally:
+            engine.state.close()
+    return 0
+
+
 def _main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_workflow(args.workflow)
+
+    if args.command == "monitor":
+        if args.refresh_seconds <= 0:
+            raise ValueError("--refresh-seconds must be a positive number")
+        workflow_path = Path(
+            config.get("__simpleworkflow__", {}).get("source_path", args.workflow)
+        ).resolve(strict=False)
+        _launch_monitor(
+            config,
+            workflow_path,
+            _resolve_workdir(config, args.workdir),
+            refresh_seconds=float(args.refresh_seconds),
+            color=_tui_color_enabled(args.color),
+        )
+        return 0
+
     reporter = TerminalReporter(color=args.color)
 
     if args.command == "migrate":
@@ -276,18 +367,21 @@ def _main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "run":
-        for cycle, engine in _cycle_engines(config, args, reporter):
-            try:
-                reporter.heading(_heading("run", config, cycle))
-                result = engine.run()
-                if result != 0:
-                    return result
-            except KeyboardInterrupt:
-                _reconcile_after_interrupt(engine)
-                raise
-            finally:
-                engine.state.close()
-        return 0
+        mode = select_ui_mode(
+            args.ui,
+            stdin=sys.stdin,
+            stdout=sys.stdout,
+            term=os.environ.get("TERM"),
+            tui_available=tui_available(),
+        )
+        if mode == "tui":
+            if args.dry_run:
+                raise RuntimeError("--ui tui is not available with --dry-run; use --ui plain")
+            raise RuntimeError(
+                "interactive run integration is not enabled yet on this development branch; "
+                "use --ui plain"
+            )
+        return _run_plain(config, args, reporter)
 
     if args.command == "status":
         for cycle, engine in _cycle_engines(config, args, reporter):
