@@ -10,18 +10,18 @@ def test_run_reconciles_and_returns_130_on_keyboard_interrupt(
 ) -> None:
     class FakeState:
         def __init__(self) -> None:
-            self.reconciled: list[str] = []
+            self.reconciled: list[str | None] = []
             self.closed = False
 
-        def reconcile_running(self, workflow: str) -> None:
-            self.reconciled.append(workflow)
+        def reconcile_running(self, *, cycle_id: str | None = None) -> None:
+            self.reconciled.append(cycle_id)
 
         def close(self) -> None:
             self.closed = True
 
     class FakeEngine:
-        state_key = "display_test"
         tasks: list[dict[str, str]] = []
+        cycle_id = None
 
         def __init__(self) -> None:
             self.state = FakeState()
@@ -38,7 +38,7 @@ def test_run_reconciles_and_returns_130_on_keyboard_interrupt(
     )
 
     assert cli.main(["run", "workflow.yaml", "--color", "never"]) == 130
-    assert engine.state.reconciled == ["display_test"]
+    assert engine.state.reconciled == [None]
     assert engine.state.closed is True
 
     captured = capsys.readouterr()  # type: ignore[attr-defined]
@@ -52,41 +52,56 @@ def test_pbs_interrupt_before_job_id_remains_unknown() -> None:
             self.current = SimpleNamespace(
                 status="running",
                 signature="sig",
-                attempt_dir="attempt-001",
+                signature_schema=4,
+                signature_payload={"signature_schema": 4},
+                attempt_path="attempt-001",
             )
 
-        def get_status(self, _workflow: str, _task: str) -> str:
+        def get_status(self, _task: str, *, cycle_id: str | None = None) -> str:
+            assert cycle_id == "cycle-a"
             return self.current.status
 
-        def reconcile_running(self, _workflow: str) -> None:
+        def reconcile_running(self, *, cycle_id: str | None = None) -> None:
+            assert cycle_id == "cycle-a"
             self.current = SimpleNamespace(
                 status="interrupted",
                 signature="sig",
-                attempt_dir="attempt-001",
+                signature_schema=4,
+                signature_payload={"signature_schema": 4},
+                attempt_path="attempt-001",
             )
 
-        def get_task_state(self, _workflow: str, _task: str) -> SimpleNamespace:
+        def get_task_state(
+            self, _task: str, *, cycle_id: str | None = None
+        ) -> SimpleNamespace:
+            assert cycle_id == "cycle-a"
             return self.current
 
         def set_status(
             self,
-            _workflow: str,
             _task: str,
             status: str,
             _return_code: int | None,
             signature: str | None,
             reason: str,
-            attempt_dir: str | None,
+            attempt_path: str | None,
+            *,
+            cycle_id: str | None = None,
+            signature_schema: int | None = None,
+            signature_payload: dict[str, object] | None = None,
         ) -> None:
+            assert cycle_id == "cycle-a"
             self.current = SimpleNamespace(
                 status=status,
                 signature=signature,
+                signature_schema=signature_schema,
+                signature_payload=signature_payload,
                 reason=reason,
-                attempt_dir=attempt_dir,
+                attempt_path=attempt_path,
             )
 
     engine = SimpleNamespace(
-        state_key="pbs-test",
+        cycle_id="cycle-a",
         tasks=[{"name": "analysis", "executor": "pbs"}],
         state=FakeState(),
     )
@@ -95,5 +110,5 @@ def test_pbs_interrupt_before_job_id_remains_unknown() -> None:
 
     assert engine.state.current.status == "unknown"
     assert engine.state.current.signature == "sig"
-    assert engine.state.current.attempt_dir == "attempt-001"
+    assert engine.state.current.attempt_path == "attempt-001"
     assert "verifique o escalonador" in engine.state.current.reason
