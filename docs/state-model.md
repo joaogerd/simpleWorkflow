@@ -24,13 +24,16 @@ UUID. The UUID is an internal identity used for provenance and consistency. It
 is not part of the YAML interface and users do not need it to run a workflow.
 
 The absolute path of `workflow.yaml` is not part of persistent identity.
-`last_source_path` is only diagnostic metadata and is updated when the state is
-opened from a new location.
+`last_source_path` is diagnostic metadata, not a user-facing lookup key. A
+writable open updates it after a legitimate move.
 
-The source filename is retained as a safety binding. Reusing the same
-`.simpleworkflow` explicitly with a different YAML filename is rejected rather
-than silently mixing two definitions. Moving a complete case with the same YAML
-filename is supported.
+For safety, a state directory remembers the most recently bound source path. If
+that old YAML still exists and a different existing YAML is pointed deliberately
+at the same state directory, simpleWorkflow rejects the second binding instead
+of mixing two live workflow roots. If the old source path no longer exists, the
+new path can be accepted as a moved workflow root. This preserves normal
+`case-A -> case-B` relocation without turning absolute paths into persistent
+identity.
 
 ## Default location
 
@@ -49,10 +52,31 @@ uses:
 It does not depend on the shell's current working directory.
 
 An explicit `--workdir` remains available. A relative explicit path is resolved
-from the current directory because the user deliberately supplied it.
+from the current directory because the user deliberately supplied it. The same
+one-workflow-per-state-directory rule still applies: pointing another existing
+YAML at that state directory is rejected rather than silently sharing state.
 
-`plan` and `validate` do not need persistent runtime state and therefore do not
-create `.simpleworkflow`.
+## Commands that do not create state
+
+Inspection and planning should not create an execution history merely because a
+researcher looked at a workflow. The following commands are side-effect free
+with respect to persistent workflow state:
+
+```text
+swf plan
+swf validate
+swf status
+swf explain
+swf run --dry-run
+swf migrate --check
+```
+
+`status` and `explain` open an existing database read-only. If no state exists,
+they report tasks as pending and do not create `.simpleworkflow`.
+
+`reset` is a state-changing command only when state already exists. Against a
+workflow that has never created state it is a no-op and does not create an empty
+database.
 
 ## Moving and copying a workflow
 
@@ -82,8 +106,10 @@ Moving only `workflow.yaml` does not move its state. This is intentional: the
 state belongs to the workflow root, not to a globally searchable registry.
 
 Copying the complete root, including `.simpleworkflow`, creates a clone that
-contains the same execution history. Removing the copied `.simpleworkflow`
-before the first run starts a new workflow instance.
+contains the same execution history. If the original source still exists and the
+copy is pointed at the same external `--workdir`, the binding check rejects that
+ambiguous sharing. Removing the copied `.simpleworkflow` before the first run
+starts a new workflow instance.
 
 ## Cycles
 
@@ -117,6 +143,8 @@ state schema_version = 1
 
 Application version and state schema version are intentionally separate. Future
 application releases can keep the same database schema or migrate it explicitly.
+A database using a later schema is rejected with a clear message that a newer
+simpleWorkflow is required; it is never interpreted optimistically.
 
 The principal tables are:
 
@@ -133,18 +161,32 @@ Detailed per-attempt provenance remains in the inspectable files under `runs/`.
 SQLite indexes that history for restart and diagnostics; it does not replace the
 human-readable records.
 
+## Locking
+
+`run`, `reset` and legacy `migrate` can all modify the same workflow state, so
+they use the same local advisory lock at `.simpleworkflow/lock`. Two local
+controllers cannot mutate the state directory concurrently. The lock uses the
+operating system's file lock; an old lock file by itself is not ownership after
+the process has released or lost the file descriptor.
+
+Read-only/planning operations do not acquire the lock because they do not mutate
+workflow state.
+
 ## Reset
 
 `swf reset workflow.yaml` clears the current reusable task state for the selected
-workflow/cycle context. Historical `state_event`, `run_history`, `attempt_history`
-and filesystem attempt records are preserved.
+workflow/cycle context. Historical `state_event`, `run_history`, `attempt_history`,
+`migration_history` and filesystem attempt records are preserved. A later
+`swf run` therefore executes the cleared tasks again instead of reusing an old
+`task_state` row.
 
 ## Restart safety
 
 A successful task is reused only when its required outputs remain valid and its
 current signature matches. Signatures no longer include the simpleWorkflow
 package version or the absolute path of the YAML. Paths inside the workflow root
-are location-independent.
+are location-independent. If an input fingerprint changes after a move, the task
+is invalidated normally and runs again.
 
 After migration from older versions, a legacy success is adopted into the new
 signature only when available provenance is sufficient to demonstrate semantic
