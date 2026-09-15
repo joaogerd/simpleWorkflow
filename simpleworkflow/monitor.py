@@ -5,6 +5,13 @@ schema-1 state through :class:`WorkflowState` and never mutates workflow state.
 Textual and other frontends consume immutable snapshots rather than issuing SQL
 or reconstructing workflow semantics themselves.
 
+Persisted ``cycle_state`` is preferred whenever the workflow uses the native
+0.4 cycle dimension. Some scientific workflows are deliberately *unrolled* so
+cross-cycle dependencies are real task edges inside one engine invocation. For
+those workflows, cycle grouping is presentation metadata reconstructed from the
+configured ``--cycle`` arguments and dependency inheritance while task status
+still comes exclusively from the root SQLite task state.
+
 Attempt rows are loaded from SQLite in one query. Filesystem provenance is read
 lazily from an attempt only when the Inspector or Logs view asks for it; this
 keeps the normal one-second monitor refresh inexpensive on shared HPC storage.
@@ -14,6 +21,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -141,7 +149,7 @@ class AttemptSnapshot:
 
 @dataclass(frozen=True)
 class TaskSnapshot:
-    """Current persisted state of one task in one optional cycle."""
+    """Current persisted state of one task in one optional presentation cycle."""
 
     name: str
     status: str
@@ -155,13 +163,14 @@ class TaskSnapshot:
 
 @dataclass(frozen=True)
 class CycleSnapshot:
-    """Aggregated state for one explicit workflow cycle."""
+    """Aggregated state for one persisted or presentation-derived cycle."""
 
     cycle_id: str
     cycle_time: str
     tasks: tuple[TaskSnapshot, ...]
     status: str
     updated_at: str | None = None
+    persisted: bool = True
 
     @property
     def completed_tasks(self) -> int:
@@ -226,9 +235,8 @@ class MonitorSnapshot:
 
     @property
     def all_tasks(self) -> tuple[TaskSnapshot, ...]:
-        if self.cycles:
-            return tuple(task for cycle in self.cycles for task in cycle.tasks)
-        return self.tasks
+        cycle_tasks = tuple(task for cycle in self.cycles for task in cycle.tasks)
+        return cycle_tasks + self.tasks
 
     @property
     def total_tasks(self) -> int:
@@ -247,16 +255,109 @@ class MonitorSnapshot:
         return sum(task.status in _ATTENTION_STATES for task in self.all_tasks)
 
 
+@dataclass(frozen=True)
+class _ConfigCycle:
+    cycle_id: str
+    cycle_time: str
+    sort_key: datetime
 
-def _task_names(config: dict[str, Any]) -> tuple[str, ...]:
+
+def _config_tasks(config: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     raw_tasks = config.get("tasks", [])
     if not isinstance(raw_tasks, list):
         return ()
+    return tuple(task for task in raw_tasks if isinstance(task, dict))
+
+
+def _task_names(config: dict[str, Any]) -> tuple[str, ...]:
     names: list[str] = []
-    for task in raw_tasks:
-        if isinstance(task, dict) and isinstance(task.get("name"), str):
+    for task in _config_tasks(config):
+        if isinstance(task.get("name"), str):
             names.append(task["name"])
     return tuple(names)
+
+
+def _parse_config_cycle(task: dict[str, Any]) -> _ConfigCycle | None:
+    """Extract an explicit ISO ``--cycle`` argument for presentation grouping."""
+    argv = task.get("argv")
+    if not isinstance(argv, list):
+        return None
+    try:
+        index = argv.index("--cycle")
+    except ValueError:
+        return None
+    if index + 1 >= len(argv) or not isinstance(argv[index + 1], str):
+        return None
+    raw = argv[index + 1]
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    utc = parsed.astimezone(timezone.utc)
+    return _ConfigCycle(
+        cycle_id=utc.strftime("%Y%m%d%H"),
+        cycle_time=utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        sort_key=utc,
+    )
+
+
+def _presentation_cycles(
+    config: dict[str, Any],
+) -> tuple[dict[str, _ConfigCycle], dict[str, list[str]]]:
+    """Group unrolled tasks without creating a second execution-state model.
+
+    Explicit ``--cycle`` values establish presentation groups. Tasks without an
+    explicit value inherit a cycle only when all already-classified dependencies
+    point to exactly one cycle. This safely handles validation gates while
+    leaving genuinely non-cyclic setup tasks outside the timeline.
+    """
+    tasks = _config_tasks(config)
+    by_name = {
+        str(task["name"]): task
+        for task in tasks
+        if isinstance(task.get("name"), str)
+    }
+    assignment: dict[str, _ConfigCycle] = {}
+    for name, task in by_name.items():
+        cycle = _parse_config_cycle(task)
+        if cycle is not None:
+            assignment[name] = cycle
+
+    changed = True
+    while changed:
+        changed = False
+        for name, task in by_name.items():
+            if name in assignment:
+                continue
+            dependencies = task.get("depends_on", []) or []
+            if isinstance(dependencies, str):
+                dependencies = [dependencies]
+            if not isinstance(dependencies, list) or not dependencies:
+                continue
+            inherited = {
+                assignment[str(dependency)]
+                for dependency in dependencies
+                if str(dependency) in assignment
+            }
+            if len(inherited) == 1:
+                assignment[name] = next(iter(inherited))
+                changed = True
+
+    cycles = {cycle.cycle_id: cycle for cycle in assignment.values()}
+    groups: dict[str, list[str]] = {
+        cycle_id: []
+        for cycle_id, _ in sorted(cycles.items(), key=lambda item: item[1].sort_key)
+    }
+    for task in tasks:
+        name = task.get("name")
+        if not isinstance(name, str):
+            continue
+        cycle = assignment.get(name)
+        if cycle is not None:
+            groups[cycle.cycle_id].append(name)
+    return assignment, groups
 
 
 def _task_snapshot(
@@ -344,18 +445,46 @@ def load_monitor_snapshot(
     state_dir = Path(workdir).resolve(strict=False)
     workflow_name = str(config.get("workflow", {}).get("name", "workflow"))
     names = _task_names(config)
+    config_assignment, config_groups = _presentation_cycles(config)
+    config_cycles = {
+        cycle.cycle_id: cycle for cycle in config_assignment.values()
+    }
     state_path = state_dir / "state.sqlite3"
 
     if not state_path.is_file():
-        pending = tuple(_task_snapshot(name, None, cycle_id=None) for name in names)
+        if config_groups:
+            cycles = tuple(
+                CycleSnapshot(
+                    cycle_id=cycle_id,
+                    cycle_time=config_cycles[cycle_id].cycle_time,
+                    tasks=tuple(
+                        _task_snapshot(name, None, cycle_id=cycle_id)
+                        for name in task_names
+                    ),
+                    status="pending",
+                    persisted=False,
+                )
+                for cycle_id, task_names in config_groups.items()
+            )
+            grouped_names = set(config_assignment)
+            root_tasks = tuple(
+                _task_snapshot(name, None, cycle_id=None)
+                for name in names
+                if name not in grouped_names
+            )
+        else:
+            cycles = ()
+            root_tasks = tuple(
+                _task_snapshot(name, None, cycle_id=None) for name in names
+            )
         return MonitorSnapshot(
             workflow_name=workflow_name,
             instance_id=None,
             workflow_path=workflow,
             workdir=state_dir,
             updated_at=None,
-            tasks=pending,
-            cycles=(),
+            tasks=root_tasks,
+            cycles=cycles,
             runs=(),
             problems=(),
         )
@@ -394,41 +523,82 @@ def load_monitor_snapshot(
             }
 
         cycles: list[CycleSnapshot] = []
-        for cycle_id, cycle_time, cycle_updated_at in cycle_rows:
-            cycle_key = str(cycle_id)
-            task_rows = rows_for_cycle(cycle_key)
-            cycle_tasks = tuple(
+        root_rows = rows_for_cycle("")
+        root_tasks: tuple[TaskSnapshot, ...]
+
+        if cycle_rows:
+            for cycle_id, cycle_time, cycle_updated_at in cycle_rows:
+                cycle_key = str(cycle_id)
+                task_rows = rows_for_cycle(cycle_key)
+                cycle_tasks = tuple(
+                    _task_snapshot(
+                        name,
+                        task_rows.get(name),
+                        cycle_id=cycle_key,
+                        attempt=attempts.get((cycle_key, name)),
+                    )
+                    for name in names
+                )
+                cycles.append(
+                    CycleSnapshot(
+                        cycle_id=cycle_key,
+                        cycle_time=str(cycle_time),
+                        tasks=cycle_tasks,
+                        status=_cycle_status(cycle_tasks),
+                        updated_at=_max_timestamp(
+                            str(cycle_updated_at) if cycle_updated_at else None,
+                            *(task.updated_at for task in cycle_tasks),
+                        ),
+                        persisted=True,
+                    )
+                )
+            # Native cycle execution stores these task names per cycle. Root rows
+            # from an older/no-cycle invocation must not be counted a second time.
+            root_tasks = ()
+        elif config_groups:
+            for cycle_id, task_names in config_groups.items():
+                cycle_tasks = tuple(
+                    _task_snapshot(
+                        name,
+                        root_rows.get(name),
+                        cycle_id=cycle_id,
+                        attempt=attempts.get(("", name)),
+                    )
+                    for name in task_names
+                )
+                cycles.append(
+                    CycleSnapshot(
+                        cycle_id=cycle_id,
+                        cycle_time=config_cycles[cycle_id].cycle_time,
+                        tasks=cycle_tasks,
+                        status=_cycle_status(cycle_tasks),
+                        updated_at=_max_timestamp(
+                            *(task.updated_at for task in cycle_tasks)
+                        ),
+                        persisted=False,
+                    )
+                )
+            grouped_names = set(config_assignment)
+            root_tasks = tuple(
                 _task_snapshot(
                     name,
-                    task_rows.get(name),
-                    cycle_id=cycle_key,
-                    attempt=attempts.get((cycle_key, name)),
+                    root_rows.get(name),
+                    cycle_id=None,
+                    attempt=attempts.get(("", name)),
+                )
+                for name in names
+                if name not in grouped_names
+            )
+        else:
+            root_tasks = tuple(
+                _task_snapshot(
+                    name,
+                    root_rows.get(name),
+                    cycle_id=None,
+                    attempt=attempts.get(("", name)),
                 )
                 for name in names
             )
-            cycles.append(
-                CycleSnapshot(
-                    cycle_id=cycle_key,
-                    cycle_time=str(cycle_time),
-                    tasks=cycle_tasks,
-                    status=_cycle_status(cycle_tasks),
-                    updated_at=_max_timestamp(
-                        str(cycle_updated_at) if cycle_updated_at else None,
-                        *(task.updated_at for task in cycle_tasks),
-                    ),
-                )
-            )
-
-        root_rows = rows_for_cycle("")
-        root_tasks = tuple(
-            _task_snapshot(
-                name,
-                root_rows.get(name),
-                cycle_id=None,
-                attempt=attempts.get(("", name)),
-            )
-            for name in names
-        )
 
         run_rows = connection.execute(
             """
@@ -449,9 +619,7 @@ def load_monitor_snapshot(
             for row in run_rows
         )
 
-        visible_tasks = (
-            tuple(task for cycle in cycles for task in cycle.tasks) if cycles else root_tasks
-        )
+        visible_tasks = tuple(task for cycle in cycles for task in cycle.tasks) + root_tasks
         problems = tuple(
             ProblemSnapshot(
                 task_name=task.name,
