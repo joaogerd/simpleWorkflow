@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+import threading
 import time
+from concurrent.futures import Future
 from pathlib import Path
 
 import pytest
 
 import simpleworkflow.cli as cli
+from simpleworkflow.state import WorkflowState
+from simpleworkflow.tui import WorkflowTui
 
 
 def test_explicit_tui_run_keeps_workflow_alive_when_monitor_closes(
@@ -41,6 +46,36 @@ def test_explicit_tui_run_keeps_workflow_alive_when_monitor_closes(
     assert marker.read_text(encoding="utf-8") == "done"
     assert elapsed >= 0.10
 
+    state = WorkflowState(
+        tmp_path / ".simpleworkflow" / "state.sqlite3",
+        workflow_name="interactive_run",
+        source_path=workflow,
+        read_only=True,
+    )
+    assert state.get_status("slow") == "success"
+    state.close()
+
+    assert not any(
+        thread.name.startswith("simpleworkflow-engine")
+        for thread in threading.enumerate()
+    )
+
+    # A second state-changing command must acquire the workflow lock normally.
+    assert (
+        cli.main(
+            [
+                "run",
+                str(workflow),
+                "--ui",
+                "plain",
+                "--force",
+                "--color",
+                "never",
+            ]
+        )
+        == 0
+    )
+
 
 def test_tui_run_passes_completion_future_to_monitor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -66,6 +101,37 @@ def test_tui_run_passes_completion_future_to_monitor(
     assert seen_future is not None
     assert seen_future.done()
     assert seen_future.result() == 0
+
+
+def test_monitor_q_does_not_cancel_attached_completion_future(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow: {name: q_semantics}\ntasks: []\n", encoding="utf-8")
+    completion: Future[int] = Future()
+    app = WorkflowTui(
+        config={
+            "workflow": {"name": "q_semantics"},
+            "tasks": [],
+            "__simpleworkflow__": {
+                "source_path": str(workflow),
+                "source_dir": str(workflow.parent),
+            },
+        },
+        workflow_path=workflow,
+        workdir=tmp_path / ".simpleworkflow",
+        refresh_seconds=60,
+        completion_future=completion,
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            await pilot.press("q")
+            await pilot.pause()
+
+    asyncio.run(scenario())
+    assert not completion.cancelled()
+    assert not completion.done()
+    completion.set_result(0)
 
 
 def test_tui_dry_run_is_rejected_without_creating_state(
