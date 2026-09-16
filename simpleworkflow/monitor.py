@@ -308,10 +308,10 @@ def _presentation_cycles(
 ) -> tuple[dict[str, _ConfigCycle], dict[str, list[str]]]:
     """Group unrolled tasks without creating a second execution-state model.
 
-    Explicit ``--cycle`` values establish presentation groups. Tasks without an
-    explicit value inherit a cycle only when all already-classified dependencies
-    point to exactly one cycle. This safely handles validation gates while
-    leaving genuinely non-cyclic setup tasks outside the timeline.
+    Explicit ``--cycle`` values establish presentation groups. A task without an
+    explicit cycle inherits one only after every dependency is already assigned
+    and those dependencies all point to the same cycle. Any global, unresolved,
+    missing or cross-cycle dependency keeps the task outside cycle presentation.
     """
     tasks = _config_tasks(config)
     by_name = {
@@ -336,11 +336,10 @@ def _presentation_cycles(
                 dependencies = [dependencies]
             if not isinstance(dependencies, list) or not dependencies:
                 continue
-            inherited = {
-                assignment[str(dependency)]
-                for dependency in dependencies
-                if str(dependency) in assignment
-            }
+            dependency_names = [str(dependency) for dependency in dependencies]
+            if not all(dependency in assignment for dependency in dependency_names):
+                continue
+            inherited = {assignment[dependency] for dependency in dependency_names}
             if len(inherited) == 1:
                 assignment[name] = next(iter(inherited))
                 changed = True
