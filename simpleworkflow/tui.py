@@ -446,6 +446,19 @@ class WorkflowTui(App[None]):
                         data=(cycle.cycle_id, task.name),
                     )
                     self.task_nodes[(cycle.cycle_id, task.name)] = leaf
+
+            if self.snapshot.tasks:
+                workflow_node = tree.root.add(
+                    "Workflow",
+                    expand=self.selected_cycle_id is None,
+                )
+                for task in self.snapshot.tasks:
+                    symbol = _STATUS.get(task.status, ("•", "", ""))[0]
+                    leaf = workflow_node.add_leaf(
+                        f"{symbol} {_task_label(task.name)}",
+                        data=(None, task.name),
+                    )
+                    self.task_nodes[(None, task.name)] = leaf
         else:
             for task in self.snapshot.tasks:
                 symbol = _STATUS.get(task.status, ("•", "", ""))[0]
@@ -623,11 +636,13 @@ class WorkflowTui(App[None]):
             f"[dim]updated {now}[/dim]"
         )
         cycle = self._selected_cycle()
-        self.query_one("#current-cycle", Static).update(
-            escape(_format_cycle_time(cycle.cycle_time))
-            if cycle
-            else "[dim]no cycle[/dim]"
-        )
+        if cycle is not None:
+            current = escape(_format_cycle_time(cycle.cycle_time))
+        elif self.selected_task is not None and self.snapshot.cycles:
+            current = "[dim]workflow task[/dim]"
+        else:
+            current = "[dim]no cycle[/dim]"
+        self.query_one("#current-cycle", Static).update(current)
 
     def _refresh_cycle_line(self) -> None:
         line = self.query_one("#cycle-line", Static)
@@ -683,6 +698,7 @@ class WorkflowTui(App[None]):
                     _elapsed(run.created_at, run.finished_at) if run else None
                 ),
                 f"cycles            {len(self.snapshot.cycles)}",
+                f"workflow tasks    {len(self.snapshot.tasks)}",
                 f"tasks             {self.snapshot.total_tasks}",
                 f"completed         {self.snapshot.completed_tasks}",
                 f"running           {self.snapshot.running_tasks}",
@@ -705,7 +721,7 @@ class WorkflowTui(App[None]):
         for problem in self.snapshot.problems:
             key = f"{problem.cycle_id or ''}::{problem.task_name}"
             table.add_row(
-                problem.cycle_id or "—",
+                problem.cycle_id or "workflow",
                 _task_label(problem.task_name),
                 _status_markup(problem.status, color=self.color_enabled),
                 problem.reason or "See task details",
@@ -773,9 +789,10 @@ class WorkflowTui(App[None]):
                 else "local"
             )
 
+        task_scope = task.cycle_id or ("workflow" if self.snapshot.cycles else "—")
         fields: list[tuple[str, str]] = [
             ("task", escape(task.name)),
-            ("cycle", escape(task.cycle_id or "—")),
+            ("cycle", escape(task_scope)),
             ("status", _status_markup(task.status, color=self.color_enabled)),
             ("backend", escape(backend)),
         ]
