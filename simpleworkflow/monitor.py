@@ -351,12 +351,12 @@ def _presentation_cycles(
         for cycle_id, _ in sorted(cycles.items(), key=lambda item: item[1].sort_key)
     }
     for task in tasks:
-        name = task.get("name")
-        if not isinstance(name, str):
+        task_name = task.get("name")
+        if not isinstance(task_name, str):
             continue
-        cycle = assignment.get(name)
+        cycle = assignment.get(task_name)
         if cycle is not None:
-            groups[cycle.cycle_id].append(name)
+            groups[cycle.cycle_id].append(task_name)
     return assignment, groups
 
 
@@ -453,7 +453,7 @@ def load_monitor_snapshot(
 
     if not state_path.is_file():
         if config_groups:
-            cycles = tuple(
+            pending_cycles = tuple(
                 CycleSnapshot(
                     cycle_id=cycle_id,
                     cycle_time=config_cycles[cycle_id].cycle_time,
@@ -467,14 +467,14 @@ def load_monitor_snapshot(
                 for cycle_id, task_names in config_groups.items()
             )
             grouped_names = set(config_assignment)
-            root_tasks = tuple(
+            pending_root_tasks = tuple(
                 _task_snapshot(name, None, cycle_id=None)
                 for name in names
                 if name not in grouped_names
             )
         else:
-            cycles = ()
-            root_tasks = tuple(
+            pending_cycles = ()
+            pending_root_tasks = tuple(
                 _task_snapshot(name, None, cycle_id=None) for name in names
             )
         return MonitorSnapshot(
@@ -483,8 +483,8 @@ def load_monitor_snapshot(
             workflow_path=workflow,
             workdir=state_dir,
             updated_at=None,
-            tasks=root_tasks,
-            cycles=cycles,
+            tasks=pending_root_tasks,
+            cycles=pending_cycles,
             runs=(),
             problems=(),
         )
