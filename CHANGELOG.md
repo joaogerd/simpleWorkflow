@@ -2,14 +2,18 @@
 
 ## 0.5.0
 
+simpleWorkflow 0.5.0 combines the persistent 0.4 state model with the
+professional interactive terminal monitor.
+
 - Restore the professional full-screen terminal monitor that was developed and
   refined on `ux/professional-terminal`, adapted to the 0.4 persistent-state
   model instead of reviving the legacy state API.
-- Add a presentation-independent monitor read model over `state.sqlite3` so the
-  TUI can reconstruct workflow, cycle, task, run, attempt and problem state
-  without owning a second source of truth.
+- Add a presentation-independent `MonitorSnapshot` read model over
+  `state.sqlite3` so the TUI can reconstruct workflow, cycle, task, run, attempt
+  and problem state without owning a second source of truth.
 - Add `swf monitor workflow.yaml` for read-only attachment to an existing
-  workflow instance, including reopening after the original monitor has exited.
+  workflow instance, including closing and reopening after state changes that
+  happened while no monitor was running.
 - Add `swf run --ui auto|tui|plain`; `auto` uses the TUI only on a capable
   interactive terminal with the optional dependencies installed and otherwise
   preserves the traditional `TerminalReporter` output.
@@ -21,17 +25,28 @@
   from immutable attempt provenance while keeping SQLite task state authoritative.
 - Make attempt-file discovery defensive: absent or incomplete metadata and log
   files reduce the displayed detail rather than breaking the monitor.
+- Visualize deliberately unrolled scientific campaigns without changing their
+  execution model: explicit `--cycle` metadata creates presentation groups,
+  same-cycle gates may inherit a group, and ambiguous/global tasks remain in a
+  separate Workflow section.
+- Keep native persisted cycles authoritative whenever `cycle_state` exists; the
+  unrolled timeline never creates artificial cycle state or rewrites dependencies.
 - Add wide/narrow terminal behavior, a compact help overlay, a limited semantic
   palette, `NO_COLOR` handling and symbols that keep state understandable without
   color.
 - Define `q` as a presentation action only. Closing the TUI never silently
   cancels a local process or PBS job; an attached run continues to its normal
-  result.
-- Add restart-safe/headless TUI coverage, automatic UI selection tests, persisted
-  cycle/problem/log tests and package validation for both core-only and `[tui]`
-  installations.
-- Preserve the 0.4.0 SQLite schema and workflow-engine execution semantics; no
-  daemon, socket service, web server or centralized scheduler is introduced.
+  result and releases its normal workflow lock afterward.
+- Add restart-safe/headless TUI coverage, automatic UI selection tests,
+  conservative unrolled-cycle tests, MONAN-JEDI-shaped 50-task coverage,
+  persisted problem/log tests and package validation for both core-only and
+  `[tui]` installations.
+- Build and exercise both wheel and source distribution in CI, including a
+  core-only environment with no Textual/Rich and a separate installed TUI
+  environment.
+- Preserve the 0.4.0 SQLite schema and workflow-engine execution semantics; this
+  release introduces no daemon, socket service, web server or centralized
+  scheduler and is not a breaking state-format change.
 
 ## 0.4.0
 
