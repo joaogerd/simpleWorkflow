@@ -12,6 +12,8 @@ venv/
 # Logs
 *.log
 
-# Artefatos locais de empacotamento e patches temporários
+# Local packaging output and temporary patches
+build/
+dist/
 simpleworkflow.egg-info/
 simpleworkflow-python-task-contract-followup*.patch
