@@ -55,6 +55,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip build
           python -m build
+          test -n "$(ls dist/*.whl)"
+          test -n "$(ls dist/*.tar.gz)"
       - name: Install core-only wheel in a clean environment
         run: |
           python -m venv /tmp/simpleworkflow-core
@@ -63,7 +65,9 @@ jobs:
           /tmp/simpleworkflow-core/bin/python -m pip install "$WHEEL"
           /tmp/simpleworkflow-core/bin/python - <<'PY'
           import importlib.util
+          import simpleworkflow
           import simpleworkflow.cli
+          assert simpleworkflow is not None
           assert importlib.util.find_spec("textual") is None
           assert importlib.util.find_spec("rich") is None
           PY
@@ -75,6 +79,7 @@ jobs:
               argv: [python, -c, "print('core ok')"]
           YAML
           /tmp/simpleworkflow-core/bin/swf run /tmp/core-workflow.yaml --ui plain --color never
+          /tmp/simpleworkflow-core/bin/swf run /tmp/core-workflow.yaml --color never
       - name: Install TUI extra from the built wheel
         run: |
           python -m venv /tmp/simpleworkflow-tui
@@ -88,6 +93,37 @@ jobs:
           assert rich is not None
           assert textual is not None
           PY
+          cat > /tmp/tui-workflow.yaml <<'YAML'
+          workflow:
+            name: clean_tui_install
+          tasks:
+            - name: hello
+              argv: [python, -c, "print('tui ok')"]
+          YAML
           /tmp/simpleworkflow-tui/bin/swf monitor --help
+          TERM=xterm timeout 20 script -qec "/tmp/simpleworkflow-tui/bin/swf run /tmp/tui-workflow.yaml --ui tui --color never" /dev/null
+          /tmp/simpleworkflow-tui/bin/python - <<'PY'
+          import asyncio
+          from pathlib import Path
+          from simpleworkflow.config import load_workflow
+          from simpleworkflow.tui import WorkflowTui
+
+          workflow = Path("/tmp/tui-workflow.yaml")
+          config = load_workflow(workflow)
+          app = WorkflowTui(
+              config=config,
+              workflow_path=workflow,
+              workdir=Path("/tmp/.simpleworkflow"),
+              refresh_seconds=60,
+          )
+
+          async def smoke():
+              async with app.run_test(size=(100, 30)) as pilot:
+                  await pilot.pause()
+                  assert app.query_one("#task-tree") is not None
+                  await pilot.press("q")
+
+          asyncio.run(smoke())
+          PY
       - name: Verify checkout stayed clean
         run: test -z "$(git status --porcelain)"
