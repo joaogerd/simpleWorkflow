@@ -13,13 +13,14 @@ reproducible workflow that can be installed and understood quickly.
 
 - YAML task definitions with explicit `argv` arguments, never shell command strings;
 - dependency-aware, sequential execution;
-- `plan`, `validate`, `run`, `status`, `explain`, `reset` and `migrate` commands;
+- `plan`, `validate`, `run`, `status`, `explain`, `reset`, `migrate` and `monitor` commands;
 - exclusive execution, persistent state and conservative restart/reuse;
-- required input/output artifact validation;
+- required input/output validation;
 - per-attempt logs and provenance records;
 - ISO-8601 cycle expansion for scientific cases;
 - controlled local execution and a small PBS foreground-wait backend;
-- friendly, color-aware progress output with no runtime dependency.
+- compact plain terminal output for batch, PBS, CI and redirected logs;
+- an optional full-screen terminal monitor for interactive use.
 
 ## Deliberate limits
 
@@ -32,15 +33,23 @@ not a registry or manager for many workflows.
 
 ## Installation
 
+Install the lightweight runner with:
+
+```bash
+pip install simpleworkflow
+```
+
+This does not install Textual or Rich. For the interactive terminal monitor:
+
+```bash
+pip install "simpleworkflow[tui]"
+```
+
+For a development checkout:
+
 ```bash
 git clone https://github.com/joaogerd/simpleWorkflow.git
 cd simpleWorkflow
-python -m pip install -e .
-```
-
-For development tools and tests:
-
-```bash
 python -m pip install -e ".[dev]"
 ```
 
@@ -63,25 +72,51 @@ persistent state when none exists. `status` and `explain` open existing state
 read-only. Commands that execute or change state use `.simpleworkflow` beside
 the workflow YAML by default, regardless of the shell's current directory.
 
-## Terminal output
+## Interactive monitor and plain output
 
-The CLI prints compact lifecycle events such as `PLAN`, `RUN`, `OK`, `FAIL`,
-`SKIP` and `RERUN`. Interactive terminals receive color and symbols by default;
-redirected output stays plain so logs and scripts remain stable.
+With `simpleworkflow[tui]` installed, an ordinary interactive run chooses the
+full-screen monitor automatically:
 
 ```bash
-# Default: color only when stdout is interactive.
 swf run workflow.yaml
-
-# Demonstrations or terminals that do not advertise color.
-swf run workflow.yaml --color always
-
-# CI logs, shell parsing or plain text output.
-swf status workflow.yaml --color never
 ```
 
-`--color` accepts `auto`, `always` and `never`. Setting `NO_COLOR` also disables
-automatic color. The terminal renderer uses only Python's standard library.
+The selection mode can be made explicit:
+
+```bash
+swf run workflow.yaml --ui plain
+swf run workflow.yaml --ui tui
+```
+
+`auto` is the default. It uses the TUI only when stdin and stdout are terminals,
+`TERM` is usable and the optional dependencies are installed. Redirected output,
+pipes, batch/PBS jobs, CI, `TERM=dumb` and installations without `[tui]` continue
+to use the compact `TerminalReporter`:
+
+```text
+▶ RUN       prepare [local]
+✔ OK        prepare [local]
+```
+
+A second terminal can attach read-only to the same persisted workflow:
+
+```bash
+swf monitor workflow.yaml
+```
+
+The monitor reconstructs Monitor, Ciclos, Campanha, Problemas, Logs, the
+Inspector and the cycle timeline from `state.sqlite3` plus optional attempt files.
+Closing it with `q` does not cancel execution. If the TUI opened by `swf run`
+is closed before the workflow finishes, the workflow continues and the command
+waits for its final result. Reopening the monitor reconstructs the current view
+from persisted state; it does not depend on events observed while the TUI was
+open.
+
+For details, including unrolled scientific campaigns and narrow terminals, see
+[Interactive workflow monitor](docs/interactive-monitor.md).
+
+Color remains separately controlled by `--color auto|always|never` and
+`NO_COLOR`.
 
 ## Workflow format
 
@@ -102,8 +137,8 @@ tasks:
     argv: ["{python}", "-c", "print('Preparing workflow')"]
 ```
 
-Task arguments, working directories, environment values and artifact paths can
-use context placeholders such as `{python}`, `{case_name}` and
+Task arguments, working directories, environment values and paths can use
+context placeholders such as `{python}`, `{case_name}` and
 `{cycle_yyyymmddhh}`. See [the workflow format](docs/workflow_format.md).
 
 ## One workflow, one state directory
@@ -116,7 +151,6 @@ WORKFLOW ROOT/
 └── .simpleworkflow/
     ├── state.sqlite3
     ├── lock
-    ├── logs/
     └── runs/
 ```
 
@@ -151,7 +185,7 @@ See [persistent state model](docs/state-model.md) for the full contract.
 
 Scientific cycles are part of the same logical workflow, not separate
 workflows. A cycling campaign therefore keeps one `state.sqlite3` and records
-state separately per `(cycle, task)`.
+state separately per `(cycle, task)` when it uses the native cycle model.
 
 ```text
 workflow instance
@@ -162,9 +196,15 @@ workflow instance
 
 The human `workflow.name` remains unchanged across cycles.
 
+Some scientific workflows deliberately express several cycles as one unrolled
+workflow so cross-cycle dependencies are ordinary task dependencies. The
+monitor can group those tasks visually from explicit `--cycle` arguments without
+creating cycle state or changing execution. Ambiguous and global tasks remain in
+a separate `Workflow` section.
+
 ## Upgrading state from 0.2.x or 0.3.x
 
-0.4.0 introduces the first explicitly versioned state schema. Legacy databases
+0.4.0 introduced the first explicitly versioned state schema. Legacy databases
 are never rewritten automatically.
 
 Inspect first:
@@ -213,8 +253,7 @@ the foreground until a final result is available. No service or daemon is used.
     block: true
 ```
 
-The full contract, runtime files and JACI-oriented notes are in
-[PBS execution](docs/pbs.md).
+The full contract and JACI-oriented notes are in [PBS execution](docs/pbs.md).
 
 ## State, logs and provenance
 
@@ -241,6 +280,10 @@ execution backend, declared environment, safe hashes of relevant inherited
 environment values, executable identity and declared input fingerprints. Paths
 inside the workflow root are location-independent, so moving the complete case
 does not itself force a rerun. Each run also preserves the effective YAML.
+
+The monitor treats SQLite as operational truth. Attempt metadata and logs enrich
+the Inspector and Logs views when present; missing or incomplete attempt files
+do not make the monitor unusable.
 
 `swf reset` removes current reusable task state but preserves run, attempt,
 state-transition and migration history. A later run therefore executes the
