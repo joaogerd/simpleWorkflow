@@ -41,6 +41,16 @@ def test_auto_selects_tui_only_for_real_interactive_terminal() -> None:
     assert (
         select_ui_mode(
             "auto",
+            stdin=_Stream(False),
+            stdout=_Stream(True),
+            term="xterm-256color",
+            tui_available=True,
+        )
+        == "plain"
+    )
+    assert (
+        select_ui_mode(
+            "auto",
             stdin=_Stream(True),
             stdout=_Stream(True),
             term="dumb",
@@ -55,6 +65,20 @@ def test_auto_selects_tui_only_for_real_interactive_terminal() -> None:
             stdout=_Stream(True),
             term="xterm",
             tui_available=False,
+        )
+        == "plain"
+    )
+
+
+def test_auto_in_ci_non_tty_uses_plain_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CI", "true")
+    assert (
+        select_ui_mode(
+            "auto",
+            stdin=_Stream(False),
+            stdout=_Stream(False),
+            term="xterm",
+            tui_available=True,
         )
         == "plain"
     )
@@ -98,7 +122,9 @@ def test_monitor_command_is_read_only_and_uses_default_state_location(
     workflow.write_text("workflow: {name: monitor_cli}\ntasks: []\n", encoding="utf-8")
     launched: dict[str, object] = {}
 
-    def fake_launch(config: dict[str, object], workflow_path: Path, workdir: Path, **kwargs: object) -> None:
+    def fake_launch(
+        config: dict[str, object], workflow_path: Path, workdir: Path, **kwargs: object
+    ) -> None:
         launched["workflow"] = workflow_path
         launched["workdir"] = workdir
         launched["refresh_seconds"] = kwargs["refresh_seconds"]
@@ -123,10 +149,46 @@ def test_monitor_reports_optional_dependency_requirement(
 
     monkeypatch.setattr(cli, "_launch_monitor", unavailable)
     assert cli.main(["monitor", str(workflow)]) == 2
-    assert "simpleworkflow[tui]" in capsys.readouterr().err
+    error = capsys.readouterr().err
+    assert "simpleworkflow[tui]" in error
+    assert "Traceback" not in error
 
 
-def test_run_plain_preserves_terminal_reporter_output(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_explicit_tui_without_extra_reports_short_install_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow: {name: missing_tui}\ntasks: []\n", encoding="utf-8")
+    monkeypatch.setattr(cli, "tui_available", lambda: False)
+
+    assert cli.main(["run", str(workflow), "--ui", "tui"]) == 2
+    error = capsys.readouterr().err
+    assert 'pip install "simpleworkflow[tui]"' in error
+    assert "Traceback" not in error
+
+
+def test_auto_without_tui_extra_falls_back_to_terminal_reporter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text(
+        "workflow: {name: auto_plain}\n"
+        "tasks:\n"
+        "  - name: hello\n"
+        "    argv: ['python', '-c', 'print(123)']\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "tui_available", lambda: False)
+
+    assert cli.main(["run", str(workflow), "--ui", "auto", "--color", "never"]) == 0
+    output = capsys.readouterr().out
+    assert "▶ RUN" in output
+    assert "✔ OK" in output
+
+
+def test_run_plain_preserves_terminal_reporter_output(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     workflow = tmp_path / "workflow.yaml"
     workflow.write_text(
         "workflow: {name: plain_ui}\n"
