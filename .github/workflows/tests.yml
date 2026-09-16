@@ -101,7 +101,7 @@ jobs:
               argv: [python, -c, "print('tui ok')"]
           YAML
           /tmp/simpleworkflow-tui/bin/swf monitor --help
-          TERM=xterm timeout 20 script -qec "/tmp/simpleworkflow-tui/bin/swf run /tmp/tui-workflow.yaml --ui tui --color never" /dev/null
+          TERM=xterm timeout 20 script -qec "/tmp/simpleworkflow-tui/bin/swf run /tmp/tui-workflow.yaml --workdir /tmp/tui-state --ui tui --color never" /dev/null
           /tmp/simpleworkflow-tui/bin/python - <<'PY'
           import asyncio
           from pathlib import Path
@@ -113,7 +113,7 @@ jobs:
           app = WorkflowTui(
               config=config,
               workflow_path=workflow,
-              workdir=Path("/tmp/.simpleworkflow"),
+              workdir=Path("/tmp/tui-state"),
               refresh_seconds=60,
           )
 
@@ -126,4 +126,6 @@ jobs:
           asyncio.run(smoke())
           PY
       - name: Verify checkout stayed clean
-        run: test -z "$(git status --porcelain)"
+        run: |
+          git status --short
+          test -z "$(git status --porcelain)"
