@@ -89,8 +89,8 @@ swf monitor workflow.yaml --workdir /path/to/state
 
 The monitor opens existing SQLite state read-only. If no state exists yet, it
 shows the configured workflow as pending and does not create a database. Closing
-and reopening the monitor reconstructs the screen from persisted state and
-attempt provenance; no in-memory TUI state is needed for restart recovery.
+and reopening the monitor reconstructs the screen from persisted state; no
+in-memory TUI event history is required for recovery.
 
 The default refresh interval is one second and can be changed for an attached
 monitor:
@@ -114,10 +114,12 @@ return code, dependencies, declared outputs and requested PBS resources when
 those values are available.
 
 **Ciclos** aggregates completed, running, failed and pending tasks for each
-persisted cycle. Selecting a cycle returns to Monitor at that cycle.
+native cycle or safe presentation cycle. Selecting a cycle returns to Monitor at
+that cycle.
 
 **Campanha** summarizes the workflow instance, current/latest run, elapsed time,
-cycle count and task totals. It does not invent an ETA.
+cycle count, global workflow-task count and total task state. It does not invent
+an ETA.
 
 **Problemas** contains only conditions that require attention, such as failure,
 invalid input/output, blocked dependencies, interrupted or uncertain work. With
@@ -127,6 +129,44 @@ most useful available error log when possible.
 **Logs** is deliberately separate from Monitor. It can display launcher stdout
 and stderr and, for PBS attempts, PBS stdout/stderr when those files are present.
 Missing files are normal and never make the monitor fail.
+
+## Native and unrolled scientific cycles
+
+Native simpleWorkflow cycling uses persisted `cycle_state` and task state keyed
+by `(cycle, task)`. Those persisted cycles always have priority in the monitor.
+
+Some scientific workflows deliberately place several analysis times in one
+unrolled task graph so that cross-cycle dependencies are ordinary dependencies
+inside one engine run. The MONAN-JEDI corrected replay is an example of this
+shape. For presentation only, the monitor can reconstruct a timeline from
+explicit `--cycle` arguments already present in task commands.
+
+A task without an explicit cycle inherits a presentation cycle only when every
+one of its dependencies has already been assigned and all of those dependencies
+belong to the same cycle. This allows a validation gate to follow its stage while
+remaining conservative: cross-cycle joins, tasks depending on global work,
+shared setup tasks, and any ambiguous task stay outside the cycle groups.
+
+Those tasks appear once under a small `Workflow` section in Monitor. Their
+Inspector reports their scope as `workflow`, making it clear that they were not
+forced into 00Z, 06Z or another cycle simply to complete the timeline.
+
+This grouping changes no execution state:
+
+```text
+state.sqlite3             workflow.yaml
+     │                         │
+     │ task status             │ explicit --cycle/dependencies
+     └──────────┬──────────────┘
+                ▼
+         MonitorSnapshot
+                │
+                ▼
+               TUI
+```
+
+No artificial `cycle_state` is written, no task name is used to guess a cycle,
+and no dependency is changed by the monitor.
 
 ## Navigation
 
@@ -182,7 +222,8 @@ attempt_history
 Task commands, working directories, scheduler metadata and log locations are
 read from the immutable attempt directories under `.simpleworkflow/runs/` when
 available. These files enrich presentation; they do not override the SQLite task
-state. Incomplete or missing provenance simply results in fewer Inspector fields.
+state. Incomplete or missing provenance simply results in fewer Inspector fields
+or unavailable log buttons.
 
 This separation is what allows this sequence without a controller service:
 
