@@ -118,3 +118,71 @@ def test_narrow_terminal_keeps_monitor_usable(tmp_path: Path) -> None:
             assert app.query_one("#shortcut-line") is not None
 
     asyncio.run(scenario())
+
+
+def test_mixed_unrolled_workflow_shows_noncycle_tasks_in_workflow_section(
+    tmp_path: Path,
+) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow: {name: mixed}\n", encoding="utf-8")
+    config: dict[str, object] = {
+        "workflow": {"name": "mixed"},
+        "tasks": [
+            {"name": "global_setup", "argv": ["true"]},
+            {
+                "name": "analysis00",
+                "depends_on": ["global_setup"],
+                "argv": ["tool", "run", "--cycle", "2018-04-15T00:00:00Z"],
+            },
+            {"name": "gate00", "depends_on": ["analysis00"], "argv": ["tool", "gate"]},
+            {
+                "name": "analysis06",
+                "depends_on": ["gate00"],
+                "argv": ["tool", "run", "--cycle", "2018-04-15T06:00:00Z"],
+            },
+            {
+                "name": "global_finish",
+                "depends_on": ["analysis00", "analysis06"],
+                "argv": ["true"],
+            },
+        ],
+        "__simpleworkflow__": {
+            "source_path": str(workflow),
+            "source_dir": str(workflow.parent),
+        },
+    }
+    workdir = tmp_path / ".simpleworkflow"
+    state = WorkflowState(
+        workdir / "state.sqlite3",
+        workflow_name="mixed",
+        source_path=workflow,
+    )
+    state.set_status("global_setup", "success", 0)
+    state.set_status("analysis00", "success", 0)
+    state.set_status("gate00", "success", 0)
+    state.set_status("analysis06", "running", None)
+    state.close()
+
+    app = WorkflowTui(
+        config=config,
+        workflow_path=workflow,
+        workdir=workdir,
+        refresh_seconds=60.0,
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 35)) as pilot:
+            await pilot.pause()
+            assert (None, "global_setup") in app.task_nodes
+            assert (None, "global_finish") in app.task_nodes
+            global_node = app.task_nodes[(None, "global_setup")].parent
+            assert global_node is not None
+            assert "Workflow" in str(global_node.label)
+
+            app.selected_cycle_id = None
+            app.selected_task = "global_setup"
+            app._refresh_inspector()
+            inspector = str(app.query_one("#inspector").render())
+            assert "workflow" in inspector.lower()
+
+    asyncio.run(scenario())
