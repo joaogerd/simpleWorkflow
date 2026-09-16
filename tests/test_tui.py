@@ -186,3 +186,42 @@ def test_mixed_unrolled_workflow_shows_noncycle_tasks_in_workflow_section(
             assert "workflow" in inspector.lower()
 
     asyncio.run(scenario())
+
+
+def test_representative_terminal_sizes_keep_all_views_operational(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: MONAN-JEDI M3\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    _persist_campaign(workflow, workdir)
+
+    async def scenario(size: tuple[int, int]) -> None:
+        app = WorkflowTui(
+            config=_config(workflow),
+            workflow_path=workflow,
+            workdir=workdir,
+            refresh_seconds=60.0,
+        )
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            views = app.query_one("#views")
+            assert views.active == "monitor"
+            for expected in ("cycles", "campaign", "problems", "logs"):
+                await pilot.press("tab")
+                await pilot.pause()
+                assert views.active == expected
+            await pilot.press("1")
+            await pilot.pause()
+            assert views.active == "monitor"
+            assert app.query_one("#cycle-line") is not None
+            assert app.query_one("#task-tree") is not None
+            assert app.query_one("#inspector") is not None
+            if size[0] < 86:
+                await pilot.press("enter")
+                await pilot.pause()
+                assert app.query_one("#monitor-main").has_class("inspecting")
+                await pilot.press("escape")
+                await pilot.pause()
+                assert not app.query_one("#monitor-main").has_class("inspecting")
+
+    for size in ((140, 45), (100, 32), (72, 26)):
+        asyncio.run(scenario(size))
