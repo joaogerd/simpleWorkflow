@@ -75,6 +75,7 @@ _LOG_LABELS = {
     "stderr": "stderr",
 }
 _CYCLE_SLOT_COUNT = 5
+_PROCESS_ORDER = ("OBS", "JEDI", "MPAS")
 
 _HELP_TEXT = """[bold]simpleWorkflow monitor[/bold]
 
@@ -303,7 +304,12 @@ class WorkflowTui(App[None]):
         border: none; background: #171a21; color: #d7dae0;
     }
     #task-tree { height: 1fr; padding: 0 1; }
-    #inspector { height: 1fr; padding: 1 2; }
+    #inspector { height: 1fr; min-height: 8; padding: 1 2; }
+    #period-title {
+        height: 2; padding: 0 1; border-top: solid #303744;
+        color: #9fb9ff; text-style: bold; content-align: left middle;
+    }
+    #period-matrix { height: 9; min-height: 5; margin: 0; }
     #open-logs {
         width: 16; height: 1; min-height: 1; margin: 0 0 1 2; padding: 0 1;
         border: none; background: #0d0f13; color: #67e8f9; text-style: underline;
@@ -419,6 +425,12 @@ class WorkflowTui(App[None]):
                         yield Label("INSPECTOR", classes="pane-title")
                         yield Static(id="inspector")
                         yield Button("Logs", id="open-logs")
+                        yield Label("", id="period-title")
+                        yield DataTable(
+                            id="period-matrix",
+                            cursor_type="cell",
+                            zebra_stripes=False,
+                        )
             with TabPane("Ciclos", id="cycles"):
                 yield DataTable(id="cycles-table", cursor_type="row", zebra_stripes=True)
             with TabPane("Campanha", id="campaign"):
@@ -970,6 +982,7 @@ class WorkflowTui(App[None]):
         self._refresh_campaign()
         self._refresh_problems()
         self._refresh_inspector()
+        self._refresh_period_matrix()
         self._refresh_follow_button()
         self._refresh_logs(force=force)
 
@@ -1082,6 +1095,58 @@ class WorkflowTui(App[None]):
         if any(status in _COMPLETE for status in statuses):
             return "partial"
         return "pending"
+
+    def _refresh_period_matrix(self) -> None:
+        title = self.query_one("#period-title", Label)
+        table = self.query_one("#period-matrix", DataTable)
+        table.clear(columns=True)
+
+        selected_date = self._selected_date()
+        if selected_date is None:
+            title.update("PERÍODO / CICLAGEM")
+            table.add_column("Process")
+            return
+
+        cycles = self._cycles_for_date(selected_date)
+        title.update(f"PERÍODO / CICLAGEM · {selected_date.strftime('%d/%m/%Y')}")
+        table.add_columns(
+            "Process",
+            *(_format_cycle_hour(cycle.cycle_time) for cycle in cycles),
+        )
+
+        discovered: list[str] = []
+        statuses_by_cycle: list[dict[str, list[str]]] = []
+        for cycle in cycles:
+            by_process: dict[str, list[str]] = {}
+            for task in cycle.tasks:
+                process_step = _task_process_step(task.name, cycle)
+                process = process_step[0] if process_step is not None else "Workflow"
+                by_process.setdefault(process, []).append(task.status)
+                if process not in discovered:
+                    discovered.append(process)
+            statuses_by_cycle.append(by_process)
+
+        processes = [process for process in _PROCESS_ORDER if process in discovered]
+        processes.extend(
+            process for process in discovered if process not in _PROCESS_ORDER
+        )
+
+        for process in processes:
+            row: list[str] = [process]
+            for by_process in statuses_by_cycle:
+                statuses = by_process.get(process, [])
+                row.append(
+                    _status_markup(
+                        self._aggregate_status(statuses),
+                        color=self.color_enabled,
+                    )
+                    if statuses
+                    else "—"
+                )
+            table.add_row(*row, key=process)
+
+        if not processes:
+            table.add_row("Workflow", *("—" for _ in cycles), key="Workflow")
 
     def _refresh_campaign(self) -> None:
         summary = self.query_one("#campaign-summary", Static)
