@@ -241,11 +241,10 @@ def test_filter_inspector_logs_and_follow_are_interactive(tmp_path: Path) -> Non
             assert not open_logs.disabled
             assert open_logs.region.height > 0
 
-            # Click the visible text area rather than the one-cell edge. Textual's
-            # synthetic click defaults to the widget origin; after dynamic tree
-            # reflow that origin may be treated as the margin edge even though the
-            # button is fully visible. Real pointer use naturally lands in-content.
-            await pilot.click("#open-logs", offset=(8, 0))
+            # Use Button.press(), Textual's documented user-press simulation. This
+            # exercises the real Button.Pressed message without Pilot's coordinate
+            # hit-testing layer, which can be unstable after dynamic tree reflow.
+            open_logs.press()
             await pilot.pause()
             assert app.query_one("#views").active == "logs"
             assert "first line" in app.current_log_text
