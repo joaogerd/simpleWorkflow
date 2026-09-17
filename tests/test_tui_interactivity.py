@@ -240,16 +240,21 @@ def test_filter_inspector_logs_and_follow_are_interactive(tmp_path: Path) -> Non
             assert app.selected_task == "analysis"
             assert not open_logs.disabled
             assert open_logs.region.height > 0
+            print(
+                "LOG_BUTTON_GEOMETRY",
+                "button=", open_logs.region,
+                "right=", app.query_one("#right").region,
+                "screen=", app.screen.region,
+                "matrix=", app.query_one("#period-matrix").region,
+            )
 
-            await pilot.click("#open-logs")
+            clicked = await pilot.click("#open-logs")
+            print("LOG_BUTTON_CLICK_RESULT", clicked)
             await pilot.pause()
             assert app.query_one("#views").active == "logs"
             assert "first line" in app.current_log_text
             assert app.follow_logs
 
-            # Prove the clickable control pauses follow mode. Resume through the
-            # documented keyboard binding so the test covers both interaction paths
-            # without depending on two synthetic clicks at identical coordinates.
             await pilot.click("#log-follow")
             await pilot.pause()
             assert not app.follow_logs
