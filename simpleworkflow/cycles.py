@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -81,7 +81,7 @@ class CycleContext:
         """Return generic time and campaign-position values for task templates.
 
         Context values are strings because they are consumed by Python-format
-        templates.  Missing previous/next cycles are represented by the empty
+        templates. Missing previous/next cycles are represented by the empty
         string, and booleans use lowercase ``true``/``false``.
         """
         context = {
@@ -103,11 +103,7 @@ class CycleContext:
 
 
 def cycle_scope_matches(scope: str | None, cycle: CycleContext) -> bool:
-    """Return whether a task scope applies to ``cycle``.
-
-    The selector set is deliberately closed and small; validation normally
-    rejects unsupported values while this guard keeps direct callers safe.
-    """
+    """Return whether a task scope applies to ``cycle``."""
     normalized = scope or "all"
     if normalized not in SUPPORTED_CYCLE_SCOPES:
         supported = ", ".join(sorted(SUPPORTED_CYCLE_SCOPES))
@@ -213,13 +209,10 @@ def resolve_cycle_contexts(
 ) -> list[CycleContext]:
     """Resolve CLI-overridden or YAML-declared cycles in chronological order.
 
-    Ranges are inclusive at both endpoints.  Explicit ``cycle_times`` select
-    individual cycles and cannot be combined with range overrides.  When the
+    Ranges are inclusive at both endpoints. Explicit ``cycle_times`` select
+    individual cycles and cannot be combined with range overrides. When the
     workflow declares a range, explicit selections retain their position in
     that full campaign so selectors such as ``not_last`` keep their meaning.
-    Range fields supplied on the CLI override their YAML counterparts one by
-    one.  An absent cycle declaration returns an empty list, signalling a
-    regular non-cycling workflow.
     """
     requested = list(cycle_times or [])
     if requested:
@@ -247,9 +240,7 @@ def resolve_cycle_contexts(
                 )
             return [by_id[cycle.cycle_id] for cycle in parsed]
 
-        values = [cycle.value for cycle in parsed]
-        positioned = _positioned(values)
-        return [replace(cycle) for cycle in positioned]
+        return _positioned([cycle.value for cycle in parsed])
 
     config = cycle_config or {}
     if not config and all(value is None for value in (start, end, step)):
@@ -265,5 +256,7 @@ def resolve_cycle_contexts(
     ]
     if missing:
         raise CycleConfigurationError("Cycle range requires " + ", ".join(missing) + ".")
+    if not isinstance(raw_start, str) or not isinstance(raw_end, str) or not isinstance(raw_step, str):
+        raise CycleConfigurationError("Cycle range start, end, and step must be strings.")
 
     return _positioned(_range_values(raw_start, raw_end, raw_step))
