@@ -193,6 +193,14 @@ def test_workflow_tree_shows_only_selected_cycle_plus_global_tasks(tmp_path: Pat
             assert ("2018041506", "jedi2018041506_prepare") not in app.task_nodes
             assert (None, "global_setup") in app.task_nodes
 
+            tree = app.query_one("#task-tree")
+            tree.select_node(app.task_nodes[(None, "global_setup")])
+            await pilot.pause()
+            assert app.selected_cycle_id == "2018041500"
+            assert app.selected_task == "global_setup"
+            assert "15/04/2018" in str(app.query_one("#date-label").render())
+            assert "global_setup" in str(app.query_one("#inspector").render())
+
     asyncio.run(scenario())
 
 
