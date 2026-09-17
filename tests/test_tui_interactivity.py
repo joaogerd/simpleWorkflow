@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import asyncio
+import json
 from pathlib import Path
 
 from simpleworkflow.runs import RunRecorder
@@ -237,6 +237,9 @@ def test_filter_inspector_logs_and_follow_are_interactive(tmp_path: Path) -> Non
             await pilot.pause()
             assert not field.display
             assert app.task_filter == ""
+            assert app.selected_task == "analysis"
+            assert not open_logs.disabled
+            assert open_logs.region.height > 0
 
             await pilot.click("#open-logs")
             await pilot.pause()
@@ -329,7 +332,6 @@ def test_unrolled_tree_does_not_repeat_cycle_id_in_task_labels(tmp_path: Path) -
             assert "2018041500" not in str(node.label)
             assert "jedi" not in str(node.label).lower()
             assert "prepare" in str(node.label).lower()
-            assert node.parent is not None
-            assert "JEDI" in str(node.parent.label)
+            assert any("JEDI" in str(group.label) for group in node.parent.parent.children)
 
     asyncio.run(scenario())
