@@ -65,6 +65,11 @@ def test_inspector_shows_daily_process_matrix_below_task_details(tmp_path: Path)
                 matrix.region,
                 right.region,
             )
+            assert open_logs.region.bottom <= matrix.region.y, (
+                open_logs.region,
+                matrix.region,
+                right.region,
+            )
 
             title = app.query_one("#period-title")
             assert "PERÍODO / CICLAGEM" in str(title.render())
