@@ -57,24 +57,32 @@ def test_inspector_shows_daily_process_matrix_below_task_details(tmp_path: Path)
             ids = [getattr(child, "id", None) for child in right.children]
             assert ids.index("inspector") < ids.index("period-matrix")
 
+            open_logs = app.query_one("#open-logs")
+            matrix = app.query_one("#period-matrix", DataTable)
+            assert open_logs.region.height > 0
+            assert open_logs.region.bottom <= right.region.bottom, (
+                open_logs.region,
+                matrix.region,
+                right.region,
+            )
+
             title = app.query_one("#period-title")
             assert "PERÍODO / CICLAGEM" in str(title.render())
             assert "15/04/2018" in str(title.render())
 
-            table = app.query_one("#period-matrix", DataTable)
-            assert table.column_count == 3
-            assert table.row_count == 3
+            assert len(matrix.columns) == 3
+            assert matrix.row_count == 3
 
-            assert str(table.get_cell_at(Coordinate(0, 0))) == "OBS"
-            assert "✓ SUCCESS" in str(table.get_cell_at(Coordinate(0, 1)))
-            assert "● RUNNING" in str(table.get_cell_at(Coordinate(0, 2)))
+            assert str(matrix.get_cell_at(Coordinate(0, 0))) == "OBS"
+            assert "✓ SUCCESS" in str(matrix.get_cell_at(Coordinate(0, 1)))
+            assert "● RUNNING" in str(matrix.get_cell_at(Coordinate(0, 2)))
 
-            assert str(table.get_cell_at(Coordinate(1, 0))) == "JEDI"
-            assert "✓ SUCCESS" in str(table.get_cell_at(Coordinate(1, 1)))
-            assert "○ PENDING" in str(table.get_cell_at(Coordinate(1, 2)))
+            assert str(matrix.get_cell_at(Coordinate(1, 0))) == "JEDI"
+            assert "✓ SUCCESS" in str(matrix.get_cell_at(Coordinate(1, 1)))
+            assert "○ PENDING" in str(matrix.get_cell_at(Coordinate(1, 2)))
 
-            assert str(table.get_cell_at(Coordinate(2, 0))) == "MPAS"
-            assert "● RUNNING" in str(table.get_cell_at(Coordinate(2, 1)))
-            assert "○ PENDING" in str(table.get_cell_at(Coordinate(2, 2)))
+            assert str(matrix.get_cell_at(Coordinate(2, 0))) == "MPAS"
+            assert "● RUNNING" in str(matrix.get_cell_at(Coordinate(2, 1)))
+            assert "○ PENDING" in str(matrix.get_cell_at(Coordinate(2, 2)))
 
     asyncio.run(scenario())
