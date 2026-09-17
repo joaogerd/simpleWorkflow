@@ -603,22 +603,16 @@ class WorkflowTui(App[None]):
         tree.root.expand()
 
         if self.snapshot.cycles:
-            for cycle in self.snapshot.cycles:
+            cycle = self._selected_cycle()
+            if cycle is not None:
                 visible = [
                     task
                     for task in cycle.tasks
                     if self._task_matches_filter(task, cycle.cycle_id)
                 ]
-                if not visible:
-                    continue
-                symbol = _STATUS.get(cycle.status, ("•", "", ""))[0]
-                node = tree.root.add(
-                    f"{symbol} {_format_cycle_time(cycle.cycle_time)}",
-                    expand=cycle.cycle_id == self.selected_cycle_id or bool(self.task_filter),
-                )
                 for task in visible:
                     task_symbol = _STATUS.get(task.status, ("•", "", ""))[0]
-                    leaf = node.add_leaf(
+                    leaf = tree.root.add_leaf(
                         f"{task_symbol} {_task_label(task.name, cycle.cycle_id)}",
                         data=(cycle.cycle_id, task.name),
                     )
@@ -628,10 +622,7 @@ class WorkflowTui(App[None]):
                 task for task in self.snapshot.tasks if self._task_matches_filter(task, None)
             ]
             if global_visible:
-                workflow_node = tree.root.add(
-                    "Workflow",
-                    expand=self.selected_cycle_id is None or bool(self.task_filter),
-                )
+                workflow_node = tree.root.add("Workflow", expand=True)
                 for task in global_visible:
                     symbol = _STATUS.get(task.status, ("•", "", ""))[0]
                     leaf = workflow_node.add_leaf(
