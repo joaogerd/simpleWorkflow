@@ -327,7 +327,9 @@ def test_unrolled_tree_does_not_repeat_cycle_id_in_task_labels(tmp_path: Path) -
             await pilot.pause()
             node = app.task_nodes[("2018041500", "jedi2018041500_prepare")]
             assert "2018041500" not in str(node.label)
-            assert "jedi" in str(node.label).lower()
+            assert "jedi" not in str(node.label).lower()
             assert "prepare" in str(node.label).lower()
+            assert node.parent is not None
+            assert "JEDI" in str(node.parent.label)
 
     asyncio.run(scenario())
