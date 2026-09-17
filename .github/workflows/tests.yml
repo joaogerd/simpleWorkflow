@@ -132,7 +132,7 @@ jobs:
       - name: Upload TUI demonstrations
         uses: actions/upload-artifact@v4
         with:
-          name: simpleworkflow-0.5.0-tui-demos
+          name: simpleworkflow-tui-demos
           path: /tmp/tui-demos/*.svg
           if-no-files-found: error
       - name: Verify checkout stayed clean
