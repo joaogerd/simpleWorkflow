@@ -240,16 +240,12 @@ def test_filter_inspector_logs_and_follow_are_interactive(tmp_path: Path) -> Non
             assert app.selected_task == "analysis"
             assert not open_logs.disabled
             assert open_logs.region.height > 0
-            print(
-                "LOG_BUTTON_GEOMETRY",
-                "button=", open_logs.region,
-                "right=", app.query_one("#right").region,
-                "screen=", app.screen.region,
-                "matrix=", app.query_one("#period-matrix").region,
-            )
 
-            clicked = await pilot.click("#open-logs")
-            print("LOG_BUTTON_CLICK_RESULT", clicked)
+            # Click the visible text area rather than the one-cell edge. Textual's
+            # synthetic click defaults to the widget origin; after dynamic tree
+            # reflow that origin may be treated as the margin edge even though the
+            # button is fully visible. Real pointer use naturally lands in-content.
+            await pilot.click("#open-logs", offset=(8, 0))
             await pilot.pause()
             assert app.query_one("#views").active == "logs"
             assert "first line" in app.current_log_text
