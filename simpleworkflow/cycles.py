@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -18,24 +18,73 @@ _DURATION = re.compile(
     r"(?:T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?)?$"
 )
 
+SUPPORTED_CYCLE_SCOPES = frozenset({"all", "first", "not_first", "last", "not_last"})
+
+
+def _iso(value: datetime) -> str:
+    return value.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _cycle_id(value: datetime) -> str:
+    return value.strftime("%Y%m%dT%H%M%SZ")
+
+
+def _time_context(prefix: str, value: datetime | None) -> dict[str, str]:
+    if value is None:
+        return {
+            f"{prefix}_cycle_time": "",
+            f"{prefix}_cycle_id": "",
+            f"{prefix}_cycle_yyyymmddhh": "",
+            f"{prefix}_cycle_year": "",
+            f"{prefix}_cycle_month": "",
+            f"{prefix}_cycle_day": "",
+            f"{prefix}_cycle_hour": "",
+        }
+    return {
+        f"{prefix}_cycle_time": _iso(value),
+        f"{prefix}_cycle_id": _cycle_id(value),
+        f"{prefix}_cycle_yyyymmddhh": value.strftime("%Y%m%d%H"),
+        f"{prefix}_cycle_year": value.strftime("%Y"),
+        f"{prefix}_cycle_month": value.strftime("%m"),
+        f"{prefix}_cycle_day": value.strftime("%d"),
+        f"{prefix}_cycle_hour": value.strftime("%H"),
+    }
+
 
 @dataclass(frozen=True)
 class CycleContext:
-    """One normalized UTC cycle and its template fields."""
+    """One normalized UTC cycle and its position in the declared campaign."""
 
     value: datetime
+    index: int = 0
+    count: int = 1
+    previous_value: datetime | None = None
+    next_value: datetime | None = None
 
     @property
     def cycle_time(self) -> str:
-        return self.value.isoformat(timespec="seconds").replace("+00:00", "Z")
+        return _iso(self.value)
 
     @property
     def cycle_id(self) -> str:
-        return self.value.strftime("%Y%m%dT%H%M%SZ")
+        return _cycle_id(self.value)
+
+    @property
+    def is_first(self) -> bool:
+        return self.index == 0
+
+    @property
+    def is_last(self) -> bool:
+        return self.index == self.count - 1
 
     def render_context(self) -> dict[str, str]:
-        """Return generic time values available to every task template."""
-        return {
+        """Return generic time and campaign-position values for task templates.
+
+        Context values are strings because they are consumed by Python-format
+        templates.  Missing previous/next cycles are represented by the empty
+        string, and booleans use lowercase ``true``/``false``.
+        """
+        context = {
             "cycle_time": self.cycle_time,
             "cycle_id": self.cycle_id,
             "cycle_yyyymmddhh": self.value.strftime("%Y%m%d%H"),
@@ -43,7 +92,35 @@ class CycleContext:
             "cycle_month": self.value.strftime("%m"),
             "cycle_day": self.value.strftime("%d"),
             "cycle_hour": self.value.strftime("%H"),
+            "cycle_index": str(self.index),
+            "cycle_count": str(self.count),
+            "cycle_is_first": "true" if self.is_first else "false",
+            "cycle_is_last": "true" if self.is_last else "false",
         }
+        context.update(_time_context("previous", self.previous_value))
+        context.update(_time_context("next", self.next_value))
+        return context
+
+
+def cycle_scope_matches(scope: str | None, cycle: CycleContext) -> bool:
+    """Return whether a task scope applies to ``cycle``.
+
+    The selector set is deliberately closed and small; validation normally
+    rejects unsupported values while this guard keeps direct callers safe.
+    """
+    normalized = scope or "all"
+    if normalized not in SUPPORTED_CYCLE_SCOPES:
+        supported = ", ".join(sorted(SUPPORTED_CYCLE_SCOPES))
+        raise CycleConfigurationError(
+            f"unsupported cycle_scope {normalized!r}; use one of: {supported}."
+        )
+    return {
+        "all": True,
+        "first": cycle.is_first,
+        "not_first": not cycle.is_first,
+        "last": cycle.is_last,
+        "not_last": not cycle.is_last,
+    }[normalized]
 
 
 def parse_cycle_time(value: Any, *, label: str = "cycle time") -> CycleContext:
@@ -95,6 +172,37 @@ def validate_cycle_mapping(value: Any) -> None:
     parse_iso_duration(value["step"], label="cycle.step")
 
 
+def _range_values(start: str, end: str, step: str) -> list[datetime]:
+    first = parse_cycle_time(start, label="cycle start")
+    last = parse_cycle_time(end, label="cycle end")
+    interval = parse_iso_duration(step, label="cycle step")
+    if first.value > last.value:
+        raise CycleConfigurationError("cycle start must not be later than cycle end.")
+
+    values: list[datetime] = []
+    current = first.value
+    while current <= last.value:
+        values.append(current)
+        if len(values) > 100_000:
+            raise CycleConfigurationError("cycle expansion exceeds 100000 cycles.")
+        current += interval
+    return values
+
+
+def _positioned(values: list[datetime]) -> list[CycleContext]:
+    count = len(values)
+    return [
+        CycleContext(
+            value=value,
+            index=index,
+            count=count,
+            previous_value=values[index - 1] if index else None,
+            next_value=values[index + 1] if index + 1 < count else None,
+        )
+        for index, value in enumerate(values)
+    ]
+
+
 def resolve_cycle_contexts(
     cycle_config: dict[str, Any] | None,
     *,
@@ -105,10 +213,13 @@ def resolve_cycle_contexts(
 ) -> list[CycleContext]:
     """Resolve CLI-overridden or YAML-declared cycles in chronological order.
 
-    Explicit ``cycle_times`` select individual cycles and cannot be combined
-    with range overrides. Range fields supplied on the CLI override their YAML
-    counterparts one by one. An absent cycle declaration returns an empty list,
-    signalling a regular non-cycling workflow.
+    Ranges are inclusive at both endpoints.  Explicit ``cycle_times`` select
+    individual cycles and cannot be combined with range overrides.  When the
+    workflow declares a range, explicit selections retain their position in
+    that full campaign so selectors such as ``not_last`` keep their meaning.
+    Range fields supplied on the CLI override their YAML counterparts one by
+    one.  An absent cycle declaration returns an empty list, signalling a
+    regular non-cycling workflow.
     """
     requested = list(cycle_times or [])
     if requested:
@@ -116,11 +227,29 @@ def resolve_cycle_contexts(
             raise CycleConfigurationError(
                 "--cycle-time cannot be combined with --from, --to, or --step."
             )
-        result = [parse_cycle_time(value, label="--cycle-time") for value in requested]
-        identifiers = [cycle.cycle_id for cycle in result]
+        parsed = [parse_cycle_time(value, label="--cycle-time") for value in requested]
+        identifiers = [cycle.cycle_id for cycle in parsed]
         if len(set(identifiers)) != len(identifiers):
             raise CycleConfigurationError("--cycle-time values must not repeat a cycle.")
-        return result
+
+        if cycle_config:
+            validate_cycle_mapping(cycle_config)
+            full = _positioned(
+                _range_values(
+                    cycle_config["start"], cycle_config["end"], cycle_config["step"]
+                )
+            )
+            by_id = {cycle.cycle_id: cycle for cycle in full}
+            missing = [cycle.cycle_id for cycle in parsed if cycle.cycle_id not in by_id]
+            if missing:
+                raise CycleConfigurationError(
+                    "--cycle-time is outside the declared cycle range: " + ", ".join(missing)
+                )
+            return [by_id[cycle.cycle_id] for cycle in parsed]
+
+        values = [cycle.value for cycle in parsed]
+        positioned = _positioned(values)
+        return [replace(cycle) for cycle in positioned]
 
     config = cycle_config or {}
     if not config and all(value is None for value in (start, end, step)):
@@ -137,17 +266,4 @@ def resolve_cycle_contexts(
     if missing:
         raise CycleConfigurationError("Cycle range requires " + ", ".join(missing) + ".")
 
-    first = parse_cycle_time(raw_start, label="cycle start")
-    last = parse_cycle_time(raw_end, label="cycle end")
-    interval = parse_iso_duration(raw_step, label="cycle step")
-    if first.value > last.value:
-        raise CycleConfigurationError("cycle start must not be later than cycle end.")
-
-    cycles: list[CycleContext] = []
-    current = first.value
-    while current <= last.value:
-        cycles.append(CycleContext(current))
-        if len(cycles) > 100_000:
-            raise CycleConfigurationError("cycle expansion exceeds 100000 cycles.")
-        current += interval
-    return cycles
+    return _positioned(_range_values(raw_start, raw_end, raw_step))
