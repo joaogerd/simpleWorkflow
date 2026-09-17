@@ -141,21 +141,34 @@ def test_date_and_cycle_controls_navigate_persisted_cycles(tmp_path: Path) -> No
 
 def test_workflow_tree_shows_only_selected_cycle_plus_global_tasks(tmp_path: Path) -> None:
     workflow = tmp_path / "workflow.yaml"
-    workflow.write_text("workflow:\n  name: interactive_campaign\n", encoding="utf-8")
+    workflow.write_text("workflow: {name: mixed_unrolled}\n", encoding="utf-8")
+    config: dict[str, object] = {
+        "workflow": {"name": "mixed_unrolled"},
+        "tasks": [
+            {"name": "global_setup", "argv": ["true"]},
+            {
+                "name": "jedi2018041500_prepare",
+                "argv": ["tool", "run", "--cycle", "2018-04-15T00:00:00Z"],
+            },
+            {
+                "name": "jedi2018041506_prepare",
+                "argv": ["tool", "run", "--cycle", "2018-04-15T06:00:00Z"],
+            },
+        ],
+        "__simpleworkflow__": {
+            "source_path": str(workflow),
+            "source_dir": str(workflow.parent),
+        },
+    }
     workdir = tmp_path / ".simpleworkflow"
-    _persist_campaign(workflow, workdir)
-
-    config = _config(workflow)
-    tasks = config["tasks"]
-    assert isinstance(tasks, list)
-    tasks.append({"name": "global_setup", "argv": ["true"]})
-
     state = WorkflowState(
         workdir / "state.sqlite3",
-        workflow_name="interactive_campaign",
+        workflow_name="mixed_unrolled",
         source_path=workflow,
     )
     state.set_status("global_setup", "success", 0)
+    state.set_status("jedi2018041500_prepare", "success", 0)
+    state.set_status("jedi2018041506_prepare", "running", None)
     state.close()
 
     app = WorkflowTui(
@@ -169,15 +182,15 @@ def test_workflow_tree_shows_only_selected_cycle_plus_global_tasks(tmp_path: Pat
         async with app.run_test(size=(140, 40)) as pilot:
             await pilot.pause()
             assert app.selected_cycle_id == "2018041506"
-            assert ("2018041506", "analysis") in app.task_nodes
-            assert ("2018041500", "prepare") not in app.task_nodes
+            assert ("2018041506", "jedi2018041506_prepare") in app.task_nodes
+            assert ("2018041500", "jedi2018041500_prepare") not in app.task_nodes
             assert (None, "global_setup") in app.task_nodes
 
             await pilot.click("#cycle-slot-0")
             await pilot.pause()
             assert app.selected_cycle_id == "2018041500"
-            assert ("2018041500", "prepare") in app.task_nodes
-            assert ("2018041506", "analysis") not in app.task_nodes
+            assert ("2018041500", "jedi2018041500_prepare") in app.task_nodes
+            assert ("2018041506", "jedi2018041506_prepare") not in app.task_nodes
             assert (None, "global_setup") in app.task_nodes
 
     asyncio.run(scenario())
