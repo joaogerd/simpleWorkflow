@@ -38,6 +38,7 @@ misspellings do not silently alter an experiment.
 | `argv` | Required list of explicit program arguments. |
 | `depends_on` | One task name or a list of upstream task names. |
 | `enabled` | Optional boolean; disabled tasks are recorded as skipped during real execution. |
+| `cycle_scope` | Optional closed selector: `all`, `first`, `not_first`, `last`, or `not_last`. Default: `all`. |
 | `cwd` | Optional working directory, relative to the workflow YAML when not absolute. |
 | `env` | Optional mapping of task-specific string environment variables. |
 | `executor` | `local` (default) or `pbs`. |
@@ -121,12 +122,42 @@ is then `blocked`; disabling a prerequisite never silently authorizes downstream
 execution. `swf run --dry-run` only renders and validates the planned invocation;
 it does not write task state.
 
+## One-time initialization
+
+Cycling workflows may declare tasks that run once before the first scientific
+cycle:
+
+```yaml
+initialization:
+  tasks:
+    - name: initialize_model
+      argv: [python, initialize.py]
+      outputs:
+        required: [products/initial-background.nc]
+```
+
+Initialization is part of the same logical workflow instance but is not a
+scientific cycle. Its task state uses the workflow's no-cycle namespace in
+`state.sqlite3`, while ordinary cycling tasks continue to use `(cycle_id, task)`.
+This means successful initialization tasks are reused on restart just like any
+other successful task: completed steps are not repeated unless their signature
+or required products changed, or the user explicitly forces/resets them.
+
+Initialization is strictly ordered before cycle execution. If initialization
+fails, no cycle is started. On a later `swf run`, the initialization resumes
+from the incomplete task and cycles are released only after it succeeds.
+
+Initialization tasks use the normal task schema and dependency model. Because
+they are outside the cycle range, they may omit `cycle_scope` or use only
+`cycle_scope: all`; positional selectors such as `first` or `not_last` are not
+valid for initialization tasks.
+
 ## Cycles
 
-A workflow can declare an inclusive ISO-8601 cycle range. The same task set is
-executed sequentially for each cycle. All cycles belong to the same logical
-workflow instance and the same `.simpleworkflow/state.sqlite3`; task state is
-separated by the explicit `cycle_id` dimension.
+A workflow can declare an inclusive ISO-8601 cycle range. The same structural
+task set is executed sequentially for each cycle. All cycles belong to the same
+logical workflow instance and the same `.simpleworkflow/state.sqlite3`; task
+state is separated by the explicit `cycle_id` dimension.
 
 ```yaml
 cycle:
@@ -135,7 +166,11 @@ cycle:
   step: PT6H
 ```
 
-For every cycle, these context values are added:
+Both endpoints are inclusive. The example above therefore contains four cycles:
+00Z, 06Z, 12Z and 18Z. A range from `2018-04-15T00:00:00Z` through
+`2018-04-18T00:00:00Z` at `PT6H` contains 13 cycles.
+
+For every cycle, the following context values are added:
 
 ```text
 {cycle_time}       2018-04-15T00:00:00Z
@@ -145,12 +180,86 @@ For every cycle, these context values are added:
 {cycle_month}      04
 {cycle_day}        15
 {cycle_hour}       00
+
+{cycle_index}      0
+{cycle_count}      4
+{cycle_is_first}   true
+{cycle_is_last}    false
 ```
 
-Cycle execution is sequential and fail-fast. A successful task in one cycle is
-never reused as the success state of another cycle. `workflow.name` remains the
-name from the YAML; cycle identity is stored separately rather than being
-encoded into another workflow name.
+Position is zero-based: the first cycle has `cycle_index=0` and the last has
+`cycle_index=cycle_count-1`.
+
+The immediate neighbours are also available:
+
+```text
+{previous_cycle_time}
+{previous_cycle_id}
+{previous_cycle_yyyymmddhh}
+{previous_cycle_year}
+{previous_cycle_month}
+{previous_cycle_day}
+{previous_cycle_hour}
+
+{next_cycle_time}
+{next_cycle_id}
+{next_cycle_yyyymmddhh}
+{next_cycle_year}
+{next_cycle_month}
+{next_cycle_day}
+{next_cycle_hour}
+```
+
+For the first cycle all `previous_cycle_*` values are the empty string. For the
+last cycle all `next_cycle_*` values are the empty string. Booleans are rendered
+as lowercase strings `true` and `false`, matching the string-oriented template
+context.
+
+### Cycle selectors
+
+A task normally belongs to every cycle. `cycle_scope` provides a deliberately
+small positional selector when a task is meaningful only at a campaign edge:
+
+```yaml
+tasks:
+  - name: every_cycle
+    cycle_scope: all
+    argv: [python, all.py, "{cycle_time}"]
+
+  - name: produce_next_cycle_input
+    cycle_scope: not_last
+    argv: [python, next.py, "{cycle_time}", "{next_cycle_time}"]
+
+  - name: final_summary
+    cycle_scope: last
+    argv: [python, summary.py, "{cycle_time}"]
+```
+
+Supported values are:
+
+- `all` — every cycle; this is the default;
+- `first` — first cycle only;
+- `not_first` — every cycle except the first;
+- `last` — last cycle only;
+- `not_last` — every cycle except the last.
+
+There is intentionally no expression language, Python evaluation, or general
+`if` syntax. A task that is outside its `cycle_scope` is absent from that cycle;
+it is not stored as `skipped`. Dependencies must therefore be structurally
+valid for every cycle in which the dependent task itself is active.
+
+### Ordering and restart
+
+Cycle execution is sequential and fail-fast. The complete active task graph for
+cycle N must finish successfully before cycle N+1 starts. This deterministic
+barrier is what allows a product from one cycle to become an input of the next
+without launching cycles concurrently and waiting for files to appear.
+
+A successful task in one cycle is never reused as the success state of another
+cycle. If execution stops in the middle of a campaign, a later `swf run` walks
+the same ordered cycle range: completed initialization and completed cycles are
+reused, the incomplete cycle resumes conservatively, and later cycles run only
+after it succeeds.
 
 CLI selection overrides YAML:
 
@@ -166,7 +275,54 @@ swf run workflow.yaml \
 ```
 
 `--cycle-time` may be repeated for multiple specific cycles, but cannot be
-combined with `--from`, `--to` or `--step`.
+combined with `--from`, `--to` or `--step`. When a workflow already declares a
+cycle range, an explicitly selected `--cycle-time` retains its original position
+in that declared campaign. For example, selecting the middle cycle does not
+make it become `first` or `last`; this keeps `cycle_scope` semantics stable for
+restart and targeted diagnosis.
+
+## Complete phased example
+
+```yaml
+format_version: 1
+workflow:
+  name: cycling_example
+
+context:
+  python: python
+
+initialization:
+  tasks:
+    - name: initialize
+      argv: ["{python}", initialize.py]
+      outputs:
+        required: [products/background_2018041500.nc]
+
+cycle:
+  start: "2018-04-15T00:00:00Z"
+  end: "2018-04-15T18:00:00Z"
+  step: PT6H
+
+tasks:
+  - name: analysis
+    argv: ["{python}", analysis.py, "{cycle_time}"]
+
+  - name: forecast
+    depends_on: [analysis]
+    argv: ["{python}", forecast.py, "{cycle_time}"]
+
+  - name: next_background
+    cycle_scope: not_last
+    depends_on: [forecast]
+    argv:
+      - "{python}"
+      - background.py
+      - "{cycle_time}"
+      - "{next_cycle_time}"
+```
+
+The YAML describes the process once. Increasing the end date increases runtime
+cycle instances in SQLite; it does not duplicate the task definitions.
 
 ## State and logs
 
@@ -181,5 +337,6 @@ provenance under `.simpleworkflow/runs/<run-id>/`.
 
 `plan`, `validate`, `status`, `explain` and `run --dry-run` are inspection/planning
 operations and do not create state when none exists. `status` and `explain` open
-existing state read-only. `reset` changes reusable task state but preserves run,
-attempt, state-event and migration history.
+existing state read-only. A full `reset` also clears reusable initialization
+state; a reset targeted to selected cycle times leaves initialization intact.
+Run and attempt history remain preserved.
