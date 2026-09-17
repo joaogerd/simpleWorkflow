@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from rich.markup import escape
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -40,7 +41,7 @@ _STATUS = {
     "stale": ("↻", "STALE", "yellow"),
     "running": ("●", "RUNNING", "cyan"),
     "success": ("✓", "SUCCESS", "green"),
-    "failed": ("!", "FAILED", "red"),
+    "failed": ("✕", "FAILED", "red"),
     "invalid-input": ("!", "BAD INPUT", "red"),
     "invalid-output": ("!", "BAD OUTPUT", "red"),
     "blocked": ("!", "BLOCKED", "red"),
@@ -138,6 +139,46 @@ def _status_markup(status: str, *, color: bool = True) -> str:
     if not color:
         return f"{symbol} {label}"
     return f"[{style}]{symbol} {label}[/{style}]"
+
+
+def _tree_status_text(status: str, label: str, *, color: bool = True) -> Text:
+    """Render a compact status symbol while keeping the label visually quiet."""
+    symbol, _, style = _STATUS.get(status, ("•", status.upper(), "white"))
+    value = Text()
+    value.append(symbol, style=style if color else None)
+    value.append(f" {label}")
+    return value
+
+
+def _task_process_step(
+    name: str,
+    cycle: CycleSnapshot,
+) -> tuple[str, str] | None:
+    """Infer a presentation-only process/step pair conservatively.
+
+    Scientific unrolled workflows commonly encode a process followed by the
+    cycle id or synoptic hour, for example ``obs06_prepare`` or
+    ``jedi2018041506_submit``. Only that explicit shape is grouped; names
+    that do not match remain in the Workflow group.
+    """
+    parsed = _cycle_datetime(cycle.cycle_time)
+    markers = [cycle.cycle_id]
+    if parsed is not None:
+        markers.append(parsed.strftime("%H"))
+    for marker in markers:
+        for separator in ("_", "-"):
+            token = f"{marker}{separator}"
+            index = name.find(token)
+            if index <= 0:
+                continue
+            process = name[:index]
+            step = name[index + len(token) :]
+            if not step or not process[0].isalpha():
+                continue
+            if not all(char.isalnum() or char == "-" for char in process):
+                continue
+            return process.upper(), _task_label(step)
+    return None
 
 
 def _cycle_datetime(value: str) -> datetime | None:
@@ -613,39 +654,90 @@ class WorkflowTui(App[None]):
 
         if self.snapshot.cycles:
             cycle = self._selected_cycle()
-            if cycle is not None:
-                visible = [
-                    task
-                    for task in cycle.tasks
-                    if self._task_matches_filter(task, cycle.cycle_id)
-                ]
-                for task in visible:
-                    task_symbol = _STATUS.get(task.status, ("•", "", ""))[0]
-                    leaf = tree.root.add_leaf(
-                        f"{task_symbol} {_task_label(task.name, cycle.cycle_id)}",
-                        data=(cycle.cycle_id, task.name),
-                    )
-                    self.task_nodes[(cycle.cycle_id, task.name)] = leaf
+            process_groups: dict[str, list[tuple[TaskSnapshot, str]]] = {}
+            workflow_entries: list[tuple[TaskSnapshot, str | None, str]] = []
 
-            global_visible = [
-                task for task in self.snapshot.tasks if self._task_matches_filter(task, None)
-            ]
-            if global_visible:
-                workflow_node = tree.root.add("Workflow", expand=True)
-                for task in global_visible:
-                    symbol = _STATUS.get(task.status, ("•", "", ""))[0]
-                    leaf = workflow_node.add_leaf(
-                        f"{symbol} {_task_label(task.name)}",
-                        data=(None, task.name),
+            if cycle is not None:
+                for task in cycle.tasks:
+                    process_step = _task_process_step(task.name, cycle)
+                    if process_step is None:
+                        workflow_entries.append(
+                            (task, cycle.cycle_id, _task_label(task.name, cycle.cycle_id))
+                        )
+                        continue
+                    process, step = process_step
+                    process_groups.setdefault(process, []).append((task, step))
+
+                for process, entries in process_groups.items():
+                    visible = [
+                        (task, step)
+                        for task, step in entries
+                        if self._task_matches_filter(task, cycle.cycle_id)
+                    ]
+                    if not visible:
+                        continue
+                    group_status = self._aggregate_status(
+                        [task.status for task, _ in entries]
                     )
-                    self.task_nodes[(None, task.name)] = leaf
+                    process_node = tree.root.add(
+                        _tree_status_text(
+                            group_status,
+                            process,
+                            color=self.color_enabled,
+                        ),
+                        expand=True,
+                    )
+                    for task, step in visible:
+                        leaf = process_node.add_leaf(
+                            _tree_status_text(
+                                task.status,
+                                step,
+                                color=self.color_enabled,
+                            ),
+                            data=(cycle.cycle_id, task.name),
+                        )
+                        self.task_nodes[(cycle.cycle_id, task.name)] = leaf
+
+            workflow_entries.extend(
+                (task, None, _task_label(task.name)) for task in self.snapshot.tasks
+            )
+            workflow_visible = [
+                (task, cycle_id, label)
+                for task, cycle_id, label in workflow_entries
+                if self._task_matches_filter(task, cycle_id)
+            ]
+            if workflow_visible:
+                workflow_status = self._aggregate_status(
+                    [task.status for task, _, _ in workflow_entries]
+                )
+                workflow_node = tree.root.add(
+                    _tree_status_text(
+                        workflow_status,
+                        "Workflow",
+                        color=self.color_enabled,
+                    ),
+                    expand=True,
+                )
+                for task, cycle_id, label in workflow_visible:
+                    leaf = workflow_node.add_leaf(
+                        _tree_status_text(
+                            task.status,
+                            label,
+                            color=self.color_enabled,
+                        ),
+                        data=(cycle_id, task.name),
+                    )
+                    self.task_nodes[(cycle_id, task.name)] = leaf
         else:
             for task in self.snapshot.tasks:
                 if not self._task_matches_filter(task, None):
                     continue
-                symbol = _STATUS.get(task.status, ("•", "", ""))[0]
                 leaf = tree.root.add_leaf(
-                    f"{symbol} {_task_label(task.name)}",
+                    _tree_status_text(
+                        task.status,
+                        _task_label(task.name),
+                        color=self.color_enabled,
+                    ),
                     data=(None, task.name),
                 )
                 self.task_nodes[(None, task.name)] = leaf
