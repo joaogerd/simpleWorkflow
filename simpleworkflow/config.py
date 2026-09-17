@@ -6,7 +6,7 @@ from typing import Any
 
 import yaml
 
-from .cycles import validate_cycle_mapping
+from .cycles import SUPPORTED_CYCLE_SCOPES, validate_cycle_mapping
 
 SUPPORTED_EXECUTORS = {"local", "pbs"}
 WORKFLOW_FORMAT_VERSION = 1
@@ -28,6 +28,7 @@ _TASK_FIELDS = {
     "outputs",
     "input_fingerprint",
     "timeout",
+    "cycle_scope",
 }
 _PBS_FIELDS = {
     "queue",
@@ -110,7 +111,8 @@ def _validate_artifact_group(value: Any, field: str, task_name: str) -> None:
             if not isinstance(check, dict):
                 raise ValueError(f"Task '{task_name}' output check {index} must be a mapping.")
             _reject_unknown_keys(
-                check, {"path", "kind", "nonempty", "min_size"},
+                check,
+                {"path", "kind", "nonempty", "min_size"},
                 f"Task '{task_name}' output check {index}",
             )
             if not isinstance(check.get("path"), str) or not check["path"]:
@@ -118,7 +120,9 @@ def _validate_artifact_group(value: Any, field: str, task_name: str) -> None:
             if check.get("kind", "any") not in {"any", "file", "directory"}:
                 raise ValueError(f"Task '{task_name}' output check {index} has invalid kind.")
             if "nonempty" in check and not isinstance(check["nonempty"], bool):
-                raise ValueError(f"Task '{task_name}' output check {index} nonempty must be boolean.")
+                raise ValueError(
+                    f"Task '{task_name}' output check {index} nonempty must be boolean."
+                )
             minimum = check.get("min_size")
             if minimum is not None and (
                 not isinstance(minimum, int) or isinstance(minimum, bool) or minimum < 0
@@ -185,7 +189,7 @@ def _validate_pbs(task: dict[str, Any], task_name: str) -> None:
         )
 
 
-def _validate_task(task: Any) -> None:
+def _validate_task(task: Any, *, initialization: bool = False) -> None:
     if not isinstance(task, dict):
         raise ValueError("Each task must be a mapping.")
 
@@ -211,6 +215,19 @@ def _validate_task(task: Any) -> None:
                 raise ValueError(f"Task '{name}' dependency names cannot be empty.")
         else:
             _validate_string_list(dependencies, "depends_on", name)
+
+    scope = task.get("cycle_scope")
+    if scope is not None:
+        if not isinstance(scope, str) or scope not in SUPPORTED_CYCLE_SCOPES:
+            supported = ", ".join(sorted(SUPPORTED_CYCLE_SCOPES))
+            raise ValueError(
+                f"Task '{name}' field 'cycle_scope' must be one of: {supported}."
+            )
+        if initialization and scope != "all":
+            raise ValueError(
+                f"Initialization task '{name}' cannot use cycle_scope {scope!r}; "
+                "initialization is outside scientific cycles."
+            )
 
     if "enabled" in task and not isinstance(task["enabled"], bool):
         raise ValueError(f"Task '{name}' field 'enabled' must be a boolean.")
@@ -260,6 +277,19 @@ def _validate_task(task: Any) -> None:
     _validate_pbs(task, name)
 
 
+def _initialization_tasks(data: dict[str, Any]) -> list[dict[str, Any]]:
+    initialization = data.get("initialization")
+    if initialization is None:
+        return []
+    if not isinstance(initialization, dict):
+        raise ValueError("'initialization' must be a mapping.")
+    _reject_unknown_keys(initialization, {"tasks"}, "'initialization'")
+    tasks = initialization.get("tasks", [])
+    if not isinstance(tasks, list):
+        raise ValueError("'initialization.tasks' must be a list.")
+    return tasks
+
+
 def load_workflow(path: str | Path) -> dict[str, Any]:
     """Load and strictly validate one simpleWorkflow YAML configuration."""
     workflow_path = Path(path).resolve()
@@ -272,7 +302,9 @@ def load_workflow(path: str | Path) -> dict[str, Any]:
         raise ValueError("Workflow file must contain a YAML mapping at the top level.")
 
     _reject_unknown_keys(
-        data, {"format_version", "workflow", "context", "tasks", "cycle"}, "Workflow"
+        data,
+        {"format_version", "workflow", "context", "tasks", "cycle", "initialization"},
+        "Workflow",
     )
     # Files created before versioning are interpreted as version 1 for compatibility.
     version = data.get("format_version", WORKFLOW_FORMAT_VERSION)
@@ -297,8 +329,16 @@ def load_workflow(path: str | Path) -> dict[str, Any]:
         raise ValueError("'tasks' must be a list.")
 
     validate_cycle_mapping(data.get("cycle"))
+    initialization_tasks = _initialization_tasks(data)
 
     seen_names: set[str] = set()
+    for task in initialization_tasks:
+        _validate_task(task, initialization=True)
+        name = task["name"]
+        if name in seen_names:
+            raise ValueError(f"Duplicated task name: {name}")
+        seen_names.add(name)
+
     for task in data["tasks"]:
         _validate_task(task)
         name = task["name"]
