@@ -139,6 +139,50 @@ def test_date_and_cycle_controls_navigate_persisted_cycles(tmp_path: Path) -> No
     asyncio.run(scenario())
 
 
+def test_workflow_tree_shows_only_selected_cycle_plus_global_tasks(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: interactive_campaign\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    _persist_campaign(workflow, workdir)
+
+    config = _config(workflow)
+    tasks = config["tasks"]
+    assert isinstance(tasks, list)
+    tasks.append({"name": "global_setup", "argv": ["true"]})
+
+    state = WorkflowState(
+        workdir / "state.sqlite3",
+        workflow_name="interactive_campaign",
+        source_path=workflow,
+    )
+    state.set_status("global_setup", "success", 0)
+    state.close()
+
+    app = WorkflowTui(
+        config=config,
+        workflow_path=workflow,
+        workdir=workdir,
+        refresh_seconds=60,
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.pause()
+            assert app.selected_cycle_id == "2018041506"
+            assert ("2018041506", "analysis") in app.task_nodes
+            assert ("2018041500", "prepare") not in app.task_nodes
+            assert (None, "global_setup") in app.task_nodes
+
+            await pilot.click("#cycle-slot-0")
+            await pilot.pause()
+            assert app.selected_cycle_id == "2018041500"
+            assert ("2018041500", "prepare") in app.task_nodes
+            assert ("2018041506", "analysis") not in app.task_nodes
+            assert (None, "global_setup") in app.task_nodes
+
+    asyncio.run(scenario())
+
+
 def test_filter_inspector_logs_and_follow_are_interactive(tmp_path: Path) -> None:
     workflow = tmp_path / "workflow.yaml"
     workflow.write_text("workflow:\n  name: interactive_campaign\n", encoding="utf-8")
