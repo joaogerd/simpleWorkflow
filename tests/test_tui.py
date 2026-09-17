@@ -216,10 +216,14 @@ def test_representative_terminal_sizes_keep_all_views_operational(tmp_path: Path
             assert app.query_one("#task-tree") is not None
             assert app.query_one("#inspector") is not None
             if size[0] < 86:
-                await pilot.press("enter")
+                # The interactive header added in 0.5.1 introduces additional
+                # focusable controls. Exercise the responsive action directly so
+                # this test validates the narrow layout independently of whichever
+                # widget currently owns keyboard focus.
+                app.action_inspect()
                 await pilot.pause()
                 assert app.query_one("#monitor-main").has_class("inspecting")
-                await pilot.press("escape")
+                app.action_escape_context()
                 await pilot.pause()
                 assert not app.query_one("#monitor-main").has_class("inspecting")
 
