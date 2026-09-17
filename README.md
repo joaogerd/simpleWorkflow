@@ -106,11 +106,16 @@ swf monitor workflow.yaml
 
 The monitor reconstructs Monitor, Ciclos, Campanha, Problemas, Logs, the
 Inspector and the cycle timeline from `state.sqlite3` plus optional attempt files.
-Closing it with `q` does not cancel execution. If the TUI opened by `swf run`
-is closed before the workflow finishes, the workflow continues and the command
-waits for its final result. Reopening the monitor reconstructs the current view
-from persisted state; it does not depend on events observed while the TUI was
-open.
+In 0.5.1 the operational views are directly navigable: dates and cycles are
+clickable, `/` filters the workflow tree, campaign rows jump to that day,
+`Logs (N)` in the Inspector opens persisted output, `f` pauses/resumes live log
+following, and the Problemas tab shows a count when attention is required.
+
+Closing the monitor with `q` does not cancel execution. If the TUI opened by
+`swf run` is closed before the workflow finishes, the workflow continues and the
+command waits for its final result. Reopening the monitor reconstructs the
+current view from persisted state; it does not depend on events observed while
+the TUI was open.
 
 For details, including unrolled scientific campaigns and narrow terminals, see
 [Interactive workflow monitor](docs/interactive-monitor.md).
