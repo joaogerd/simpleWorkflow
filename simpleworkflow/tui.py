@@ -489,8 +489,17 @@ class WorkflowTui(App[None]):
 
     def _selected_task_snapshot(self) -> TaskSnapshot | None:
         cycle = self._selected_cycle()
-        tasks = cycle.tasks if cycle is not None else self.snapshot.tasks
-        return next((task for task in tasks if task.name == self.selected_task), None)
+        if cycle is not None:
+            selected = next(
+                (task for task in cycle.tasks if task.name == self.selected_task),
+                None,
+            )
+            if selected is not None:
+                return selected
+        return next(
+            (task for task in self.snapshot.tasks if task.name == self.selected_task),
+            None,
+        )
 
     def _available_dates(self) -> list[date]:
         values = {
@@ -643,9 +652,13 @@ class WorkflowTui(App[None]):
 
         key = (self.selected_cycle_id, self.selected_task or "")
         selected = self.task_nodes.get(key)
+        if selected is None and self.selected_task:
+            selected = self.task_nodes.get((None, self.selected_task))
         if selected is None and self.task_nodes:
             first_key, selected = next(iter(self.task_nodes.items()))
-            self.selected_cycle_id, self.selected_task = first_key
+            node_cycle_id, self.selected_task = first_key
+            if node_cycle_id is not None:
+                self.selected_cycle_id = node_cycle_id
         if selected is not None:
             tree.select_node(selected)
 
@@ -656,7 +669,8 @@ class WorkflowTui(App[None]):
         cycle_id, task_name = data
         if task_name not in self.task_order:
             return
-        self.selected_cycle_id = str(cycle_id) if cycle_id is not None else None
+        if cycle_id is not None:
+            self.selected_cycle_id = str(cycle_id)
         self.selected_task = str(task_name)
         self.selected_log_key = None
         self._last_log_signature = None
