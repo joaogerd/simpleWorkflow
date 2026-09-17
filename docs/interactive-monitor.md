@@ -2,7 +2,9 @@
 
 simpleWorkflow 0.5 adds an optional terminal user interface (TUI) for scientists
 who want to watch one workflow interactively without turning simpleWorkflow into
-a service or centralized orchestrator.
+a service or centralized orchestrator. Version 0.5.1 restores the richer
+navigation that existed in the original professional-terminal prototype while
+keeping the 0.5 persisted-state architecture unchanged.
 
 The SQLite state introduced in 0.4 remains the source of truth. The TUI is a
 read-only presentation layer over the same workflow instance, cycles, tasks,
@@ -105,30 +107,48 @@ scheduler independently of the workflow engine.
 
 ## Views
 
-The approved interface has five operational views.
+The interface has five operational views.
 
-**Monitor** is the default. It shows a compact workflow/cycle tree and an
-Inspector for the selected task. The Inspector only displays applicable fields,
-including backend, attempt, timing, command, working directory, PBS job ID,
-return code, dependencies, declared outputs and requested PBS resources when
-those values are available.
+**Monitor** is the default. It shows the workflow tree and task Inspector. The
+selected day appears at the upper right with previous/next-day controls. The
+cycle strip below the header contains real cycle buttons derived from the
+workflow state; it does not assume that every workflow uses 00Z/06Z/12Z/18Z.
+Clicking a cycle selects it immediately. Previous/next-cycle buttons continue
+through longer campaigns while the compact strip follows the relevant part of
+the timeline.
+
+The task tree can be filtered with `/`. Filtering matches the internal task name,
+the compact display label and the current task state. The filter is presentation
+only and never changes workflow execution or SQLite state.
+
+The Inspector only displays applicable fields, including backend, attempt,
+timing, command, working directory, PBS job ID, return code, dependencies,
+declared outputs and requested PBS resources when those values are available. A
+small `Logs (N)` action appears when the selected attempt has log streams, making
+it possible to jump to the Logs view without remembering a keyboard shortcut.
 
 **Ciclos** aggregates completed, running, failed and pending tasks for each
-native cycle or safe presentation cycle. Selecting a cycle returns to Monitor at
+native cycle or safe presentation cycle. Selecting a row returns to Monitor at
 that cycle.
 
-**Campanha** summarizes the workflow instance, current/latest run, elapsed time,
-cycle count, global workflow-task count and total task state. It does not invent
-an ETA.
+**Campanha** is a navigable campaign overview. It groups the available cycles by
+day, summarizes the number of cycles and task states for that day, and lets a
+selected day jump directly back to Monitor. The compact run/instance metadata is
+kept as context rather than dominating the view. Clicking the current date in
+the header opens the campaign view at the selected day.
 
 **Problemas** contains only conditions that require attention, such as failure,
-invalid input/output, blocked dependencies, interrupted or uncertain work. With
-no such state it displays `No problems detected.` Selecting a problem opens the
-most useful available error log when possible.
+invalid input/output, blocked dependencies, interrupted or uncertain work. The
+tab shows a problem count when attention is required. With no such state it
+displays `No problems detected.` Selecting a problem opens the most useful
+available error log when possible.
 
 **Logs** is deliberately separate from Monitor. It can display launcher stdout
 and stderr and, for PBS attempts, PBS stdout/stderr when those files are present.
-Missing files are normal and never make the monitor fail.
+Missing files are normal and never make the monitor fail. `FOLLOW ●` updates the
+visible log as the file grows; `f` or the follow button pauses updates while the
+operator inspects existing output, and pressing it again resumes from persisted
+log content.
 
 ## Native and unrolled scientific cycles
 
@@ -170,28 +190,32 @@ and no dependency is changed by the monitor.
 
 ## Navigation
 
-The intentionally small shortcut set is:
+The deliberately small shortcut set is:
 
 ```text
-↑ / ↓        select task
+↑ / ↓        select task when the tree has focus
 ← / →        previous / next cycle
-Enter        inspect on narrow terminals
-Esc          return to workflow on narrow terminals
+/            filter tasks
+Enter        inspect selected task on narrow terminals
+Esc          clear filter / return to workflow
 Tab          next view
 Shift+Tab    previous view
 1..5         Monitor / Ciclos / Campanha / Problemas / Logs
 l            logs for selected task
 o / e        preferred output / error log
+f            follow / pause log updates
 r            refresh now
 ?            help overlay
 q            close monitor
 ```
 
-The help overlay only lists commands that exist; there is no permanent Help tab.
+The date controls, cycle buttons, campaign rows, cycle rows, Inspector Logs
+action, problem rows and log-stream selectors are also clickable. The help
+overlay only lists commands that exist; there is no permanent Help tab.
 
 Wide terminals show workflow and Inspector side by side. Narrow terminals keep
-the workflow usable and let `Enter` switch to the Inspector instead of trying to
-compress both panes into unreadable columns.
+the workflow readable and provide the Inspector as an alternate pane instead of
+compressing both columns beyond usefulness.
 
 ## What `q` means
 
