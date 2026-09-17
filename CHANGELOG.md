@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.5.1
+
+simpleWorkflow 0.5.1 refines the professional TUI introduced in 0.5.0 so the
+monitor behaves as an operational navigation surface rather than a mostly static
+status screen.
+
+- Restore clickable date and cycle navigation inspired by the original
+  `ux/professional-terminal` implementation while keeping `MonitorSnapshot` and
+  `state.sqlite3` authoritative.
+- Show the selected day separately from its cycles and derive the available cycle
+  buttons from the persisted/presentation cycles instead of assuming fixed
+  00Z/06Z/12Z/18Z schedules.
+- Add previous/next date and previous/next cycle controls, with compact cycle
+  slots that follow the currently selected part of a longer campaign.
+- Make the campaign view operational: group cycles by date, summarize task state
+  per day and let a selected campaign row jump back to Monitor at that date.
+- Restore task filtering with `/`; matching can use the internal task name,
+  compact display label or current task state without changing workflow state.
+- Restore a direct Logs action in the Inspector whenever attempt logs are
+  available, including a count of available log streams.
+- Add explicit log follow/pause behavior so live output can be frozen while it is
+  inspected and resumed without leaving the Logs view.
+- Add a problem count to the Problems tab while preserving direct navigation from
+  a problem to the most useful available error log.
+- Keep non-cycle/global tasks in the explicit `Workflow` section and shorten
+  unrolled task labels by removing only the already-known cycle identifier from
+  presentation text.
+- Preserve all 0.5.0 execution boundaries: no engine changes, no state-schema
+  changes, no daemon/server, no workflow mutation from the TUI and no change to
+  plain/PBS/CI output.
+
 ## 0.5.0
 
 simpleWorkflow 0.5.0 combines the persistent 0.4 state model with the
