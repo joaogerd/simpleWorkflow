@@ -50,7 +50,7 @@ def test_inspector_shows_daily_process_matrix_below_task_details(tmp_path: Path)
     )
 
     async def scenario() -> None:
-        async with app.run_test(size=(140, 42)) as pilot:
+        async with app.run_test(size=(140, 40)) as pilot:
             await pilot.pause()
 
             right = app.query_one("#right")
