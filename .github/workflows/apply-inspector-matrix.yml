@@ -1,0 +1,87 @@
+name: Apply inspector period matrix
+
+on:
+  push:
+    branches:
+      - implementation/tui-0.5.1
+    paths:
+      - .github/workflows/apply-inspector-matrix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: implementation/tui-0.5.1
+      - name: Restore operational process matrix below inspector
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("simpleworkflow/tui.py")
+          text = path.read_text(encoding="utf-8")
+
+          replacements = [
+              (
+                  '_CYCLE_SLOT_COUNT = 5\n',
+                  '_CYCLE_SLOT_COUNT = 5\n_PROCESS_ORDER = ("OBS", "JEDI", "MPAS")\n',
+              ),
+              (
+                  '    #inspector { height: 1fr; padding: 1 2; }\n'
+                  '    #open-logs {\n',
+                  '    #inspector { height: 1fr; min-height: 8; padding: 1 2; }\n'
+                  '    #period-title {\n'
+                  '        height: 2; padding: 0 1; border-top: solid #303744;\n'
+                  '        color: #9fb9ff; text-style: bold; content-align: left middle;\n'
+                  '    }\n'
+                  '    #period-matrix { height: 9; min-height: 5; margin: 0; }\n'
+                  '    #open-logs {\n',
+              ),
+              (
+                  '                        yield Static(id="inspector")\n'
+                  '                        yield Button("Logs", id="open-logs")\n',
+                  '                        yield Static(id="inspector")\n'
+                  '                        yield Button("Logs", id="open-logs")\n'
+                  '                        yield Label("", id="period-title")\n'
+                  '                        yield DataTable(\n'
+                  '                            id="period-matrix",\n'
+                  '                            cursor_type="cell",\n'
+                  '                            zebra_stripes=False,\n'
+                  '                        )\n',
+              ),
+              (
+                  '        self._refresh_problems()\n'
+                  '        self._refresh_inspector()\n'
+                  '        self._refresh_follow_button()\n',
+                  '        self._refresh_problems()\n'
+                  '        self._refresh_inspector()\n'
+                  '        self._refresh_period_matrix()\n'
+                  '        self._refresh_follow_button()\n',
+              ),
+          ]
+
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f"patch anchor not found:\n{old}")
+              text = text.replace(old, new, 1)
+
+          aggregate_anchor = '''    def _refresh_campaign(self) -> None:\n'''
+          method = '''    def _refresh_period_matrix(self) -> None:\n        title = self.query_one("#period-title", Label)\n        table = self.query_one("#period-matrix", DataTable)\n        table.clear(columns=True)\n\n        selected_date = self._selected_date()\n        if selected_date is None:\n            title.update("PERÍODO / CICLAGEM")\n            table.add_column("Process")\n            return\n\n        cycles = self._cycles_for_date(selected_date)\n        title.update(f"PERÍODO / CICLAGEM · {selected_date.strftime('%d/%m/%Y')}")\n        table.add_columns(\n            "Process",\n            *(_format_cycle_hour(cycle.cycle_time) for cycle in cycles),\n        )\n\n        discovered: list[str] = []\n        statuses_by_cycle: list[dict[str, list[str]]] = []\n        for cycle in cycles:\n            by_process: dict[str, list[str]] = {}\n            for task in cycle.tasks:\n                process_step = _task_process_step(task.name, cycle)\n                process = process_step[0] if process_step is not None else "Workflow"\n                by_process.setdefault(process, []).append(task.status)\n                if process not in discovered:\n                    discovered.append(process)\n            statuses_by_cycle.append(by_process)\n\n        processes = [process for process in _PROCESS_ORDER if process in discovered]\n        processes.extend(\n            process for process in discovered if process not in _PROCESS_ORDER\n        )\n\n        for process in processes:\n            row: list[str] = [process]\n            for by_process in statuses_by_cycle:\n                statuses = by_process.get(process, [])\n                row.append(\n                    _status_markup(\n                        self._aggregate_status(statuses),\n                        color=self.color_enabled,\n                    )\n                    if statuses\n                    else "—"\n                )\n            table.add_row(*row, key=process)\n\n        if not processes:\n            table.add_row("Workflow", *("—" for _ in cycles), key="Workflow")\n\n'''
+          if aggregate_anchor not in text:
+              raise SystemExit("period-matrix insertion anchor not found")
+          text = text.replace(aggregate_anchor, method + aggregate_anchor, 1)
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+          rm .github/workflows/apply-inspector-matrix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add simpleworkflow/tui.py .github/workflows/apply-inspector-matrix.yml
+          git commit -m "feat(tui): restore process matrix below inspector"
+          git push origin HEAD:implementation/tui-0.5.1
