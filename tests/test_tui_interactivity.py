@@ -199,7 +199,7 @@ def test_workflow_tree_shows_only_selected_cycle_plus_global_tasks(tmp_path: Pat
             assert app.selected_cycle_id == "2018041500"
             assert app.selected_task == "global_setup"
             assert "15/04/2018" in str(app.query_one("#date-label").render())
-            assert "global_setup" in str(app.query_one("#inspector").render())
+            assert "global_setup" in app.query_one("#inspector").primary_text
 
     asyncio.run(scenario())
 
