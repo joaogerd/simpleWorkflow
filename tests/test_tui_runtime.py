@@ -103,11 +103,11 @@ def test_inspector_shows_pbs_job_command_and_timing(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with app.run_test(size=(140, 45)) as pilot:
             await pilot.pause()
-            text = str(app.query_one("#inspector").render())
-            assert "381922.pbs-ha" in text
-            assert "jedi analysis.yaml" in text
-            assert "/case/work" in text
-            assert "2018-04-15T06:01:04Z" in text
+            inspector = app.query_one("#inspector")
+            assert "381922.pbs-ha" in inspector.primary_text
+            assert "jedi analysis.yaml" in inspector.detail_values["command"]
+            assert inspector.detail_values["working directory"] == "/case/work"
+            assert inspector.detail_values["started"] == "2018-04-15T06:01:04Z"
 
     asyncio.run(scenario())
 
