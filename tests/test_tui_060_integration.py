@@ -255,3 +255,31 @@ def test_local_attempt_logs_view_does_not_offer_pbs_streams(tmp_path: Path) -> N
             assert "pbs_stderr" not in keys
 
     asyncio.run(scenario())
+
+
+def test_log_manifest_path_becomes_openable_resource(tmp_path: Path) -> None:
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text('{"accepted": true}\n', encoding="utf-8")
+    app = _make_app(
+        tmp_path,
+        stdout_text=f"[OK] validation manifest accepted: {manifest}\n",
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 35)) as pilot:
+            await pilot.pause()
+            await pilot.press("5")
+            await pilot.pause()
+
+            viewer = app.query_one("#log-viewer", TextFileViewer)
+            assert [resource.path for resource in viewer.related_resources] == [manifest]
+            assert viewer.select_related(manifest)
+            related = app.query_one("#viewer-related", DataTable)
+            related.focus()
+            related.action_select_cursor()
+            await pilot.pause()
+
+            opened = app.screen.query_one("#context-viewer", TextFileViewer)
+            assert '"accepted": true' in opened.text
+
+    asyncio.run(scenario())
