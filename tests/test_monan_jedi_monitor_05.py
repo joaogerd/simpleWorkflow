@@ -5,7 +5,6 @@ from typing import Any
 
 from simpleworkflow.monitor import load_monitor_snapshot
 
-
 _CYCLES = {
     "00": "2018-04-15T00:00:00Z",
     "06": "2018-04-15T06:00:00Z",
