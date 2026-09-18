@@ -256,8 +256,9 @@ def test_representative_terminal_sizes_keep_monitor_reachable(tmp_path: Path) ->
             if size[0] < 86:
                 assert body.has_class("narrow")
                 assert "↑↓ task" not in shortcut
-                tree.focus()
+                app.set_focus(tree)
                 await pilot.pause()
+                assert tree.has_focus
                 await pilot.press("enter")
                 await pilot.pause()
                 inspector = app.query_one("#inspector")
