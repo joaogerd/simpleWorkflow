@@ -262,6 +262,7 @@ def test_log_manifest_path_becomes_openable_resource(tmp_path: Path) -> None:
     manifest.write_text('{"accepted": true}\n', encoding="utf-8")
     app = _make_app(
         tmp_path,
+        executor="local",
         stdout_text=f"[OK] validation manifest accepted: {manifest}\n",
     )
 
