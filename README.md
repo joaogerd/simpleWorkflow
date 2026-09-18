@@ -105,17 +105,29 @@ swf monitor workflow.yaml
 ```
 
 The monitor reconstructs Monitor, Ciclos, Campanha, Problemas, Logs, the
-Inspector and the cycle timeline from `state.sqlite3` plus optional attempt files.
-In 0.5.1 the operational views are directly navigable: dates and cycles are
-clickable, `/` filters the workflow tree, campaign rows jump to that day,
-`Logs (N)` in the Inspector opens persisted output, `f` pauses/resumes live log
-following, and the Problemas tab shows a count when attention is required.
+Inspector and the cycle timeline from `state.sqlite3` plus immutable attempt
+files. In 0.6.0 the Inspector is attempt-aware and exposes structured resources
+such as launcher stdout/stderr, PBS stdout/stderr, scheduler metadata, PBS job
+scripts and recorded input/output files. Selecting a resource opens the same
+internal read-only viewer used by the Logs view, with search, copy, reload and
+follow/pause support.
+
+Ciclos is a process-by-cycle operational matrix built from the campaign's actual
+cycle timestamps, not a fixed 00/06/12/18 schedule. Problemas takes the shortest
+available path to failure evidence, preferring PBS stderr, then stderr, PBS
+stdout and stdout; when no stream exists it returns to the Inspector with the
+persisted reason. Existing files referenced explicitly in visible logs can be
+opened conservatively without turning the TUI into a directory browser.
+
+Dates and cycles remain clickable, `/` filters the workflow tree, campaign rows
+jump to that day, attempt arrows move through persisted retries, and narrow
+terminals switch between workflow and Inspector instead of squeezing both panes.
 
 Closing the monitor with `q` does not cancel execution. If the TUI opened by
 `swf run` is closed before the workflow finishes, the workflow continues and the
-command waits for its final result. Reopening the monitor reconstructs the
-current view from persisted state; it does not depend on events observed while
-the TUI was open.
+command waits for its final result. Reopening the monitor reconstructs workflow
+state, attempt history and resources from persisted data; it does not depend on
+events observed while the TUI was open.
 
 For details, including unrolled scientific campaigns and narrow terminals, see
 [Interactive workflow monitor](docs/interactive-monitor.md).
