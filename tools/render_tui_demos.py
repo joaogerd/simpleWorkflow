@@ -187,12 +187,14 @@ async def _capture(
     view: str = "monitor",
     error_log: bool = False,
     size: tuple[int, int] = (140, 42),
+    color: bool = True,
 ) -> None:
     app = WorkflowTui(
         config=config,
         workflow_path=workflow,
         workdir=workdir,
         refresh_seconds=60,
+        color=color,
     )
     async with app.run_test(size=size) as pilot:
         await pilot.pause()
@@ -205,26 +207,94 @@ async def _capture(
 
 async def _render(output: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
-    for scenario in ("starting", "running", "partial", "failure", "completed"):
-        config, workflow, workdir = _simple_scenario(output, scenario)
-        await _capture(
-            config,
-            workflow,
-            workdir,
-            output / f"scenario-{scenario}.svg",
-        )
+
+    partial, partial_workflow, partial_workdir = _simple_scenario(output, "partial")
+    await _capture(
+        partial,
+        partial_workflow,
+        partial_workdir,
+        output / "monitor-wide.svg",
+        size=(140, 42),
+    )
+    await _capture(
+        partial,
+        partial_workflow,
+        partial_workdir,
+        output / "monitor-narrow.svg",
+        size=(72, 26),
+    )
+
+    completed, completed_workflow, completed_workdir = _simple_scenario(
+        output, "completed"
+    )
+    await _capture(
+        completed,
+        completed_workflow,
+        completed_workdir,
+        output / "workflow-completed.svg",
+    )
+
+    failed, failed_workflow, failed_workdir = _simple_scenario(output, "failure")
+    await _capture(
+        failed,
+        failed_workflow,
+        failed_workdir,
+        output / "workflow-failed.svg",
+    )
 
     config, workflow, workdir = _unrolled_scenario(output)
-    await _capture(config, workflow, workdir, output / "scenario-unrolled.svg")
-    for view in ("monitor", "cycles", "campaign", "problems", "logs"):
-        await _capture(
-            config,
-            workflow,
-            workdir,
-            output / f"unrolled-{view}.svg",
-            view=view,
-            error_log=view == "logs",
-        )
+    await _capture(
+        config,
+        workflow,
+        workdir,
+        output / "inspector-resources.svg",
+        view="monitor",
+    )
+    await _capture(
+        config,
+        workflow,
+        workdir,
+        output / "logs-viewer.svg",
+        view="logs",
+        error_log=True,
+    )
+    await _capture(
+        config,
+        workflow,
+        workdir,
+        output / "problems-failure.svg",
+        view="problems",
+    )
+    await _capture(
+        config,
+        workflow,
+        workdir,
+        output / "cycles-matrix.svg",
+        view="cycles",
+    )
+    await _capture(
+        config,
+        workflow,
+        workdir,
+        output / "campaign.svg",
+        view="campaign",
+    )
+    await _capture(
+        config,
+        workflow,
+        workdir,
+        output / "monan-jedi-unrolled.svg",
+        view="monitor",
+        size=(120, 36),
+    )
+    await _capture(
+        config,
+        workflow,
+        workdir,
+        output / "no-color.svg",
+        view="monitor",
+        color=False,
+    )
 
 
 def main() -> int:
