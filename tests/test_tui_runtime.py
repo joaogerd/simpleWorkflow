@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from pathlib import Path
 
 from simpleworkflow.runs import RunRecorder
@@ -164,3 +165,39 @@ def test_missing_attempt_logs_do_not_break_monitor(tmp_path: Path) -> None:
             assert "No file selected" in viewer.status_message
 
     asyncio.run(scenario())
+
+
+def test_same_process_tui_tolerates_state_database_initialization_window(
+    tmp_path: Path,
+) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text(
+        "workflow: {name: initializing_state}\n"
+        "tasks:\n"
+        "  - name: analysis\n"
+        "    argv: ['true']\n",
+        encoding="utf-8",
+    )
+    workdir = tmp_path / ".simpleworkflow"
+    workdir.mkdir()
+    connection = sqlite3.connect(workdir / "state.sqlite3")
+    connection.close()
+    completion: Future[int] = Future()
+
+    app = WorkflowTui(
+        config={
+            "workflow": {"name": "initializing_state"},
+            "tasks": [{"name": "analysis", "argv": ["true"]}],
+            "__simpleworkflow__": {
+                "source_path": str(workflow),
+                "source_dir": str(workflow.parent),
+            },
+        },
+        workflow_path=workflow,
+        workdir=workdir,
+        refresh_seconds=60,
+        completion_future=completion,
+    )
+
+    assert app.snapshot.instance_id is None
+    assert [task.status for task in app.snapshot.tasks] == ["pending"]
