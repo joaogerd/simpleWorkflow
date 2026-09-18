@@ -407,23 +407,39 @@ def _run_plain(
 
 
 def _run_interactive(config: dict[str, Any], args: argparse.Namespace) -> int:
-    """Run the engine in a worker while Textual reads the same persisted state."""
+    """Keep task execution on the main thread while Textual observes in a worker."""
     workflow_path = Path(
         config.get("__simpleworkflow__", {}).get("source_path", args.workflow)
     ).resolve(strict=False)
     workdir = _resolve_workdir(config, args.workdir)
-    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="simpleworkflow-engine") as pool:
-        future = pool.submit(_run_plain, config, args, _QuietTerminalReporter())
-        _launch_monitor(
+    completion: Future[int] = Future()
+
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="simpleworkflow-monitor") as pool:
+        monitor_future = pool.submit(
+            _launch_monitor,
             config,
             workflow_path,
             workdir,
             refresh_seconds=1.0,
             color=_tui_color_enabled(args.color),
-            completion_future=future,
+            completion_future=completion,
         )
-        # Closing the TUI with q is observation-only; execution continues.
-        return future.result()
+        try:
+            result = _run_plain(config, args, _QuietTerminalReporter())
+        except BaseException as error:
+            if not completion.done():
+                completion.set_exception(error)
+            # The TUI checks completion every 0.2 s and exits without consuming
+            # the result. Waiting here prevents an orphan terminal thread.
+            monitor_future.result()
+            raise
+        else:
+            if not completion.done():
+                completion.set_result(result)
+            # q may have closed the monitor earlier; either way execution owns
+            # the command lifetime and completes on the signal-capable main thread.
+            monitor_future.result()
+            return result
 
 
 def _main(argv: list[str] | None = None) -> int:
