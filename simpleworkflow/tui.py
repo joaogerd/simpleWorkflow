@@ -298,12 +298,12 @@ class WorkflowTui(App[None]):
         border: none; background: #171a21; color: #d7dae0;
     }
     #task-tree { height: 1fr; padding: 0 1; }
-    #inspector { height: auto; max-height: 16; }
+    #inspector { height: auto; max-height: 14; }
     #period-title {
         height: 2; padding: 0 1; border-top: solid #303744;
         color: #9fb9ff; text-style: bold; content-align: left middle;
     }
-    #period-matrix { height: 9; min-height: 5; margin: 0; }
+    #period-matrix { height: 1fr; min-height: 5; margin: 0; }
     #cycles-table, #problems-table, #campaign-table { height: 1fr; margin: 1 0; }
     #campaign-view { height: 1fr; }
     #campaign-summary { height: auto; max-height: 7; padding: 1 2 0 2; }
@@ -380,6 +380,7 @@ class WorkflowTui(App[None]):
         self.task_filter = ""
         self.cycle_slots: dict[str, str] = {}
         self.cycle_matrix_columns: list[str] = []
+        self.cycle_matrix_cells: dict[tuple[int, int], str] = {}
         self.task_nodes: dict[tuple[str | None, str], Any] = {}
         self._tree_signature: tuple[Any, ...] | None = None
         self._choose_initial_selection()
@@ -460,10 +461,20 @@ class WorkflowTui(App[None]):
     def _apply_responsive_layout(self) -> None:
         try:
             body = self.query_one("#monitor-main")
+            shortcut = self.query_one("#shortcut-line", Static)
         except Exception:
             return
-        body.set_class(self.size.width < 86, "narrow")
-        if self.size.width >= 86:
+        narrow = self.size.width < 86
+        body.set_class(narrow, "narrow")
+        shortcut.update(
+            "? help   Enter inspect   Tab view   q quit"
+            if narrow
+            else (
+                "↑↓ task   ←→ cycle   / filter   Enter inspect   Tab view   l logs   "
+                "f follow   r refresh   ? help   q quit"
+            )
+        )
+        if not narrow:
             body.remove_class("inspecting")
 
     def _configure_tables(self) -> None:
@@ -822,16 +833,12 @@ class WorkflowTui(App[None]):
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
         if event.data_table.id != "cycles-table":
             return
-        column = event.coordinate.column
-        if column <= 0:
-            return
-        cycle_index = column - 1
-        if cycle_index >= len(self.cycle_matrix_columns):
-            return
-        self._select_cycle(
-            self.cycle_matrix_columns[cycle_index],
-            switch_to_monitor=True,
+        cycle_id = self.cycle_matrix_cells.get(
+            (event.coordinate.row, event.coordinate.column)
         )
+        if cycle_id is None:
+            return
+        self._select_cycle(cycle_id, switch_to_monitor=True)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table.id == "campaign-table":
@@ -1085,6 +1092,7 @@ class WorkflowTui(App[None]):
         self.cycle_matrix_columns = [
             cycle.cycle_id for cycle in self.snapshot.cycles
         ]
+        self.cycle_matrix_cells.clear()
         table.add_columns(
             "Process",
             *(_format_cycle_time(cycle.cycle_time) for cycle in self.snapshot.cycles),
@@ -1109,18 +1117,22 @@ class WorkflowTui(App[None]):
         if not processes and self.snapshot.cycles:
             processes = ["Workflow"]
 
-        for process in processes:
+        for row_index, process in enumerate(processes):
             row: list[str] = [process]
-            for by_process in statuses_by_cycle:
+            for cycle_index, by_process in enumerate(statuses_by_cycle):
                 statuses = by_process.get(process, [])
-                row.append(
-                    _status_markup(
-                        self._aggregate_status(statuses),
-                        color=self.color_enabled,
+                if statuses:
+                    row.append(
+                        _status_markup(
+                            self._aggregate_status(statuses),
+                            color=self.color_enabled,
+                        )
                     )
-                    if statuses
-                    else "—"
-                )
+                    self.cycle_matrix_cells[
+                        (row_index, cycle_index + 1)
+                    ] = self.cycle_matrix_columns[cycle_index]
+                else:
+                    row.append("—")
             table.add_row(*row, key=process)
 
     @staticmethod
