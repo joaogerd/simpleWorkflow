@@ -843,8 +843,33 @@ class WorkflowTui(App[None]):
             self.selected_cycle_id = cycle_id or None
             self.selected_task = task_name
             self.selected_log_key = None
-            self._select_preferred_log(error=True)
-            self.action_open_logs()
+            self._refresh_header()
+            self._refresh_inspector()
+
+            task = self._selected_task_snapshot()
+            attempt = task.attempt if task is not None else None
+            available = self._available_log_resources(task, attempt)
+            error_key = next(
+                (key for key in _LOG_ERROR_ORDER if key in available),
+                None,
+            )
+            if error_key is None:
+                self.query_one("#views", TabbedContent).active = "monitor"
+                self._refresh_inspector()
+                self.action_inspect()
+                return
+
+            resource = available[error_key]
+            cwd, attempt_dir, known_paths = self._viewer_context(task, attempt)
+            self.push_screen(
+                TextViewerScreen(
+                    resource,
+                    refresh_seconds=self.refresh_seconds,
+                    cwd=cwd,
+                    attempt_dir=attempt_dir,
+                    known_paths=known_paths,
+                )
+            )
 
     def action_previous_cycle(self) -> None:
         self._move_cycle(-1)
