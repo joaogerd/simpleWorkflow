@@ -20,12 +20,13 @@ keeps the normal one-second monitor refresh inexpensive on shared HPC storage.
 from __future__ import annotations
 
 import json
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .state import WorkflowState
+from .state import StateSchemaError, WorkflowState
 
 _COMPLETE_STATES = frozenset({"success", "skipped"})
 _ATTENTION_STATES = frozenset(
@@ -440,6 +441,8 @@ def load_monitor_snapshot(
     config: dict[str, Any],
     workflow_path: str | Path,
     workdir: str | Path,
+    *,
+    tolerate_initializing: bool = False,
 ) -> MonitorSnapshot:
     """Build a monitor snapshot from configuration and existing persisted state.
 
@@ -457,7 +460,7 @@ def load_monitor_snapshot(
     }
     state_path = state_dir / "state.sqlite3"
 
-    if not state_path.is_file():
+    def pending_snapshot() -> MonitorSnapshot:
         if config_groups:
             pending_cycles = tuple(
                 CycleSnapshot(
@@ -495,12 +498,29 @@ def load_monitor_snapshot(
             problems=(),
         )
 
-    state = WorkflowState(
-        state_path,
-        workflow_name=workflow_name,
-        source_path=workflow,
-        read_only=True,
-    )
+    if not state_path.is_file():
+        return pending_snapshot()
+
+    try:
+        state = WorkflowState(
+            state_path,
+            workflow_name=workflow_name,
+            source_path=workflow,
+            read_only=True,
+        )
+    except StateSchemaError as error:
+        transient = (
+            "does not contain a schema",
+            "has schema_info but no schema version record",
+            "has no workflow_instance record",
+        )
+        if tolerate_initializing and any(token in str(error) for token in transient):
+            return pending_snapshot()
+        raise
+    except sqlite3.OperationalError as error:
+        if tolerate_initializing and "no such table" in str(error).casefold():
+            return pending_snapshot()
+        raise
     try:
         instance = state.instance
         connection = state.connection
