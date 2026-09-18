@@ -775,6 +775,9 @@ class WorkflowTui(App[None]):
         self._refresh_cycle_line()
         self._refresh_inspector()
         self._refresh_logs(force=True)
+        body = self.query_one("#monitor-main")
+        if body.has_class("narrow"):
+            body.add_class("inspecting")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
