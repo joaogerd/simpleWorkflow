@@ -8,10 +8,11 @@ from pathlib import Path
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Static, TextArea
+from textual.widgets import Button, DataTable, Input, Static, TextArea
 
-from .tui_resources import InspectableResource, is_probably_text
+from .tui_resources import InspectableResource, discover_related_files, is_probably_text
 
 
 @dataclass
@@ -24,10 +25,18 @@ class ViewerState:
     matches: list[tuple[int, int]] = field(default_factory=list)
     current_match: int = -1
     signature: tuple[int, int] | None = None
+    cwd: Path | None = None
+    attempt_dir: Path | None = None
+    known_paths: tuple[Path, ...] = ()
 
 
 class TextFileViewer(Vertical):
     """Searchable, copyable, bounded read-only view of one text resource."""
+
+    class OpenRelatedResource(Message):
+        def __init__(self, resource: InspectableResource) -> None:
+            super().__init__()
+            self.resource = resource
 
     BINDINGS = [
         Binding("slash", "show_search", "Search"),
@@ -79,6 +88,14 @@ class TextFileViewer(Vertical):
         padding: 0 1;
         background: #171a21;
     }
+    #viewer-related {
+        display: none;
+        height: auto;
+        max-height: 5;
+        min-height: 0;
+        margin: 0;
+        border-bottom: solid #252b35;
+    }
     #viewer-text {
         height: 1fr;
         border: none;
@@ -105,6 +122,8 @@ class TextFileViewer(Vertical):
         self.state = ViewerState()
         self._text = ""
         self.status_message = ""
+        self.related_resources: tuple[InspectableResource, ...] = ()
+        self._related_paths: list[Path] = []
 
     @property
     def text(self) -> str:
@@ -121,22 +140,48 @@ class TextFileViewer(Vertical):
             yield Button("Reload", id="viewer-reload")
             yield Button("FOLLOW ●", id="viewer-follow")
         yield Input(placeholder="Search…", id="viewer-search")
+        yield DataTable(
+            id="viewer-related",
+            cursor_type="row",
+            zebra_stripes=False,
+        )
         yield TextArea("", read_only=True, soft_wrap=False, id="viewer-text")
         yield Static("", id="viewer-status")
 
     def on_mount(self) -> None:
+        related = self.query_one("#viewer-related", DataTable)
+        related.add_columns("Related file", "Origin")
         self.set_interval(self.refresh_seconds, self.reload)
         self._refresh_controls()
+        self._refresh_related()
 
-    def open_resource(self, resource: InspectableResource | None) -> None:
+    def open_resource(
+        self,
+        resource: InspectableResource | None,
+        *,
+        cwd: str | Path | None = None,
+        attempt_dir: str | Path | None = None,
+        known_paths: tuple[Path, ...] = (),
+    ) -> None:
+        resolved_cwd = Path(cwd).resolve(strict=False) if cwd is not None else None
+        resolved_attempt = (
+            Path(attempt_dir).resolve(strict=False)
+            if attempt_dir is not None
+            else (resource.path.parent if resource is not None else None)
+        )
         self.state = ViewerState(
             resource=resource,
             follow=bool(resource and resource.follow),
+            cwd=resolved_cwd,
+            attempt_dir=resolved_attempt,
+            known_paths=tuple(Path(path).resolve(strict=False) for path in known_paths),
         )
         self._text = ""
         self.status_message = ""
         self._load_into_widget("")
+        self.related_resources = ()
         self._refresh_controls()
+        self._refresh_related()
         self.reload(force=True)
 
     def _load_into_widget(self, text: str) -> None:
@@ -146,6 +191,57 @@ class TextFileViewer(Vertical):
         except Exception:
             # The method can be called before mount by embedding components.
             return
+
+    def _refresh_related(self) -> None:
+        try:
+            table = self.query_one("#viewer-related", DataTable)
+        except Exception:
+            return
+        resource = self.state.resource
+        if (
+            resource is None
+            or self.state.attempt_dir is None
+            or not self._text
+        ):
+            self.related_resources = ()
+        else:
+            known = self.state.known_paths
+            if resource.path not in known:
+                known = (*known, resource.path)
+            self.related_resources = discover_related_files(
+                self._text,
+                cwd=self.state.cwd,
+                attempt_dir=self.state.attempt_dir,
+                known_paths=known,
+            )
+        table.clear(columns=False)
+        self._related_paths = []
+        for related in self.related_resources:
+            self._related_paths.append(related.path)
+            table.add_row(
+                related.label,
+                related.origin,
+                key=str(related.path),
+            )
+        table.display = bool(self.related_resources)
+
+    def select_related(self, path: str | Path) -> bool:
+        target = Path(path).resolve(strict=False)
+        if target not in self._related_paths:
+            return False
+        table = self.query_one("#viewer-related", DataTable)
+        table.move_cursor(row=self._related_paths.index(target))
+        return True
+
+    def _selected_related(self) -> InspectableResource | None:
+        try:
+            table = self.query_one("#viewer-related", DataTable)
+        except Exception:
+            return None
+        row = table.cursor_row
+        if row < 0 or row >= len(self.related_resources):
+            return None
+        return self.related_resources[row]
 
     def _set_status(self, message: str) -> None:
         self.status_message = message
@@ -198,6 +294,7 @@ class TextFileViewer(Vertical):
         except OSError:
             self.state.signature = None
             self._load_into_widget("")
+            self._refresh_related()
             self._set_status(f"File no longer available: {path}")
             return
         if not path.is_file():
@@ -211,6 +308,7 @@ class TextFileViewer(Vertical):
         self.state.signature = signature
         if not is_probably_text(path):
             self._load_into_widget("")
+            self._refresh_related()
             self._set_status(
                 "Binary or unsupported text encoding; path can still be copied."
             )
@@ -219,9 +317,11 @@ class TextFileViewer(Vertical):
             text, truncated = self._read_bounded(path, tail=self.state.follow)
         except OSError:
             self._load_into_widget("")
+            self._refresh_related()
             self._set_status(f"Unable to read: {path}")
             return
         self._load_into_widget(text)
+        self._refresh_related()
         if self.state.query:
             self.search(self.state.query)
         location = "tail" if self.state.follow else "start"
@@ -363,6 +463,13 @@ class TextFileViewer(Vertical):
         event.input.display = False
         self.query_one("#viewer-text", TextArea).focus()
 
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.data_table.id != "viewer-related":
+            return
+        resource = self._selected_related()
+        if resource is not None and resource.available:
+            self.post_message(self.OpenRelatedResource(resource))
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
         if button_id == "viewer-copy-path":
@@ -396,10 +503,16 @@ class TextViewerScreen(ModalScreen[None]):
         resource: InspectableResource,
         *,
         refresh_seconds: float = 1.0,
+        cwd: str | Path | None = None,
+        attempt_dir: str | Path | None = None,
+        known_paths: tuple[Path, ...] = (),
     ) -> None:
         super().__init__()
         self.resource = resource
         self.refresh_seconds = refresh_seconds
+        self.cwd = cwd
+        self.attempt_dir = attempt_dir
+        self.known_paths = known_paths
 
     def compose(self) -> ComposeResult:
         yield TextFileViewer(
@@ -408,7 +521,20 @@ class TextViewerScreen(ModalScreen[None]):
         )
 
     def on_mount(self) -> None:
-        self.query_one(TextFileViewer).open_resource(self.resource)
+        self.query_one(TextFileViewer).open_resource(
+            self.resource,
+            cwd=self.cwd,
+            attempt_dir=self.attempt_dir,
+            known_paths=self.known_paths,
+        )
+        self.query_one("#viewer-text", TextArea).focus()
+
+    def on_text_file_viewer_open_related_resource(
+        self,
+        event: TextFileViewer.OpenRelatedResource,
+    ) -> None:
+        event.stop()
+        self.query_one(TextFileViewer).open_resource(event.resource)
         self.query_one("#viewer-text", TextArea).focus()
 
     def action_close_viewer(self) -> None:
