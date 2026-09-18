@@ -19,7 +19,6 @@ from textual.widgets import (
     DataTable,
     Input,
     Label,
-    RichLog,
     Static,
     Tab,
     TabbedContent,
@@ -35,6 +34,8 @@ from .monitor import (
     load_monitor_snapshot,
 )
 from .tui_inspector import TaskInspector
+from .tui_resources import InspectableResource, discover_attempt_resources
+from .tui_viewer import TextFileViewer, TextViewerScreen
 
 _STATUS = {
     "pending": ("○", "PENDING", "dim"),
@@ -384,13 +385,10 @@ class WorkflowTui(App[None]):
         self.selected_cycle_id: str | None = None
         self.selected_task: str | None = None
         self.selected_log_key: str | None = None
-        self.current_log_text = ""
         self.task_filter = ""
-        self.follow_logs = True
         self.cycle_slots: dict[str, str] = {}
         self.task_nodes: dict[tuple[str | None, str], Any] = {}
         self._tree_signature: tuple[Any, ...] | None = None
-        self._last_log_signature: tuple[str, int, int] | None = None
         self._choose_initial_selection()
 
     def _load_snapshot(self) -> MonitorSnapshot:
@@ -440,12 +438,9 @@ class WorkflowTui(App[None]):
                     for button_id, key in _LOG_BUTTONS.items():
                         yield Button(_LOG_LABELS[key], id=button_id, classes="log-button")
                     yield Button("FOLLOW ●", id="log-follow")
-                yield RichLog(
-                    id="full-log",
-                    highlight=False,
-                    markup=False,
-                    wrap=False,
-                    max_lines=1500,
+                yield TextFileViewer(
+                    refresh_seconds=self.refresh_seconds,
+                    id="log-viewer",
                 )
         yield Static(
             "↑↓ task   ←→ cycle   / filter   Enter inspect   Tab view   l logs   "
@@ -580,7 +575,6 @@ class WorkflowTui(App[None]):
         self.selected_cycle_id = cycle.cycle_id
         self.selected_task = self._preferred_task(cycle.tasks)
         self.selected_log_key = None
-        self._last_log_signature = None
         self._tree_signature = None
         if switch_to_monitor:
             self.query_one("#views", TabbedContent).active = "monitor"
@@ -772,7 +766,6 @@ class WorkflowTui(App[None]):
             self.selected_cycle_id = str(cycle_id)
         self.selected_task = str(task_name)
         self.selected_log_key = None
-        self._last_log_signature = None
         self._refresh_header()
         self._refresh_date_nav()
         self._refresh_cycle_line()
@@ -817,7 +810,6 @@ class WorkflowTui(App[None]):
         if attempt is None or key not in attempt.available_logs:
             return
         self.selected_log_key = key
-        self._last_log_signature = None
         self._refresh_logs(force=True)
 
     def on_input_changed(self, event: Input.Changed) -> None:
@@ -937,17 +929,14 @@ class WorkflowTui(App[None]):
         if attempt is None:
             self.selected_log_key = None
             return
-        available = attempt.available_logs
+        available = self._available_log_resources(task, attempt)
         order = _LOG_ERROR_ORDER if error else _LOG_ORDER
         self.selected_log_key = next((key for key in order if key in available), None)
-        self._last_log_signature = None
 
     def action_toggle_follow(self) -> None:
-        self.follow_logs = not self.follow_logs
+        viewer = self.query_one("#log-viewer", TextFileViewer)
+        viewer.set_follow(not viewer.state.follow)
         self._refresh_follow_button()
-        if self.follow_logs:
-            self._last_log_signature = None
-            self._refresh_logs(force=True)
 
     def action_refresh_now(self) -> None:
         self.refresh_runtime(force=True)
@@ -1238,8 +1227,51 @@ class WorkflowTui(App[None]):
             config_task if isinstance(config_task, dict) else {},
         )
 
+    def _selected_attempt(self) -> AttemptSnapshot | None:
+        task = self._selected_task_snapshot()
+        if task is None:
+            return None
+        try:
+            inspector = self.query_one("#inspector", TaskInspector)
+        except Exception:
+            inspector = None
+        if (
+            inspector is not None
+            and inspector.task_snapshot is not None
+            and inspector.task_snapshot.name == task.name
+            and inspector.task_snapshot.cycle_id == task.cycle_id
+        ):
+            return inspector.selected_attempt
+        return task.attempt
+
+    def _resources_for_attempt(
+        self,
+        task: TaskSnapshot,
+        attempt: AttemptSnapshot,
+    ) -> tuple[InspectableResource, ...]:
+        config_task = self.task_map.get(task.name, {})
+        return discover_attempt_resources(
+            task,
+            attempt,
+            config_task if isinstance(config_task, dict) else {},
+        )
+
+    def _available_log_resources(
+        self,
+        task: TaskSnapshot | None,
+        attempt: AttemptSnapshot | None,
+    ) -> dict[str, InspectableResource]:
+        if task is None or attempt is None:
+            return {}
+        return {
+            resource.key: resource
+            for resource in self._resources_for_attempt(task, attempt)
+            if resource.key in _LOG_ORDER and resource.available
+        }
+
     def _refresh_log_buttons(self, attempt: AttemptSnapshot | None) -> None:
-        available = attempt.available_logs if attempt is not None else {}
+        task = self._selected_task_snapshot()
+        available = self._available_log_resources(task, attempt)
         for button_id, key in _LOG_BUTTONS.items():
             button = self.query_one(f"#{button_id}", Button)
             button.display = key in available
@@ -1247,64 +1279,77 @@ class WorkflowTui(App[None]):
 
     def _refresh_follow_button(self) -> None:
         button = self.query_one("#log-follow", Button)
-        button.label = "FOLLOW ●" if self.follow_logs else "FOLLOW ‖"
-        button.set_class(self.follow_logs, "following")
+        try:
+            viewer = self.query_one("#log-viewer", TextFileViewer)
+        except Exception:
+            button.label = "FOLLOW ●"
+            button.set_class(True, "following")
+            return
+        following = viewer.state.follow
+        button.label = "FOLLOW ●" if following else "FOLLOW ‖"
+        button.set_class(following, "following")
+
+    def _select_log_resource(self, key: str | None, *, force: bool = True) -> None:
+        task = self._selected_task_snapshot()
+        attempt = self._selected_attempt()
+        available = self._available_log_resources(task, attempt)
+        viewer = self.query_one("#log-viewer", TextFileViewer)
+        resource = available.get(key or "")
+        if resource is None:
+            viewer.open_resource(None)
+            self.selected_log_key = None
+            self._refresh_log_buttons(attempt)
+            self._refresh_follow_button()
+            return
+        self.selected_log_key = resource.key
+        if (
+            viewer.state.resource is None
+            or viewer.state.resource.path != resource.path
+            or viewer.state.resource.key != resource.key
+        ):
+            viewer.open_resource(resource)
+        elif force:
+            viewer.reload(force=True)
+        self._refresh_log_buttons(attempt)
+        self._refresh_follow_button()
 
     def _refresh_logs(self, *, force: bool = False) -> None:
         title = self.query_one("#log-title", Static)
-        log = self.query_one("#full-log", RichLog)
         task = self._selected_task_snapshot()
-        attempt = task.attempt if task is not None else None
-        self._refresh_log_buttons(attempt)
+        attempt = self._selected_attempt()
+        available = self._available_log_resources(task, attempt)
         title.update(f"[bold]{escape(self.selected_task or 'No task selected')}[/bold]")
 
-        if attempt is None:
-            self.current_log_text = "No runtime log is available for this task yet."
-            if force:
-                log.clear()
-                log.write(self.current_log_text)
-            return
-
-        available = attempt.available_logs
         if self.selected_log_key not in available:
             self.selected_log_key = next(
                 (key for key in _LOG_ORDER if key in available),
                 None,
             )
-            self._last_log_signature = None
-        self._refresh_log_buttons(attempt)
-        if self.selected_log_key is None:
-            self.current_log_text = (
-                f"Attempt exists at {attempt.directory}, but no log file is available."
+        self._select_log_resource(self.selected_log_key, force=force)
+        if self.selected_log_key is not None:
+            resource = available.get(self.selected_log_key)
+            if resource is not None:
+                title.update(
+                    f"[bold]{escape(self.selected_task or '')}[/bold]  "
+                    f"[dim]{escape(resource.path.name)}[/dim]"
+                )
+
+    def on_task_inspector_open_resource(
+        self,
+        event: TaskInspector.OpenResource,
+    ) -> None:
+        self.push_screen(
+            TextViewerScreen(
+                event.resource,
+                refresh_seconds=self.refresh_seconds,
             )
-            if force:
-                log.clear()
-                log.write(self.current_log_text)
-            return
-
-        if not self.follow_logs and not force:
-            return
-
-        path = available[self.selected_log_key]
-        try:
-            stat = path.stat()
-        except OSError:
-            self.current_log_text = f"Unable to read {path}."
-            if force:
-                log.clear()
-                log.write(self.current_log_text)
-            return
-        signature = (str(path), stat.st_size, stat.st_mtime_ns)
-        if not force and signature == self._last_log_signature:
-            return
-        self._last_log_signature = signature
-        self.current_log_text = _tail(path) or "(empty)"
-        title.update(
-            f"[bold]{escape(self.selected_task or '')}[/bold]  "
-            f"[dim]{escape(path.name)}[/dim]"
         )
-        log.clear()
-        log.write(self.current_log_text)
+
+    def on_task_inspector_copy_value(
+        self,
+        event: TaskInspector.CopyValue,
+    ) -> None:
+        self.copy_to_clipboard(event.value)
 
 
 def run_monitor(
