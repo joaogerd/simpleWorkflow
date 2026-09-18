@@ -178,7 +178,45 @@ def test_cycles_matrix_uses_actual_cycles_not_fixed_synoptic_hours(tmp_path: Pat
 
 
 def test_cycles_matrix_ignores_empty_process_cycle_cells(tmp_path: Path) -> None:
-    app = _app(tmp_path)
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: sparse-matrix\n", encoding="utf-8")
+    config: dict[str, object] = {
+        "workflow": {"name": "sparse-matrix"},
+        "tasks": [
+            {
+                "name": "jedi2018041500_analysis",
+                "argv": ["jedi", "--cycle", "2018-04-15T00:00:00Z"],
+            },
+            {
+                "name": "jedi2018041506_analysis",
+                "argv": ["jedi", "--cycle", "2018-04-15T06:00:00Z"],
+            },
+            {
+                "name": "obs2018041506_prepare",
+                "argv": ["obs", "--cycle", "2018-04-15T06:00:00Z"],
+            },
+        ],
+        "__simpleworkflow__": {
+            "source_path": str(workflow),
+            "source_dir": str(workflow.parent),
+        },
+    }
+    workdir = tmp_path / ".simpleworkflow"
+    state = WorkflowState(
+        workdir / "state.sqlite3",
+        workflow_name="sparse-matrix",
+        source_path=workflow,
+    )
+    state.set_status("jedi2018041500_analysis", "success", 0)
+    state.set_status("jedi2018041506_analysis", "running", None)
+    state.set_status("obs2018041506_prepare", "pending", None)
+    state.close()
+    app = WorkflowTui(
+        config=config,
+        workflow_path=workflow,
+        workdir=workdir,
+        refresh_seconds=60,
+    )
 
     async def scenario() -> None:
         async with app.run_test(size=(140, 40)) as pilot:
@@ -187,9 +225,9 @@ def test_cycles_matrix_ignores_empty_process_cycle_cells(tmp_path: Path) -> None
             await pilot.pause()
 
             table = app.query_one("#cycles-table", DataTable)
-            # MPAS at 12Z has no persisted task state in this fixture.
+            # OBS has no task at 00Z, so that process/cycle intersection is empty.
             table.focus()
-            table.move_cursor(row=2, column=3)
+            table.move_cursor(row=0, column=1)
             before = app.selected_cycle_id
             table.action_select_cursor()
             await pilot.pause()
