@@ -547,7 +547,8 @@ def test_monan_jedi_185_reconstructs_cycles_attempts_and_failures(
             assert app_b.snapshot.total_tasks == 185
             assert app_b.selected_task == running_task
             inspector = app_b.query_one(TaskInspector)
-            assert len(inspector.attempts) == 2
+            assert inspector.task_snapshot is not None
+            assert len(inspector.task_snapshot.attempts) == 2
             assert "99123.pbs-ha" in inspector.primary_text
             resource_keys = {resource.key for resource in inspector.resources}
             assert {"stdout", "stderr", "pbs_stdout", "pbs_stderr", "pbs_script"} <= resource_keys
