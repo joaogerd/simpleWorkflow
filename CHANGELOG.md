@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.6.0
+
+simpleWorkflow 0.6.0 turns the Textual frontend into a read-only operational
+inspection tool for long scientific campaigns while preserving the execution
+and persistence boundaries established in 0.4/0.5.
+
+- Expose immutable attempt history in the monitor read model while keeping the
+  newest attempt available through the existing compatibility property.
+- Replace the monolithic Inspector text block with a compact attempt-aware
+  Inspector containing operational fields, previous/next-attempt navigation,
+  structured resources and collapsible details.
+- Discover and open persisted stdout/stderr, PBS stdout/stderr, scheduler
+  metadata, PBS scripts and structured input/output resources without invoking
+  the scheduler.
+- Add one reusable internal text viewer for Inspector resources and the Logs
+  view, with bounded reads, search, next/previous match, reload, copy, copy-path
+  and follow/pause behavior.
+- Add conservative related-file discovery from visible log text. Only existing
+  regular files referenced by absolute or explicit ./../ paths become
+  inspectable; structured provenance keeps precedence.
+- Shorten failure diagnosis from Problemas: selecting a failed task opens the
+  best available evidence in the order PBS stderr, stderr, PBS stdout, stdout,
+  otherwise returning to the Inspector with the persisted failure reason.
+- Rebuild Ciclos as a process-by-cycle operational matrix using the campaign's
+  actual cycle timestamps rather than assuming fixed synoptic hours. Non-empty
+  cells navigate back to Monitor at that cycle.
+- Keep the daily process matrix below the Inspector and make wide/narrow layouts
+  denser so the task tree, task context and cycling state remain usable on
+  smaller terminals.
+- Validate reconstruction on a 185-task, 13-cycle MONAN-JEDI-shaped persisted
+  campaign, including multiple attempts and PBS provenance, while keeping the
+  TUI strictly inspection-only.
+- Preserve explicit plain mode and core-only installations without importing or
+  requiring Textual/Rich.
+- Preserve the SQLite schema, workflow engine, PBS execution semantics,
+  restart-safety and the five-view contract. This release adds no daemon,
+  server, scheduler controller, rerun, retry or cancel action to the TUI.
+
 ## 0.5.1
 
 simpleWorkflow 0.5.1 refines the professional TUI introduced in 0.5.0 so the
