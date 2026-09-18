@@ -776,7 +776,8 @@ class WorkflowTui(App[None]):
         self._refresh_inspector()
         self._refresh_logs(force=True)
         body = self.query_one("#monitor-main")
-        if body.has_class("narrow"):
+        tree = self.query_one("#task-tree", Tree)
+        if body.has_class("narrow") and tree.has_focus:
             body.add_class("inspecting")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
