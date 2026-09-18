@@ -1248,6 +1248,20 @@ class WorkflowTui(App[None]):
             config_task if isinstance(config_task, dict) else {},
         )
 
+    def _viewer_context(
+        self,
+        task: TaskSnapshot | None,
+        attempt: AttemptSnapshot | None,
+    ) -> tuple[str | None, Path | None, tuple[Path, ...]]:
+        if task is None or attempt is None:
+            return (None, None, ())
+        resources = self._resources_for_attempt(task, attempt)
+        return (
+            attempt.cwd,
+            attempt.directory,
+            tuple(resource.path for resource in resources),
+        )
+
     def _available_log_resources(
         self,
         task: TaskSnapshot | None,
@@ -1299,7 +1313,13 @@ class WorkflowTui(App[None]):
             or viewer.state.resource.path != resource.path
             or viewer.state.resource.key != resource.key
         ):
-            viewer.open_resource(resource)
+            cwd, attempt_dir, known_paths = self._viewer_context(task, attempt)
+            viewer.open_resource(
+                resource,
+                cwd=cwd,
+                attempt_dir=attempt_dir,
+                known_paths=known_paths,
+            )
         elif force:
             viewer.reload(force=True)
         self._refresh_log_buttons(attempt)
@@ -1330,10 +1350,33 @@ class WorkflowTui(App[None]):
         self,
         event: TaskInspector.OpenResource,
     ) -> None:
+        task = self._selected_task_snapshot()
+        attempt = self._selected_attempt()
+        cwd, attempt_dir, known_paths = self._viewer_context(task, attempt)
         self.push_screen(
             TextViewerScreen(
                 event.resource,
                 refresh_seconds=self.refresh_seconds,
+                cwd=cwd,
+                attempt_dir=attempt_dir,
+                known_paths=known_paths,
+            )
+        )
+
+    def on_text_file_viewer_open_related_resource(
+        self,
+        event: TextFileViewer.OpenRelatedResource,
+    ) -> None:
+        task = self._selected_task_snapshot()
+        attempt = self._selected_attempt()
+        cwd, attempt_dir, known_paths = self._viewer_context(task, attempt)
+        self.push_screen(
+            TextViewerScreen(
+                event.resource,
+                refresh_seconds=self.refresh_seconds,
+                cwd=cwd,
+                attempt_dir=attempt_dir,
+                known_paths=known_paths,
             )
         )
 
