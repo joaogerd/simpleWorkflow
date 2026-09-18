@@ -229,3 +229,55 @@ def test_representative_terminal_sizes_keep_all_views_operational(tmp_path: Path
 
     for size in ((140, 45), (100, 32), (72, 26)):
         asyncio.run(scenario(size))
+
+
+def test_representative_terminal_sizes_keep_monitor_reachable(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: MONAN-JEDI M3\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    _persist_campaign(workflow, workdir)
+
+    async def scenario(size: tuple[int, int]) -> None:
+        app = WorkflowTui(
+            config=_config(workflow),
+            workflow_path=workflow,
+            workdir=workdir,
+            refresh_seconds=60.0,
+        )
+        async with app.run_test(size=size) as pilot:
+            await pilot.pause()
+            tree = app.query_one("#task-tree")
+            assert tree.display
+            assert tree.region.height > 0
+            assert app.selected_task == "analysis"
+
+            body = app.query_one("#monitor-main")
+            shortcut = str(app.query_one("#shortcut-line").render())
+            if size[0] < 86:
+                assert body.has_class("narrow")
+                assert "↑↓ task" not in shortcut
+                await pilot.press("enter")
+                await pilot.pause()
+                inspector = app.query_one("#inspector")
+                assert body.has_class("inspecting")
+                assert inspector.display
+                assert inspector.region.height > 0
+                await pilot.press("escape")
+                await pilot.pause()
+                assert not body.has_class("inspecting")
+            else:
+                assert not body.has_class("narrow")
+                matrix = app.query_one("#period-matrix")
+                assert matrix.display
+                assert matrix.region.height > 0
+
+            views = app.query_one("#views")
+            for key, expected in zip(("1", "2", "3", "4", "5"), (
+                "monitor", "cycles", "campaign", "problems", "logs"
+            )):
+                await pilot.press(key)
+                await pilot.pause()
+                assert views.active == expected
+
+    for size in ((140, 45), (100, 32), (80, 24), (72, 26)):
+        asyncio.run(scenario(size))
