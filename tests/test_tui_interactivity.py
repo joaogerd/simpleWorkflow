@@ -7,6 +7,7 @@ from pathlib import Path
 from simpleworkflow.runs import RunRecorder
 from simpleworkflow.state import WorkflowState
 from simpleworkflow.tui import WorkflowTui
+from simpleworkflow.tui_viewer import TextFileViewer
 
 
 def _config(workflow: Path) -> dict[str, object]:
@@ -247,20 +248,21 @@ def test_filter_inspector_logs_and_follow_are_interactive(tmp_path: Path) -> Non
             open_logs.press()
             await pilot.pause()
             assert app.query_one("#views").active == "logs"
-            assert "first line" in app.current_log_text
-            assert app.follow_logs
+            viewer = app.query_one("#log-viewer", TextFileViewer)
+            assert "first line" in viewer.text
+            assert viewer.state.follow
 
             await pilot.click("#log-follow")
             await pilot.pause()
-            assert not app.follow_logs
+            assert not viewer.state.follow
             stdout_path.write_text("first line\nsecond line\n", encoding="utf-8")
             app.refresh_runtime()
-            assert "second line" not in app.current_log_text
+            assert "second line" not in viewer.text
 
             await pilot.press("f")
             await pilot.pause()
-            assert app.follow_logs
-            assert "second line" in app.current_log_text
+            assert viewer.state.follow
+            assert "second line" in viewer.text
 
     asyncio.run(scenario())
 
