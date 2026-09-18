@@ -17,7 +17,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
       - name: Lint package
-        run: python -m ruff check simpleworkflow
+        run: python -m ruff check simpleworkflow tests tools
       - name: Type check execution core
         run: python -m mypy
 
@@ -67,7 +67,7 @@ jobs:
           import importlib.util
           import simpleworkflow
           import simpleworkflow.cli
-          assert simpleworkflow is not None
+          assert simpleworkflow.__version__ == "0.6.0"
           assert importlib.util.find_spec("textual") is None
           assert importlib.util.find_spec("rich") is None
           PY
@@ -89,7 +89,10 @@ jobs:
           /tmp/simpleworkflow-tui/bin/python - <<'PY'
           import rich
           import textual
+          import simpleworkflow
           import simpleworkflow.tui
+          import simpleworkflow.tui_viewer
+          assert simpleworkflow.__version__ == "0.6.0"
           assert rich is not None
           assert textual is not None
           PY
@@ -105,8 +108,11 @@ jobs:
           /tmp/simpleworkflow-tui/bin/python - <<'PY'
           import asyncio
           from pathlib import Path
+          from textual.widgets import DataTable
           from simpleworkflow.config import load_workflow
           from simpleworkflow.tui import WorkflowTui
+          from simpleworkflow.tui_inspector import TaskInspector
+          from simpleworkflow.tui_viewer import TextFileViewer
 
           workflow = Path("/tmp/tui-workflow.yaml")
           config = load_workflow(workflow)
@@ -121,6 +127,16 @@ jobs:
               async with app.run_test(size=(100, 30)) as pilot:
                   await pilot.pause()
                   assert app.query_one("#task-tree") is not None
+                  inspector = app.query_one(TaskInspector)
+                  assert inspector.focus_resource("stdout")
+                  resources = app.query_one("#inspector-resources", DataTable)
+                  resources.focus()
+                  resources.action_select_cursor()
+                  await pilot.pause()
+                  viewer = app.screen.query_one(TextFileViewer)
+                  assert viewer.state.resource is not None
+                  await pilot.press("escape")
+                  await pilot.pause()
                   await pilot.press("q")
 
           asyncio.run(smoke())
