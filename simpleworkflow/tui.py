@@ -379,6 +379,7 @@ class WorkflowTui(App[None]):
         self.selected_log_key: str | None = None
         self.task_filter = ""
         self.cycle_slots: dict[str, str] = {}
+        self.cycle_matrix_columns: list[str] = []
         self.task_nodes: dict[tuple[str | None, str], Any] = {}
         self._tree_signature: tuple[Any, ...] | None = None
         self._choose_initial_selection()
@@ -467,7 +468,7 @@ class WorkflowTui(App[None]):
 
     def _configure_tables(self) -> None:
         cycles = self.query_one("#cycles-table", DataTable)
-        cycles.add_columns("Cycle", "Done", "Running", "Failed", "Pending", "State")
+        cycles.cursor_type = "cell"
         campaign = self.query_one("#campaign-table", DataTable)
         campaign.add_columns("Date", "Cycles", "Done", "Running", "Failed", "Pending", "State")
         problems = self.query_one("#problems-table", DataTable)
@@ -818,12 +819,21 @@ class WorkflowTui(App[None]):
         event.input.display = False
         self.query_one("#task-tree", Tree).focus()
 
-    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        if event.data_table.id == "cycles-table":
-            cycle_id = str(event.row_key.value)
-            self._select_cycle(cycle_id, switch_to_monitor=True)
+    def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
+        if event.data_table.id != "cycles-table":
             return
+        column = event.coordinate.column
+        if column <= 0:
+            return
+        cycle_index = column - 1
+        if cycle_index >= len(self.cycle_matrix_columns):
+            return
+        self._select_cycle(
+            self.cycle_matrix_columns[cycle_index],
+            switch_to_monitor=True,
+        )
 
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table.id == "campaign-table":
             value = event.row_key.value
             if not isinstance(value, str):
@@ -1071,17 +1081,47 @@ class WorkflowTui(App[None]):
 
     def _refresh_cycles(self) -> None:
         table = self.query_one("#cycles-table", DataTable)
-        table.clear(columns=False)
+        table.clear(columns=True)
+        self.cycle_matrix_columns = [
+            cycle.cycle_id for cycle in self.snapshot.cycles
+        ]
+        table.add_columns(
+            "Process",
+            *(_format_cycle_time(cycle.cycle_time) for cycle in self.snapshot.cycles),
+        )
+
+        discovered: list[str] = []
+        statuses_by_cycle: list[dict[str, list[str]]] = []
         for cycle in self.snapshot.cycles:
-            table.add_row(
-                _format_cycle_time(cycle.cycle_time),
-                f"{cycle.completed_tasks}/{len(cycle.tasks)}",
-                str(cycle.running_tasks),
-                str(cycle.failed_tasks),
-                str(cycle.pending_tasks),
-                _status_markup(cycle.status, color=self.color_enabled),
-                key=cycle.cycle_id,
-            )
+            by_process: dict[str, list[str]] = {}
+            for task in cycle.tasks:
+                process_step = _task_process_step(task.name, cycle)
+                process = process_step[0] if process_step is not None else "Workflow"
+                by_process.setdefault(process, []).append(task.status)
+                if process not in discovered:
+                    discovered.append(process)
+            statuses_by_cycle.append(by_process)
+
+        processes = [process for process in _PROCESS_ORDER if process in discovered]
+        processes.extend(
+            process for process in discovered if process not in _PROCESS_ORDER
+        )
+        if not processes and self.snapshot.cycles:
+            processes = ["Workflow"]
+
+        for process in processes:
+            row: list[str] = [process]
+            for by_process in statuses_by_cycle:
+                statuses = by_process.get(process, [])
+                row.append(
+                    _status_markup(
+                        self._aggregate_status(statuses),
+                        color=self.color_enabled,
+                    )
+                    if statuses
+                    else "—"
+                )
+            table.add_row(*row, key=process)
 
     @staticmethod
     def _aggregate_status(statuses: list[str]) -> str:
