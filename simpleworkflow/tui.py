@@ -233,6 +233,20 @@ def _elapsed(started_at: str | None, finished_at: str | None = None) -> float | 
 
 
 
+class WorkflowTree(Tree[object]):
+    """Task tree whose Enter action also opens the narrow Inspector pane."""
+
+    def action_select_cursor(self) -> None:
+        node = self.cursor_node
+        super().action_select_cursor()
+        data = node.data if node is not None else None
+        if not isinstance(data, tuple) or len(data) != 2:
+            return
+        inspect = getattr(self.app, "action_inspect", None)
+        if callable(inspect):
+            inspect()
+
+
 class WorkflowTui(App[None]):
     """Full-screen, read-only monitor for one logical workflow instance."""
 
@@ -408,7 +422,7 @@ class WorkflowTui(App[None]):
                     with Vertical(id="left"):
                         yield Label("WORKFLOW", classes="pane-title")
                         yield Input(placeholder="Filter tasks…", id="task-filter")
-                        yield Tree(self.snapshot.workflow_name, id="task-tree")
+                        yield WorkflowTree(self.snapshot.workflow_name, id="task-tree")
                     with Vertical(id="right"):
                         yield Label("INSPECTOR", classes="pane-title")
                         yield TaskInspector(color=self.color_enabled, id="inspector")
@@ -775,10 +789,6 @@ class WorkflowTui(App[None]):
         self._refresh_cycle_line()
         self._refresh_inspector()
         self._refresh_logs(force=True)
-        body = self.query_one("#monitor-main")
-        tree = self.query_one("#task-tree", Tree)
-        if body.has_class("narrow") and tree.has_focus:
-            body.add_class("inspecting")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id or ""
