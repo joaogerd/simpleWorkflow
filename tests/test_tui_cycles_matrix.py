@@ -175,3 +175,25 @@ def test_cycles_matrix_uses_actual_cycles_not_fixed_synoptic_hours(tmp_path: Pat
             ]
 
     asyncio.run(scenario())
+
+
+def test_cycles_matrix_ignores_empty_process_cycle_cells(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.pause()
+            await pilot.press("2")
+            await pilot.pause()
+
+            table = app.query_one("#cycles-table", DataTable)
+            # MPAS at 12Z has no persisted task state in this fixture.
+            table.focus()
+            table.move_cursor(row=2, column=3)
+            before = app.selected_cycle_id
+            table.action_select_cursor()
+            await pilot.pause()
+            assert app.selected_cycle_id == before
+            assert app.query_one("#views").active == "cycles"
+
+    asyncio.run(scenario())
