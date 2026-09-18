@@ -182,8 +182,8 @@ def test_mixed_unrolled_workflow_shows_noncycle_tasks_in_workflow_section(
             app.selected_cycle_id = None
             app.selected_task = "global_setup"
             app._refresh_inspector()
-            inspector = str(app.query_one("#inspector").render())
-            assert "workflow" in inspector.lower()
+            inspector = app.query_one("#inspector")
+            assert "workflow" in inspector.primary_text.lower()
 
     asyncio.run(scenario())
 
