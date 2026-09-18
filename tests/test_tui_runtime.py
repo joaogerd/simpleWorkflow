@@ -7,6 +7,7 @@ from pathlib import Path
 from simpleworkflow.runs import RunRecorder
 from simpleworkflow.state import WorkflowState
 from simpleworkflow.tui import WorkflowTui
+from simpleworkflow.tui_viewer import TextFileViewer
 
 
 def _config(workflow: Path) -> dict[str, object]:
@@ -127,12 +128,13 @@ def test_logs_select_available_stdout_stderr_and_pbs_files(tmp_path: Path) -> No
             app.action_open_logs()
             await pilot.pause()
             assert app.query_one("#views").active == "logs"
+            viewer = app.query_one("#log-viewer", TextFileViewer)
             assert app.selected_log_key == "pbs_stdout"
-            assert "JEDI iteration 1" in app.current_log_text
+            assert "JEDI iteration 1" in viewer.text
             await pilot.press("e")
             await pilot.pause()
             assert app.selected_log_key in {"pbs_stderr", "stderr"}
-            assert "warning from worker" in app.current_log_text
+            assert "warning from worker" in viewer.text
 
     asyncio.run(scenario())
 
@@ -157,6 +159,8 @@ def test_missing_attempt_logs_do_not_break_monitor(tmp_path: Path) -> None:
             app.action_open_logs()
             await pilot.pause()
             assert app.query_one("#views").active == "logs"
-            assert "No runtime log" in app.current_log_text
+            viewer = app.query_one("#log-viewer", TextFileViewer)
+            assert viewer.state.resource is None
+            assert "No file selected" in viewer.status_message
 
     asyncio.run(scenario())
