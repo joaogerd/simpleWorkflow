@@ -186,7 +186,7 @@ class TaskInspector(Vertical):
     def __init__(self, *, color: bool = True, id: str | None = None) -> None:
         super().__init__(id=id)
         self.color_enabled = color
-        self.task: TaskSnapshot | None = None
+        self.task_snapshot: TaskSnapshot | None = None
         self.config_task: dict[str, Any] = {}
         self.context = InspectorContext(None, None, 0)
         self.resources: tuple[InspectableResource, ...] = ()
@@ -198,10 +198,10 @@ class TaskInspector(Vertical):
 
     @property
     def selected_attempt(self) -> AttemptSnapshot | None:
-        if self.task is None or not self.task.attempts:
+        if self.task_snapshot is None or not self.task_snapshot.attempts:
             return None
-        index = max(0, min(self.context.attempt_index, len(self.task.attempts) - 1))
-        return self.task.attempts[index]
+        index = max(0, min(self.context.attempt_index, len(self.task_snapshot.attempts) - 1))
+        return self.task_snapshot.attempts[index]
 
     def compose(self) -> ComposeResult:
         yield Static("No task selected.", id="inspector-primary")
@@ -241,12 +241,12 @@ class TaskInspector(Vertical):
     ) -> None:
         previous_attempt = self.selected_attempt
         same_task = (
-            self.task is not None
+            self.task_snapshot is not None
             and task is not None
-            and self.task.name == task.name
-            and self.task.cycle_id == task.cycle_id
+            and self.task_snapshot.name == task.name
+            and self.task_snapshot.cycle_id == task.cycle_id
         )
-        self.task = task
+        self.task_snapshot = task
         self.config_task = config_task if isinstance(config_task, dict) else {}
         index = 0
         if same_task and previous_attempt is not None and task is not None:
@@ -269,7 +269,7 @@ class TaskInspector(Vertical):
         except Exception:
             return
 
-        if self.task is None:
+        if self.task_snapshot is None:
             self.primary_text = "No task selected."
             primary.update("[dim]No task selected.[/dim]")
             self.resources = ()
@@ -285,19 +285,19 @@ class TaskInspector(Vertical):
             if attempt is not None and attempt.executor
             else str(self.config_task.get("executor", "local"))
         )
-        scope = self.task.cycle_id or "workflow"
+        scope = self.task_snapshot.cycle_id or "workflow"
         status_plain, status_markup = _status_markup(
-            self.task.status,
+            self.task_snapshot.status,
             color=self.color_enabled,
         )
         plain_fields: list[tuple[str, str]] = [
-            ("task", self.task.name),
+            ("task", self.task_snapshot.name),
             ("status", status_plain),
             ("scope", scope),
             ("backend", backend),
         ]
         markup_fields: list[tuple[str, str]] = [
-            ("task", escape(self.task.name)),
+            ("task", escape(self.task_snapshot.name)),
             ("status", status_markup),
             ("scope", escape(scope)),
             ("backend", escape(backend)),
@@ -312,15 +312,15 @@ class TaskInspector(Vertical):
                 plain_fields.append(("PBS job", attempt.job_id))
                 markup_fields.append(("PBS job", escape(attempt.job_id)))
         return_code = (
-            self.task.return_code
-            if self.task.return_code is not None
+            self.task_snapshot.return_code
+            if self.task_snapshot.return_code is not None
             else attempt.return_code if attempt is not None else None
         )
         if return_code is not None:
             plain_fields.append(("return", str(return_code)))
             markup_fields.append(("return", str(return_code)))
-        reason = self.task.reason or (attempt.reason if attempt is not None else None)
-        if reason and self.task.status in {
+        reason = self.task_snapshot.reason or (attempt.reason if attempt is not None else None)
+        if reason and self.task_snapshot.status in {
             "failed",
             "invalid-input",
             "invalid-output",
@@ -341,7 +341,7 @@ class TaskInspector(Vertical):
         )
 
         self.resources = (
-            discover_attempt_resources(self.task, attempt, self.config_task)
+            discover_attempt_resources(self.task_snapshot, attempt, self.config_task)
             if attempt is not None
             else ()
         )
@@ -351,7 +351,7 @@ class TaskInspector(Vertical):
         self._refresh_details()
 
     def _build_details(self, attempt: AttemptSnapshot | None) -> dict[str, str]:
-        if self.task is None:
+        if self.task_snapshot is None:
             return {}
         details: dict[str, str] = {}
         if attempt is not None:
@@ -384,7 +384,7 @@ class TaskInspector(Vertical):
             logs = self.query_one("#open-logs", Button)
         except Exception:
             return
-        attempts = self.task.attempts if self.task is not None else ()
+        attempts = self.task_snapshot.attempts if self.task_snapshot is not None else ()
         if not attempts:
             self.attempt_label = "No attempt"
             label.update(self.attempt_label)
@@ -436,14 +436,14 @@ class TaskInspector(Vertical):
             table.add_row(key, value, key=key)
 
     def _select_attempt(self, index: int) -> None:
-        if self.task is None or not self.task.attempts:
+        if self.task_snapshot is None or not self.task_snapshot.attempts:
             return
-        target = max(0, min(len(self.task.attempts) - 1, index))
+        target = max(0, min(len(self.task_snapshot.attempts) - 1, index))
         if target == self.context.attempt_index:
             return
         self.context = InspectorContext(
-            self.task.name,
-            self.task.cycle_id,
+            self.task_snapshot.name,
+            self.task_snapshot.cycle_id,
             target,
         )
         self._render()
