@@ -411,7 +411,12 @@ class WorkflowTui(App[None]):
         self._choose_initial_selection()
 
     def _load_snapshot(self) -> MonitorSnapshot:
-        return load_monitor_snapshot(self.config, self.workflow_path, self.workdir)
+        return load_monitor_snapshot(
+            self.config,
+            self.workflow_path,
+            self.workdir,
+            tolerate_initializing=self.completion_future is not None,
+        )
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="topbar"):
