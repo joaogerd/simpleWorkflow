@@ -158,7 +158,12 @@ class TaskSnapshot:
     reason: str | None = None
     attempt_path: str | None = None
     updated_at: str | None = None
-    attempt: AttemptSnapshot | None = None
+    attempts: tuple[AttemptSnapshot, ...] = ()
+
+    @property
+    def attempt(self) -> AttemptSnapshot | None:
+        """Newest attempt for compatibility with the 0.5 Inspector/Logs API."""
+        return self.attempts[0] if self.attempts else None
 
 
 @dataclass(frozen=True)
@@ -364,10 +369,10 @@ def _task_snapshot(
     row: tuple[Any, ...] | None,
     *,
     cycle_id: str | None,
-    attempt: AttemptSnapshot | None = None,
+    attempts: tuple[AttemptSnapshot, ...] = (),
 ) -> TaskSnapshot:
     if row is None:
-        return TaskSnapshot(name=name, status="pending", cycle_id=cycle_id, attempt=attempt)
+        return TaskSnapshot(name=name, status="pending", cycle_id=cycle_id, attempts=attempts)
     return TaskSnapshot(
         name=name,
         status=str(row[0]),
@@ -376,7 +381,7 @@ def _task_snapshot(
         reason=row[2],
         attempt_path=row[3],
         updated_at=row[4],
-        attempt=attempt,
+        attempts=attempts,
     )
 
 
@@ -397,7 +402,9 @@ def _max_timestamp(*values: str | None) -> str | None:
     return max(present) if present else None
 
 
-def _latest_attempts(state: WorkflowState) -> dict[tuple[str, str], AttemptSnapshot]:
+def _attempt_history(
+    state: WorkflowState,
+) -> dict[tuple[str, str], tuple[AttemptSnapshot, ...]]:
     rows = state.connection.execute(
         """
         SELECT run_id, cycle_id, task, attempt, status, return_code, reason,
@@ -406,27 +413,27 @@ def _latest_attempts(state: WorkflowState) -> dict[tuple[str, str], AttemptSnaps
         ORDER BY cycle_id, task, COALESCE(started_at, '') DESC, run_id DESC, attempt DESC
         """
     ).fetchall()
-    attempts: dict[tuple[str, str], AttemptSnapshot] = {}
+    grouped: dict[tuple[str, str], list[AttemptSnapshot]] = {}
     for row in rows:
-        key = (str(row[1] or ""), str(row[2]))
-        if key in attempts:
-            continue
         directory = state.resolve_path(str(row[7]))
         if directory is None:
             continue
-        attempts[key] = AttemptSnapshot(
-            run_id=str(row[0]),
-            cycle_id=str(row[1]) if row[1] else None,
-            task_name=str(row[2]),
-            attempt=int(row[3]),
-            status=str(row[4]),
-            return_code=row[5],
-            reason=str(row[6]) if row[6] else None,
-            directory=directory,
-            started_at=str(row[8]) if row[8] else None,
-            finished_at=str(row[9]) if row[9] else None,
+        key = (str(row[1] or ""), str(row[2]))
+        grouped.setdefault(key, []).append(
+            AttemptSnapshot(
+                run_id=str(row[0]),
+                cycle_id=str(row[1]) if row[1] else None,
+                task_name=str(row[2]),
+                attempt=int(row[3]),
+                status=str(row[4]),
+                return_code=row[5],
+                reason=str(row[6]) if row[6] else None,
+                directory=directory,
+                started_at=str(row[8]) if row[8] else None,
+                finished_at=str(row[9]) if row[9] else None,
+            )
         )
-    return attempts
+    return {key: tuple(items) for key, items in grouped.items()}
 
 
 def load_monitor_snapshot(
@@ -497,7 +504,7 @@ def load_monitor_snapshot(
     try:
         instance = state.instance
         connection = state.connection
-        attempts = _latest_attempts(state)
+        attempts = _attempt_history(state)
 
         cycle_rows = connection.execute(
             """
