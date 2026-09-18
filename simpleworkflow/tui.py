@@ -10,7 +10,6 @@ from typing import Any
 
 from rich.markup import escape
 from rich.text import Text
-from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -235,17 +234,24 @@ def _elapsed(started_at: str | None, finished_at: str | None = None) -> float | 
 
 
 class WorkflowTree(Tree[object]):
-    """Task tree whose Enter key also opens the narrow Inspector pane."""
+    """Task tree whose Enter binding also opens the narrow Inspector pane."""
 
-    async def _on_key(self, event: events.Key) -> None:
-        if event.key != "enter":
-            return
+    BINDINGS = [
+        Binding(
+            "enter",
+            "select_and_inspect",
+            "Inspect",
+            show=False,
+            priority=True,
+        ),
+    ]
+
+    def action_select_and_inspect(self) -> None:
         node = self.cursor_node
         data = node.data if node is not None else None
         if not isinstance(data, tuple) or len(data) != 2:
+            super().action_select_cursor()
             return
-        event.stop()
-        event.prevent_default()
         super().action_select_cursor()
         inspect = getattr(self.app, "action_inspect", None)
         if callable(inspect):
