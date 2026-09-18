@@ -206,7 +206,7 @@ def discover_attempt_resources(
     return tuple(resources)
 
 
-_PATH_TOKEN = re.compile(r"""(?P<path>(?:/|\\./|\\.\\./)[^\\s<>"'\\x60]+)""")
+_PATH_TOKEN = re.compile(r"""(?P<path>(?:/|\./|\.\./)[^\s<>"'\x60]+)""")
 _TRAILING_PATH_PUNCTUATION = ".,;:!?)]}"
 
 
@@ -272,7 +272,7 @@ def is_probably_text(path: Path, *, sample_size: int = 8192) -> bool:
             sample = stream.read(sample_size)
     except OSError:
         return False
-    if b"\\x00" in sample:
+    if b"\x00" in sample:
         return False
     try:
         sample.decode("utf-8")
