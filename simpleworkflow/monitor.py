@@ -541,7 +541,7 @@ def load_monitor_snapshot(
                         name,
                         task_rows.get(name),
                         cycle_id=cycle_key,
-                        attempt=attempts.get((cycle_key, name)),
+                        attempts=attempts.get((cycle_key, name), ()),
                     )
                     for name in names
                 )
@@ -568,7 +568,7 @@ def load_monitor_snapshot(
                         name,
                         root_rows.get(name),
                         cycle_id=cycle_id,
-                        attempt=attempts.get(("", name)),
+                        attempts=attempts.get(("", name), ()),
                     )
                     for name in task_names
                 )
@@ -590,7 +590,7 @@ def load_monitor_snapshot(
                     name,
                     root_rows.get(name),
                     cycle_id=None,
-                    attempt=attempts.get(("", name)),
+                    attempts=attempts.get(("", name), ()),
                 )
                 for name in names
                 if name not in grouped_names
@@ -601,7 +601,7 @@ def load_monitor_snapshot(
                     name,
                     root_rows.get(name),
                     cycle_id=None,
-                    attempt=attempts.get(("", name)),
+                    attempts=attempts.get(("", name), ()),
                 )
                 for name in names
             )
