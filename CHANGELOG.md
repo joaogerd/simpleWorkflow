@@ -1,5 +1,122 @@
 # Changelog
 
+## 0.6.0
+
+simpleWorkflow 0.6.0 turns the Textual frontend into a read-only operational
+inspection tool for long scientific campaigns while preserving the execution
+and persistence boundaries established in 0.4/0.5.
+
+- Expose immutable attempt history in the monitor read model while keeping the
+  newest attempt available through the existing compatibility property.
+- Replace the monolithic Inspector text block with a compact attempt-aware
+  Inspector containing operational fields, previous/next-attempt navigation,
+  structured resources and collapsible details.
+- Discover and open persisted stdout/stderr, PBS stdout/stderr, scheduler
+  metadata, PBS scripts and structured input/output resources without invoking
+  the scheduler.
+- Add one reusable internal text viewer for Inspector resources and the Logs
+  view, with bounded reads, search, next/previous match, reload, copy, copy-path
+  and follow/pause behavior.
+- Add conservative related-file discovery from visible log text. Only existing
+  regular files referenced by absolute or explicit ./../ paths become
+  inspectable; structured provenance keeps precedence.
+- Shorten failure diagnosis from Problemas: selecting a failed task opens the
+  best available evidence in the order PBS stderr, stderr, PBS stdout, stdout,
+  otherwise returning to the Inspector with the persisted failure reason.
+- Rebuild Ciclos as a process-by-cycle operational matrix using the campaign's
+  actual cycle timestamps rather than assuming fixed synoptic hours. Non-empty
+  cells navigate back to Monitor at that cycle.
+- Keep the daily process matrix below the Inspector and make wide/narrow layouts
+  denser so the task tree, task context and cycling state remain usable on
+  smaller terminals.
+- Validate reconstruction on a 185-task, 13-cycle MONAN-JEDI-shaped persisted
+  campaign, including multiple attempts and PBS provenance, while keeping the
+  TUI strictly inspection-only.
+- Preserve explicit plain mode and core-only installations without importing or
+  requiring Textual/Rich.
+- Preserve the SQLite schema, workflow engine, PBS execution semantics,
+  restart-safety and the five-view contract. This release adds no daemon,
+  server, scheduler controller, rerun, retry or cancel action to the TUI.
+
+## 0.5.1
+
+simpleWorkflow 0.5.1 refines the professional TUI introduced in 0.5.0 so the
+monitor behaves as an operational navigation surface rather than a mostly static
+status screen.
+
+- Restore clickable date and cycle navigation inspired by the original
+  `ux/professional-terminal` implementation while keeping `MonitorSnapshot` and
+  `state.sqlite3` authoritative.
+- Show the selected day separately from its cycles and derive the available cycle
+  buttons from the persisted/presentation cycles instead of assuming fixed
+  00Z/06Z/12Z/18Z schedules.
+- Add previous/next date and previous/next cycle controls, with compact cycle
+  slots that follow the currently selected part of a longer campaign.
+- Make the campaign view operational: group cycles by date, summarize task state
+  per day and let a selected campaign row jump back to Monitor at that date.
+- Restore task filtering with `/`; matching can use the internal task name,
+  compact display label or current task state without changing workflow state.
+- Restore a direct Logs action in the Inspector whenever attempt logs are
+  available, including a count of available log streams.
+- Add explicit log follow/pause behavior so live output can be frozen while it is
+  inspected and resumed without leaving the Logs view.
+- Add a problem count to the Problems tab while preserving direct navigation from
+  a problem to the most useful available error log.
+- Keep non-cycle/global tasks in the explicit `Workflow` section and shorten
+  unrolled task labels by removing only the already-known cycle identifier from
+  presentation text.
+- Preserve all 0.5.0 execution boundaries: no engine changes, no state-schema
+  changes, no daemon/server, no workflow mutation from the TUI and no change to
+  plain/PBS/CI output.
+
+## 0.5.0
+
+simpleWorkflow 0.5.0 combines the persistent 0.4 state model with the
+professional interactive terminal monitor.
+
+- Restore the professional full-screen terminal monitor that was developed and
+  refined on `ux/professional-terminal`, adapted to the 0.4 persistent-state
+  model instead of reviving the legacy state API.
+- Add a presentation-independent `MonitorSnapshot` read model over
+  `state.sqlite3` so the TUI can reconstruct workflow, cycle, task, run, attempt
+  and problem state without owning a second source of truth.
+- Add `swf monitor workflow.yaml` for read-only attachment to an existing
+  workflow instance, including closing and reopening after state changes that
+  happened while no monitor was running.
+- Add `swf run --ui auto|tui|plain`; `auto` uses the TUI only on a capable
+  interactive terminal with the optional dependencies installed and otherwise
+  preserves the traditional `TerminalReporter` output.
+- Keep Rich and Textual optional under the `simpleworkflow[tui]` extra so the
+  core runner remains lightweight for HPC, PBS, CI and redirected log use.
+- Restore the five approved operational views: Monitor, Ciclos, Campanha,
+  Problemas and Logs, with a workflow tree, Inspector and compact cycle timeline.
+- Read command, working directory, PBS job ID and available stdout/stderr files
+  from immutable attempt provenance while keeping SQLite task state authoritative.
+- Make attempt-file discovery defensive: absent or incomplete metadata and log
+  files reduce the displayed detail rather than breaking the monitor.
+- Visualize deliberately unrolled scientific campaigns without changing their
+  execution model: explicit `--cycle` metadata creates presentation groups,
+  same-cycle gates may inherit a group, and ambiguous/global tasks remain in a
+  separate Workflow section.
+- Keep native persisted cycles authoritative whenever `cycle_state` exists; the
+  unrolled timeline never creates artificial cycle state or rewrites dependencies.
+- Add wide/narrow terminal behavior, a compact help overlay, a limited semantic
+  palette, `NO_COLOR` handling and symbols that keep state understandable without
+  color.
+- Define `q` as a presentation action only. Closing the TUI never silently
+  cancels a local process or PBS job; an attached run continues to its normal
+  result and releases its normal workflow lock afterward.
+- Add restart-safe/headless TUI coverage, automatic UI selection tests,
+  conservative unrolled-cycle tests, MONAN-JEDI-shaped 50-task coverage,
+  persisted problem/log tests and package validation for both core-only and
+  `[tui]` installations.
+- Build and exercise both wheel and source distribution in CI, including a
+  core-only environment with no Textual/Rich and a separate installed TUI
+  environment.
+- Preserve the 0.4.0 SQLite schema and workflow-engine execution semantics; this
+  release introduces no daemon, socket service, web server or centralized
+  scheduler and is not a breaking state-format change.
+
 ## 0.4.0
 
 - Redefine `.simpleworkflow` as the persistent state directory of exactly one

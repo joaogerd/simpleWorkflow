@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simpleworkflow"
-version = "0.4.0"
+version = "0.6.0"
 description = "Lightweight YAML workflow runner for scientific pipelines."
 readme = "README.md"
 license = "MIT"
@@ -14,11 +14,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+tui = [
+  "rich>=13.7",
+  "textual>=8.2,<9",
+]
 dev = [
   "mypy>=1.10",
   "pytest>=8.0",
   "pytest-cov>=5.0",
+  "rich>=13.7",
   "ruff>=0.5",
+  "textual>=8.2,<9",
   "types-PyYAML>=6.0",
 ]
 
