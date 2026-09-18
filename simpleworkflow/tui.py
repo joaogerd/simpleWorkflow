@@ -232,13 +232,6 @@ def _elapsed(started_at: str | None, finished_at: str | None = None) -> float | 
     return max(0.0, (finished - started).total_seconds())
 
 
-def _tail(path: Path, max_lines: int = 1000) -> str:
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return ""
-    return "\n".join(lines[-max_lines:])
-
 
 class WorkflowTui(App[None]):
     """Full-screen, read-only monitor for one logical workflow instance."""
@@ -326,7 +319,6 @@ class WorkflowTui(App[None]):
     }
     .log-button.selected-log { color: #67e8f9; text-style: bold underline; }
     #log-follow.following { color: #65a30d; text-style: bold; }
-    #full-log { height: 1fr; padding: 1; background: #0d0f13; }
     #shortcut-line {
         height: 1; padding: 0 1; border-top: solid #252b35;
         background: #111318; color: #697180;
@@ -806,11 +798,11 @@ class WorkflowTui(App[None]):
         if key is None:
             return
         task = self._selected_task_snapshot()
-        attempt = task.attempt if task is not None else None
-        if attempt is None or key not in attempt.available_logs:
+        attempt = self._selected_attempt()
+        available = self._available_log_resources(task, attempt)
+        if key not in available:
             return
-        self.selected_log_key = key
-        self._refresh_logs(force=True)
+        self._select_log_resource(key)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "task-filter":
@@ -925,7 +917,7 @@ class WorkflowTui(App[None]):
 
     def _select_preferred_log(self, *, error: bool) -> None:
         task = self._selected_task_snapshot()
-        attempt = task.attempt if task is not None else None
+        attempt = self._selected_attempt()
         if attempt is None:
             self.selected_log_key = None
             return
