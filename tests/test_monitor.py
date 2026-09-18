@@ -289,3 +289,76 @@ def test_snapshot_prefers_newest_retry_and_tolerates_missing_files(tmp_path: Pat
     assert task.attempt.status == "running"
     assert task.attempt.command is None
     assert task.attempt.log_paths["stdout"].exists() is False
+
+
+def test_snapshot_exposes_all_attempts_newest_first(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: campaign\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    state = WorkflowState(
+        workdir / "state.sqlite3",
+        workflow_name="campaign",
+        source_path=workflow,
+    )
+    state.ensure_cycle("2018041506", "2018-04-15T06:00:00Z")
+    recorder = RunRecorder(
+        workdir,
+        "campaign",
+        instance_id=state.instance_id,
+        cycle_id="2018041506",
+        cycle_time="2018-04-15T06:00:00Z",
+        run_id="run-retry-history",
+    )
+    state.record_run(
+        recorder.run_id,
+        recorder.directory,
+        cycle_id="2018041506",
+        cycle_time="2018-04-15T06:00:00Z",
+    )
+
+    first = recorder.begin_attempt("analysis")
+    state.record_attempt_started(
+        run_id=first.run_id,
+        task="analysis",
+        attempt=first.attempt,
+        attempt_path=first.directory,
+        signature="sig-1",
+        cycle_id="2018041506",
+        started_at="2018-04-15T06:00:00Z",
+    )
+    state.record_attempt_finished(
+        run_id=first.run_id,
+        task="analysis",
+        attempt=first.attempt,
+        status="failed",
+        return_code=7,
+        reason="first failure",
+    )
+
+    second = recorder.begin_attempt("analysis")
+    state.record_attempt_started(
+        run_id=second.run_id,
+        task="analysis",
+        attempt=second.attempt,
+        attempt_path=second.directory,
+        signature="sig-2",
+        cycle_id="2018041506",
+        started_at="2018-04-15T06:10:00Z",
+    )
+    state.set_status(
+        "analysis",
+        "running",
+        None,
+        "sig-2",
+        "tarefa iniciada",
+        second.directory,
+        cycle_id="2018041506",
+    )
+    state.close()
+
+    snapshot = load_monitor_snapshot(_config(workflow), workflow, workdir)
+    task = next(task for task in snapshot.cycles[0].tasks if task.name == "analysis")
+
+    assert [attempt.attempt for attempt in task.attempts] == [2, 1]
+    assert [attempt.status for attempt in task.attempts] == ["running", "failed"]
+    assert task.attempt is task.attempts[0]
