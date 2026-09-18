@@ -1,10 +1,11 @@
 # Interactive workflow monitor
 
-simpleWorkflow 0.5 adds an optional terminal user interface (TUI) for scientists
-who want to watch one workflow interactively without turning simpleWorkflow into
-a service or centralized orchestrator. Version 0.5.1 restores the richer
-navigation that existed in the original professional-terminal prototype while
-keeping the 0.5 persisted-state architecture unchanged.
+simpleWorkflow 0.6 provides an optional terminal user interface (TUI) for
+scientists who want to inspect one workflow interactively without turning
+simpleWorkflow into a service or centralized orchestrator. The 0.6 release keeps
+the persisted-state architecture introduced in 0.4/0.5 and concentrates on
+operator workflow: compact task context, attempt history, inspectable resources,
+a reusable text/log viewer, direct failure evidence and a broad cycle matrix.
 
 The SQLite state introduced in 0.4 remains the source of truth. The TUI is a
 read-only presentation layer over the same workflow instance, cycles, tasks,
@@ -121,15 +122,27 @@ The task tree can be filtered with `/`. Filtering matches the internal task name
 the compact display label and the current task state. The filter is presentation
 only and never changes workflow execution or SQLite state.
 
-The Inspector only displays applicable fields, including backend, attempt,
-timing, command, working directory, PBS job ID, return code, dependencies,
-declared outputs and requested PBS resources when those values are available. A
-small `Logs (N)` action appears when the selected attempt has log streams, making
-it possible to jump to the Logs view without remembering a keyboard shortcut.
+The Inspector only displays applicable fields. Its compact primary section keeps
+status, backend, selected attempt, timing, PBS job ID and return code visible
+without reserving large empty areas. Previous/next-attempt controls move through
+persisted retry history. A structured resource table exposes files that belong
+to the selected attempt: launcher stdout/stderr, PBS stdout/stderr,
+`started.json`, `metadata.json`, `scheduler.json`, PBS job scripts and
+recorded input/output resources when present. Command, working directory,
+dependencies, requested PBS resources and similar lower-frequency fields remain
+available under collapsible details.
 
-**Ciclos** aggregates completed, running, failed and pending tasks for each
-native cycle or safe presentation cycle. Selecting a row returns to Monitor at
-that cycle.
+Selecting an Inspector resource opens the internal read-only viewer. The viewer
+supports bounded reads, search, next/previous match, reload, copy, copy-path and
+follow/pause for live log streams. The same viewer is embedded in the Logs view,
+so there is only one file-reading behavior to learn.
+
+**Ciclos** is the broad operational matrix. Rows are discovered process groups
+such as OBS, JEDI and MPAS; columns are the actual native or safe presentation
+cycles in chronological order. It does not assume 00Z/06Z/12Z/18Z. Each
+non-empty process/cycle cell aggregates the statuses of the tasks in that
+intersection and selecting the cell returns to Monitor at the corresponding
+cycle. Empty intersections remain inert.
 
 **Campanha** is a navigable campaign overview. It groups the available cycles by
 day, summarizes the number of cycles and task states for that day, and lets a
@@ -140,15 +153,24 @@ the header opens the campaign view at the selected day.
 **Problemas** contains only conditions that require attention, such as failure,
 invalid input/output, blocked dependencies, interrupted or uncertain work. The
 tab shows a problem count when attention is required. With no such state it
-displays `No problems detected.` Selecting a problem opens the most useful
-available error log when possible.
+displays `No problems detected.` Selecting a problem preserves the task/cycle
+context and follows a deterministic shortest path to evidence: PBS stderr,
+stderr, PBS stdout, stdout. If no stream exists, Monitor/Inspector is shown with
+the persisted reason instead of fabricating a process log.
 
-**Logs** is deliberately separate from Monitor. It can display launcher stdout
-and stderr and, for PBS attempts, PBS stdout/stderr when those files are present.
-Missing files are normal and never make the monitor fail. `FOLLOW ●` updates the
-visible log as the file grows; `f` or the follow button pauses updates while the
+**Logs** is deliberately separate from Monitor but uses the same
+`TextFileViewer` as Inspector resources. It can display launcher stdout/stderr
+and, for PBS attempts, PBS stdout/stderr when those files are present. Missing
+files are normal and never make the monitor fail. `FOLLOW ●` updates the visible
+log as the file grows; `f` or the follow button pauses updates while the
 operator inspects existing output, and pressing it again resumes from persisted
-log content.
+content. Search, copy, path-copy and reload work the same way as in the modal
+resource viewer.
+
+Visible log text is also scanned conservatively for related files. Only existing
+regular files referenced by absolute paths or explicit `./` / `../` paths are
+offered. Structured attempt resources always take precedence, duplicates are
+suppressed, and the feature never becomes an arbitrary recursive file browser.
 
 ## Native and unrolled scientific cycles
 
@@ -209,13 +231,16 @@ r            refresh now
 q            close monitor
 ```
 
-The date controls, cycle buttons, campaign rows, cycle rows, Inspector Logs
-action, problem rows and log-stream selectors are also clickable. The help
-overlay only lists commands that exist; there is no permanent Help tab.
+The date controls, cycle buttons, campaign rows, cycle-matrix cells, Inspector
+attempt/resource controls, problem rows, log-stream selectors and related-file
+rows are also clickable. The help overlay only lists commands that exist; there
+is no permanent Help tab.
 
-Wide terminals show workflow and Inspector side by side. Narrow terminals keep
-the workflow readable and provide the Inspector as an alternate pane instead of
-compressing both columns beyond usefulness.
+Wide terminals show workflow and Inspector side by side, with a compact daily
+process/cycle matrix below the Inspector. Narrow terminals keep the workflow
+readable and provide the Inspector as an alternate pane instead of compressing
+both columns beyond usefulness. The permanent shortcut line is shortened on
+narrow terminals; `?` remains the complete help surface.
 
 ## What `q` means
 
@@ -243,11 +268,16 @@ run_history
 attempt_history
 ```
 
-Task commands, working directories, scheduler metadata and log locations are
-read from the immutable attempt directories under `.simpleworkflow/runs/` when
-available. These files enrich presentation; they do not override the SQLite task
-state. Incomplete or missing provenance simply results in fewer Inspector fields
-or unavailable log buttons.
+Task commands, working directories, scheduler metadata and resource locations
+are read from immutable attempt directories under `.simpleworkflow/runs/` when
+available. Multiple persisted attempts remain selectable. These files enrich
+presentation; they do not override SQLite task state. Incomplete or missing
+provenance simply results in fewer Inspector fields or unavailable resources.
+
+PBS metadata is inspection-only. The monitor reads the recorded job ID, job
+script, scheduler JSON and worker streams; it does not call `qstat`, `qdel` or
+`qsub`. Scheduler interaction remains the responsibility of the execution
+engine, not the TUI.
 
 This separation is what allows this sequence without a controller service:
 
