@@ -93,7 +93,7 @@ def test_cycles_view_is_process_by_cycle_matrix(tmp_path: Path) -> None:
 
             table = app.query_one("#cycles-table", DataTable)
             assert table.cursor_type == "cell"
-            assert table.column_count == 4
+            assert len(table.columns) == 4
             assert table.row_count == 3
 
             rows = [table.get_row_at(index) for index in range(3)]
@@ -167,7 +167,7 @@ def test_cycles_matrix_uses_actual_cycles_not_fixed_synoptic_hours(tmp_path: Pat
             await pilot.press("2")
             await pilot.pause()
             table = app.query_one("#cycles-table", DataTable)
-            assert table.column_count == 3
+            assert len(table.columns) == 3
             assert table.row_count == 1
             assert app.cycle_matrix_columns == [
                 "2018041503",
