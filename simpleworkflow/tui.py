@@ -234,28 +234,7 @@ def _elapsed(started_at: str | None, finished_at: str | None = None) -> float | 
 
 
 class WorkflowTree(Tree[object]):
-    """Task tree whose Enter binding also opens the narrow Inspector pane."""
-
-    BINDINGS = [
-        Binding(
-            "enter",
-            "select_and_inspect",
-            "Inspect",
-            show=False,
-            priority=True,
-        ),
-    ]
-
-    def action_select_and_inspect(self) -> None:
-        node = self.cursor_node
-        data = node.data if node is not None else None
-        if not isinstance(data, tuple) or len(data) != 2:
-            super().action_select_cursor()
-            return
-        super().action_select_cursor()
-        inspect = getattr(self.app, "action_inspect", None)
-        if callable(inspect):
-            inspect()
+    """Dedicated task tree used for context-sensitive narrow inspection."""
 
 
 class WorkflowTui(App[None]):
@@ -367,10 +346,31 @@ class WorkflowTui(App[None]):
         ("e", "select_error", "Error"),
         ("f", "toggle_follow", "Follow logs"),
         ("r", "refresh_now", "Refresh"),
-        ("enter", "inspect", "Inspect"),
+        Binding("enter", "inspect", "Inspect", priority=True),
         Binding("escape", "escape_context", "Back", priority=True),
         ("question_mark", "show_help", "Help"),
     ]
+
+    def check_action(
+        self,
+        action: str,
+        parameters: tuple[object, ...],
+    ) -> bool | None:
+        if action != "inspect":
+            return True
+        del parameters
+        try:
+            body = self.query_one("#monitor-main")
+            views = self.query_one("#views", TabbedContent)
+        except Exception:
+            return None
+        if (
+            views.active == "monitor"
+            and body.has_class("narrow")
+            and isinstance(self.focused, WorkflowTree)
+        ):
+            return True
+        return None
 
     def __init__(
         self,
@@ -1004,6 +1004,9 @@ class WorkflowTui(App[None]):
         self.push_screen(HelpScreen())
 
     def action_inspect(self) -> None:
+        focused = self.focused
+        if isinstance(focused, WorkflowTree):
+            focused.action_select_cursor()
         body = self.query_one("#monitor-main")
         if body.has_class("narrow"):
             body.add_class("inspecting")
