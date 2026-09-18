@@ -8,7 +8,6 @@ from textual.widgets import DataTable
 from simpleworkflow.state import WorkflowState
 from simpleworkflow.tui import WorkflowTui
 
-
 _CYCLES = (
     ("2018041500", "2018-04-15T00:00:00Z"),
     ("2018041506", "2018-04-15T06:00:00Z"),
