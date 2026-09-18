@@ -12,7 +12,7 @@ from typing import Any
 
 from .config import load_workflow
 from .console import TerminalReporter, WorkflowReporter
-from .cycles import CycleContext, resolve_cycle_contexts
+from .cycles import CycleContext, cycle_scope_matches, resolve_cycle_contexts
 from .engine import WorkflowEngine
 from .migrations import MigrationError, StateInspection, inspect_state, migrate_state
 from .ui import select_ui_mode, tui_available
@@ -154,6 +154,35 @@ def _resolve_workdir(config: dict[str, Any], requested: str | None) -> Path:
     return path.resolve(strict=False)
 
 
+def _initialization_tasks(config: dict[str, Any]) -> list[dict[str, Any]]:
+    initialization = config.get("initialization") or {}
+    return list(initialization.get("tasks", []))
+
+
+def _initialization_engine(
+    config: dict[str, Any],
+    args: argparse.Namespace,
+    reporter: TerminalReporter,
+) -> WorkflowEngine | None:
+    tasks = _initialization_tasks(config)
+    if not tasks:
+        return None
+    resolved = deepcopy(config)
+    resolved["tasks"] = deepcopy(tasks)
+    resolved.pop("cycle", None)
+    resolved.pop("initialization", None)
+    for task in resolved["tasks"]:
+        task.pop("cycle_scope", None)
+    return WorkflowEngine(
+        config=resolved,
+        workdir=_resolve_workdir(config, args.workdir),
+        force=getattr(args, "force", False),
+        dry_run=getattr(args, "dry_run", False),
+        reporter=reporter,
+        selected_tasks=None,
+    )
+
+
 def _cycle_engines(
     config: dict[str, Any],
     args: argparse.Namespace,
@@ -161,16 +190,18 @@ def _cycle_engines(
 ) -> Iterable[tuple[CycleContext | None, WorkflowEngine]]:
     cycles = resolve_cycle_contexts(
         config.get("cycle"),
-        cycle_times=getattr(args, "cycle_times", None),
-        start=getattr(args, "cycle_start", None),
-        end=getattr(args, "cycle_end", None),
-        step=getattr(args, "cycle_step", None),
+        cycle_times=args.cycle_times,
+        start=args.cycle_start,
+        end=args.cycle_end,
+        step=args.cycle_step,
     )
     workdir = _resolve_workdir(config, args.workdir)
     selected = set(args.selected_tasks) if getattr(args, "selected_tasks", None) else None
     if not cycles:
+        resolved = deepcopy(config)
+        resolved.pop("initialization", None)
         yield None, WorkflowEngine(
-            config=config,
+            config=resolved,
             workdir=workdir,
             force=getattr(args, "force", False),
             dry_run=getattr(args, "dry_run", False),
@@ -185,6 +216,12 @@ def _cycle_engines(
             **resolved.get("context", {}),
             **cycle.render_context(),
         }
+        resolved["tasks"] = [
+            deepcopy(task)
+            for task in resolved.get("tasks", [])
+            if cycle_scope_matches(task.get("cycle_scope"), cycle)
+        ]
+        resolved.pop("initialization", None)
         yield cycle, WorkflowEngine(
             config=resolved,
             workdir=workdir,
@@ -201,6 +238,19 @@ def _heading(command: str, config: dict[str, Any], cycle: CycleContext | None) -
     workflow_name = config.get("workflow", {}).get("name", "workflow")
     title = f"{command.title()} · {workflow_name}"
     return f"{title} · {cycle.cycle_time}" if cycle is not None else title
+
+
+def _initialization_heading(command: str, config: dict[str, Any]) -> str:
+    return _heading(command, config, None) + " · initialization"
+
+
+def _has_cycle_override(args: argparse.Namespace) -> bool:
+    return bool(
+        args.cycle_times
+        or args.cycle_start is not None
+        or args.cycle_end is not None
+        or args.cycle_step is not None
+    )
 
 
 def _reconcile_after_interrupt(engine: WorkflowEngine) -> None:
@@ -329,6 +379,19 @@ class _QuietTerminalReporter(TerminalReporter):
 def _run_plain(
     config: dict[str, Any], args: argparse.Namespace, reporter: TerminalReporter
 ) -> int:
+    initialization = _initialization_engine(config, args, reporter)
+    if initialization is not None:
+        try:
+            reporter.heading(_initialization_heading("run", config))
+            result = initialization.run()
+            if result != 0:
+                return result
+        except KeyboardInterrupt:
+            _reconcile_after_interrupt(initialization)
+            raise
+        finally:
+            initialization.state.close()
+
     for cycle, engine in _cycle_engines(config, args, reporter):
         try:
             reporter.heading(_heading("run", config, cycle))
@@ -359,8 +422,7 @@ def _run_interactive(config: dict[str, Any], args: argparse.Namespace) -> int:
             color=_tui_color_enabled(args.color),
             completion_future=future,
         )
-        # If the user closes the TUI with q before execution completes, the
-        # worker is deliberately allowed to finish. q is never cancellation.
+        # Closing the TUI with q is observation-only; execution continues.
         return future.result()
 
 
@@ -390,6 +452,15 @@ def _main(argv: list[str] | None = None) -> int:
 
     if args.command == "plan":
         index = 1
+        initialization = _initialization_engine(config, args, reporter)
+        if initialization is not None:
+            try:
+                reporter.heading(_initialization_heading("plan", config))
+                for task_name in initialization.plan():
+                    reporter.plan_item(index, task_name)
+                    index += 1
+            finally:
+                initialization.state.close()
         for cycle, engine in _cycle_engines(config, args, reporter):
             try:
                 reporter.heading(_heading("plan", config, cycle))
@@ -415,6 +486,13 @@ def _main(argv: list[str] | None = None) -> int:
         return _run_plain(config, args, reporter)
 
     if args.command == "status":
+        initialization = _initialization_engine(config, args, reporter)
+        if initialization is not None:
+            try:
+                reporter.heading(_initialization_heading("status", config))
+                initialization.status()
+            finally:
+                initialization.state.close()
         for cycle, engine in _cycle_engines(config, args, reporter):
             try:
                 reporter.heading(_heading("status", config, cycle))
@@ -424,6 +502,13 @@ def _main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "reset":
+        initialization = _initialization_engine(config, args, reporter)
+        if initialization is not None and not _has_cycle_override(args):
+            try:
+                reporter.heading(_initialization_heading("reset", config))
+                initialization.reset()
+            finally:
+                initialization.state.close()
         for cycle, engine in _cycle_engines(config, args, reporter):
             try:
                 reporter.heading(_heading("reset", config, cycle))
@@ -435,6 +520,19 @@ def _main(argv: list[str] | None = None) -> int:
 
     if args.command == "validate":
         failed = False
+        initialization = _initialization_engine(config, args, reporter)
+        if initialization is not None:
+            try:
+                reporter.heading(_initialization_heading("validate", config))
+                problems = initialization.validate()
+                if problems:
+                    failed = True
+                    for problem in problems:
+                        reporter.note(problem)
+                else:
+                    reporter.note("Initialization válida e pronta para execução.")
+            finally:
+                initialization.state.close()
         for cycle, engine in _cycle_engines(config, args, reporter):
             try:
                 reporter.heading(_heading("validate", config, cycle))
@@ -450,6 +548,13 @@ def _main(argv: list[str] | None = None) -> int:
         return 2 if failed else 0
 
     if args.command == "explain":
+        initialization = _initialization_engine(config, args, reporter)
+        if initialization is not None:
+            try:
+                reporter.heading(_initialization_heading("explain", config))
+                initialization.explain()
+            finally:
+                initialization.state.close()
         for cycle, engine in _cycle_engines(config, args, reporter):
             try:
                 reporter.heading(_heading("explain", config, cycle))

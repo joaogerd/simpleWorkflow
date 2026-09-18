@@ -1,0 +1,42 @@
+format_version: 1
+
+workflow:
+  name: initialization_cycle_example
+
+context:
+  python: python
+
+initialization:
+  tasks:
+    - name: initialize
+      argv:
+        - "{python}"
+        - -c
+        - "print('initialize once')"
+
+cycle:
+  start: "2018-04-15T00:00:00Z"
+  end: "2018-04-15T18:00:00Z"
+  step: PT6H
+
+tasks:
+  - name: analysis
+    argv:
+      - "{python}"
+      - -c
+      - "print('analysis {cycle_time} ({cycle_index}/{cycle_count})')"
+
+  - name: forecast
+    depends_on: [analysis]
+    argv:
+      - "{python}"
+      - -c
+      - "print('forecast from {cycle_time}')"
+
+  - name: next_cycle_product
+    cycle_scope: not_last
+    depends_on: [forecast]
+    argv:
+      - "{python}"
+      - -c
+      - "print('next-cycle product {next_cycle_time}')"
