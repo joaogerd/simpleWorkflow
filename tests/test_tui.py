@@ -66,7 +66,7 @@ def test_monitor_mounts_with_approved_five_views_and_inspector(tmp_path: Path) -
             assert app.query_one("#cycles-table") is not None
             assert app.query_one("#campaign-view") is not None
             assert app.query_one("#problems-table") is not None
-            assert app.query_one("#full-log") is not None
+            assert app.query_one("#log-viewer") is not None
             assert app.selected_cycle_id == "2018041506"
             assert app.selected_task == "analysis"
 
