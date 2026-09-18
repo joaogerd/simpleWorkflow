@@ -144,3 +144,32 @@ def test_tui_dry_run_is_rejected_without_creating_state(
     assert cli.main(["run", str(workflow), "--ui", "tui", "--dry-run"]) == 2
     assert "--ui tui" in capsys.readouterr().err
     assert not (tmp_path / ".simpleworkflow").exists()
+
+
+def test_tui_run_keeps_engine_execution_on_main_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text(
+        "workflow: {name: main_thread_tui}\n"
+        "tasks:\n"
+        "  - name: quick\n"
+        "    argv: ['python', '-c', 'print(123)']\n",
+        encoding="utf-8",
+    )
+    observed_threads: list[threading.Thread] = []
+    original_run_plain = cli._run_plain
+
+    def observed_run_plain(*args: object, **kwargs: object) -> int:
+        observed_threads.append(threading.current_thread())
+        return original_run_plain(*args, **kwargs)
+
+    def close_monitor(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(cli, "tui_available", lambda: True)
+    monkeypatch.setattr(cli, "_run_plain", observed_run_plain)
+    monkeypatch.setattr(cli, "_launch_monitor", close_monitor)
+
+    assert cli.main(["run", str(workflow), "--ui", "tui", "--color", "never"]) == 0
+    assert observed_threads == [threading.main_thread()]
