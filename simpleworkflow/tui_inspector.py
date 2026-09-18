@@ -15,7 +15,7 @@ from textual.message import Message
 from textual.widgets import Button, Collapsible, DataTable, Static
 
 from .monitor import AttemptSnapshot, TaskSnapshot
-from .tui_resources import discover_attempt_resources, InspectableResource
+from .tui_resources import InspectableResource, discover_attempt_resources
 
 
 _STATUS = {
