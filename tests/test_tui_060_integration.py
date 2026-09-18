@@ -203,6 +203,7 @@ def test_inspector_opens_each_persisted_stream_with_same_viewer(tmp_path: Path) 
             }
             for key, fragment in expected.items():
                 assert inspector.focus_resource(key)
+                table.focus()
                 await pilot.press("enter")
                 await pilot.pause()
                 viewer = app.screen.query_one(TextFileViewer)
