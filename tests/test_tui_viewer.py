@@ -150,3 +150,38 @@ def test_viewer_bounds_large_files(tmp_path: Path) -> None:
             assert "truncated" in viewer.status_message.lower()
 
     asyncio.run(scenario())
+
+
+def test_viewer_discovers_existing_related_files_from_visible_log(tmp_path: Path) -> None:
+    attempt_dir = tmp_path / "attempt-001"
+    attempt_dir.mkdir()
+    cwd = tmp_path / "case"
+    cwd.mkdir()
+    manifest = cwd / "manifest.json"
+    manifest.write_text('{"accepted": true}\n', encoding="utf-8")
+    log = attempt_dir / "stdout.log"
+    log.write_text(
+        f"[OK] validation manifest accepted: {manifest}\n",
+        encoding="utf-8",
+    )
+    app = ViewerTestApp(_resource(log, follow=True))
+
+    async def scenario() -> None:
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            viewer = app.query_one(TextFileViewer)
+            viewer.open_resource(
+                _resource(log, follow=True),
+                cwd=cwd,
+                attempt_dir=attempt_dir,
+                known_paths=(log,),
+            )
+            await pilot.pause()
+
+            assert [resource.path for resource in viewer.related_resources] == [manifest]
+            assert viewer.select_related(manifest)
+            table = app.query_one("#viewer-related")
+            assert table.display
+            assert table.cursor_row == 0
+
+    asyncio.run(scenario())
