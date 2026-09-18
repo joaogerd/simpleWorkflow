@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from concurrent.futures import Future
 from pathlib import Path
 
 from simpleworkflow.runs import RunRecorder
