@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import os
 from pathlib import Path
 
@@ -217,3 +218,39 @@ def test_no_color_does_not_change_ui_mode_selection(monkeypatch: pytest.MonkeyPa
         )
         == "tui"
     )
+
+
+
+def test_explicit_plain_mode_does_not_import_textual_frontend(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text(
+        "workflow: {name: plain_without_tui_import}\n"
+        "tasks:\n"
+        "  - name: hello\n"
+        "    argv: ['python', '-c', 'print(123)']\n",
+        encoding="utf-8",
+    )
+    real_import = builtins.__import__
+
+    def guarded_import(
+        name: str,
+        globals: object = None,
+        locals: object = None,
+        fromlist: object = (),
+        level: int = 0,
+    ) -> object:
+        if name.startswith("simpleworkflow.tui"):
+            raise AssertionError("plain mode imported the optional Textual frontend")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    assert cli.main(
+        ["run", str(workflow), "--ui", "plain", "--color", "never"]
+    ) == 0
+    output = capsys.readouterr().out
+    assert "▶ RUN" in output
+    assert "✔ OK" in output
