@@ -15,7 +15,10 @@ from textual.message import Message
 from textual.widgets import Button, Collapsible, DataTable, Static
 
 from .monitor import AttemptSnapshot, TaskSnapshot
-from .tui_resources import InspectableResource, discover_attempt_resources
+from .tui_resources import (
+    InspectableResource,
+    discover_attempt_resources,
+)
 
 
 _STATUS = {
@@ -224,7 +227,7 @@ class TaskInspector(Vertical):
 
     def on_mount(self) -> None:
         self._configure_tables()
-        self._render()
+        self._refresh_content()
 
     def _configure_tables(self) -> None:
         resources = self.query_one("#inspector-resources", DataTable)
@@ -260,9 +263,9 @@ class TaskInspector(Vertical):
             task.cycle_id if task else None,
             index,
         )
-        self._render()
+        self._refresh_content()
 
-    def _render(self) -> None:
+    def _refresh_content(self) -> None:
         try:
             self._configure_tables()
             primary = self.query_one("#inspector-primary", Static)
@@ -446,7 +449,7 @@ class TaskInspector(Vertical):
             self.task_snapshot.cycle_id,
             target,
         )
-        self._render()
+        self._refresh_content()
 
     def action_previous_attempt(self) -> None:
         self._select_attempt(self.context.attempt_index + 1)
