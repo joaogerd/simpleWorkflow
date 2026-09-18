@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shlex
 from concurrent.futures import Future
 from datetime import date, datetime
 from pathlib import Path
@@ -35,6 +34,7 @@ from .monitor import (
     TaskSnapshot,
     load_monitor_snapshot,
 )
+from .tui_inspector import TaskInspector
 
 _STATUS = {
     "pending": ("○", "PENDING", "dim"),
@@ -304,16 +304,12 @@ class WorkflowTui(App[None]):
         border: none; background: #171a21; color: #d7dae0;
     }
     #task-tree { height: 1fr; padding: 0 1; }
-    #inspector { height: 1fr; min-height: 8; padding: 1 2; }
+    #inspector { height: auto; max-height: 16; }
     #period-title {
         height: 2; padding: 0 1; border-top: solid #303744;
         color: #9fb9ff; text-style: bold; content-align: left middle;
     }
     #period-matrix { height: 9; min-height: 5; margin: 0; }
-    #open-logs {
-        width: 16; height: 1; min-height: 1; margin: 0 0 1 2; padding: 0 1;
-        border: none; background: #0d0f13; color: #67e8f9; text-style: underline;
-    }
     #cycles-table, #problems-table, #campaign-table { height: 1fr; margin: 1 0; }
     #campaign-view { height: 1fr; }
     #campaign-summary { height: auto; max-height: 7; padding: 1 2 0 2; }
@@ -423,8 +419,7 @@ class WorkflowTui(App[None]):
                         yield Tree(self.snapshot.workflow_name, id="task-tree")
                     with Vertical(id="right"):
                         yield Label("INSPECTOR", classes="pane-title")
-                        yield Static(id="inspector")
-                        yield Button("Logs", id="open-logs")
+                        yield TaskInspector(color=self.color_enabled, id="inspector")
                         yield Label("", id="period-title")
                         yield DataTable(
                             id="period-matrix",
@@ -1234,113 +1229,13 @@ class WorkflowTui(App[None]):
         except Exception:
             pass
 
-    def _task_resources(self, task_name: str) -> str | None:
-        task = self.task_map.get(task_name)
-        if not isinstance(task, dict):
-            return None
-        if task.get("executor", "local") != "pbs":
-            return "local"
-        pbs = task.get("pbs")
-        if not isinstance(pbs, dict):
-            return "PBS"
-        parts: list[str] = []
-        for key, label in (
-            ("queue", "queue"),
-            ("select", "nodes"),
-            ("ncpus", "cpus"),
-            ("mpiprocs", "ranks"),
-            ("walltime", "walltime"),
-        ):
-            if pbs.get(key) is not None:
-                parts.append(f"{label} {pbs[key]}")
-        return " · ".join(parts) or "PBS"
-
-    def _task_dependencies(self, task_name: str) -> str | None:
-        task = self.task_map.get(task_name)
-        if not isinstance(task, dict):
-            return None
-        dependencies = task.get("depends_on", []) or []
-        if isinstance(dependencies, str):
-            dependencies = [dependencies]
-        if not isinstance(dependencies, list) or not dependencies:
-            return None
-        return ", ".join(str(item) for item in dependencies)
-
-    def _task_outputs(self, task_name: str) -> str | None:
-        task = self.task_map.get(task_name)
-        if not isinstance(task, dict):
-            return None
-        outputs = task.get("outputs")
-        if outputs is None:
-            return None
-        if isinstance(outputs, list):
-            return ", ".join(str(item) for item in outputs)
-        return str(outputs)
-
     def _refresh_inspector(self) -> None:
-        inspector = self.query_one("#inspector", Static)
-        open_logs = self.query_one("#open-logs", Button)
+        inspector = self.query_one("#inspector", TaskInspector)
         task = self._selected_task_snapshot()
-        if task is None:
-            inspector.update("[dim]No task selected.[/dim]")
-            open_logs.disabled = True
-            open_logs.label = "Logs"
-            return
-        attempt: AttemptSnapshot | None = task.attempt
-        backend = attempt.executor if attempt and attempt.executor else None
-        if backend is None:
-            config_task = self.task_map.get(task.name, {})
-            backend = (
-                str(config_task.get("executor", "local"))
-                if isinstance(config_task, dict)
-                else "local"
-            )
-
-        available_logs = attempt.available_logs if attempt is not None else {}
-        open_logs.disabled = not available_logs
-        open_logs.label = f"Logs ({len(available_logs)})" if available_logs else "Logs"
-
-        task_scope = task.cycle_id or ("workflow" if self.snapshot.cycles else "—")
-        fields: list[tuple[str, str]] = [
-            ("task", escape(task.name)),
-            ("cycle", escape(task_scope)),
-            ("status", _status_markup(task.status, color=self.color_enabled)),
-            ("backend", escape(backend)),
-        ]
-        if attempt is not None:
-            fields.append(("attempt", str(attempt.attempt)))
-            if attempt.started_at:
-                fields.append(("started", escape(attempt.started_at)))
-            if attempt.finished_at:
-                fields.append(("finished", escape(attempt.finished_at)))
-            elapsed = _elapsed(attempt.started_at, attempt.finished_at)
-            if elapsed is not None:
-                fields.append(("elapsed", _format_duration(elapsed)))
-            if attempt.command:
-                fields.append(("command", escape(shlex.join(attempt.command))))
-            if attempt.cwd:
-                fields.append(("working dir", escape(attempt.cwd)))
-            if attempt.job_id:
-                fields.append(("PBS job id", escape(attempt.job_id)))
-        if task.return_code is not None:
-            fields.append(("return code", str(task.return_code)))
-        dependencies = self._task_dependencies(task.name)
-        if dependencies:
-            fields.append(("dependencies", escape(dependencies)))
-        outputs = self._task_outputs(task.name)
-        if outputs:
-            fields.append(("outputs", escape(outputs)))
-        resources = self._task_resources(task.name)
-        if resources and backend == "pbs":
-            fields.append(("resources", escape(resources)))
-        if task.reason and task.status in _ATTENTION:
-            fields.append(("reason", escape(task.reason)))
-        if task.attempt_path:
-            fields.append(("attempt path", escape(task.attempt_path)))
-        inspector.update(
-            "\n\n".join(
-                f"[dim]{name:<12}[/dim] {value}" for name, value in fields
-            )
+        config_task = self.task_map.get(task.name, {}) if task is not None else {}
+        inspector.set_task(
+            task,
+            config_task if isinstance(config_task, dict) else {},
         )
 
     def _refresh_log_buttons(self, attempt: AttemptSnapshot | None) -> None:
