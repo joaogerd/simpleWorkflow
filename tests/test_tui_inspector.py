@@ -81,7 +81,7 @@ def _task(*attempts: AttemptSnapshot, status: str = "running") -> TaskSnapshot:
 class InspectorTestApp(App[None]):
     def __init__(self, task: TaskSnapshot, config_task: dict[str, object]) -> None:
         super().__init__()
-        self.task = task
+        self.task_snapshot = task
         self.config_task = config_task
         self.opened: list[InspectableResource] = []
         self.copied: list[str] = []
@@ -90,7 +90,7 @@ class InspectorTestApp(App[None]):
         yield TaskInspector(id="inspector")
 
     def on_mount(self) -> None:
-        self.query_one(TaskInspector).set_task(self.task, self.config_task)
+        self.query_one(TaskInspector).set_task(self.task_snapshot, self.config_task)
 
     def on_task_inspector_open_resource(self, event: TaskInspector.OpenResource) -> None:
         self.opened.append(event.resource)
