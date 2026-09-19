@@ -9,9 +9,10 @@ from textual.widgets import DataTable
 
 from simpleworkflow.runs import RunRecorder
 from simpleworkflow.state import WorkflowState
-from simpleworkflow.tui import WorkflowTui
+from simpleworkflow.tui import HelpScreen, WorkflowTui
 from simpleworkflow.tui_inspector import TaskInspector
-from simpleworkflow.tui_viewer import TextFileViewer
+from simpleworkflow.tui_resources import InspectableResource
+from simpleworkflow.tui_viewer import TextFileViewer, TextViewerScreen
 
 
 def _config(workflow: Path, *, executor: str = "pbs") -> dict[str, object]:
@@ -283,6 +284,112 @@ def test_log_manifest_path_becomes_openable_resource(tmp_path: Path) -> None:
 
             opened = app.screen.query_one("#context-viewer", TextFileViewer)
             assert '"accepted": true' in opened.text
+
+    asyncio.run(scenario())
+
+
+def test_json_viewer_closes_with_escape_or_q_without_exiting_app(tmp_path: Path) -> None:
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text('{"accepted": true}\n', encoding="utf-8")
+    app = _make_app(
+        tmp_path,
+        executor="local",
+        stdout_text=f"[OK] validation manifest accepted: {manifest}\n",
+    )
+
+    async def open_manifest(pilot: object) -> None:
+        viewer = app.query_one("#log-viewer", TextFileViewer)
+        assert viewer.select_related(manifest)
+        related = app.query_one("#viewer-related", DataTable)
+        related.focus()
+        related.action_select_cursor()
+        await pilot.pause()  # type: ignore[attr-defined]
+        assert isinstance(app.screen, TextViewerScreen)
+        assert '"accepted": true' in app.screen.query_one(TextFileViewer).text
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 35)) as pilot:
+            await pilot.pause()
+            await pilot.press("5")
+            await pilot.pause()
+
+            await open_manifest(pilot)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, TextViewerScreen)
+            assert app.query_one("#views") is not None
+
+            await open_manifest(pilot)
+            await pilot.press("q")
+            await pilot.pause()
+            assert not isinstance(app.screen, TextViewerScreen)
+            assert app.query_one("#views") is not None
+
+            # Repeated open/close cycles must not leave stale modal state.
+            await open_manifest(pilot)
+            await pilot.press("escape")
+            await pilot.pause()
+            await open_manifest(pilot)
+            await pilot.press("q")
+            await pilot.pause()
+            assert not isinstance(app.screen, TextViewerScreen)
+
+    asyncio.run(scenario())
+
+
+def test_help_closes_with_escape_or_q_and_has_contextual_shortcuts(tmp_path: Path) -> None:
+    app = _make_app(tmp_path)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 35)) as pilot:
+            await pilot.pause()
+            main_footer = str(app.query_one("#shortcut-line").render())
+            assert "Enter" in main_footer
+            assert "?" in main_footer
+            assert "q" in main_footer
+
+            for close_key in ("escape", "q"):
+                await pilot.press("?")
+                await pilot.pause()
+                assert isinstance(app.screen, HelpScreen)
+                help_footer = str(app.screen.query_one("#help-shortcuts").render())
+                assert "Esc" in help_footer
+                assert "q" in help_footer
+                await pilot.press(close_key)
+                await pilot.pause()
+                assert not isinstance(app.screen, HelpScreen)
+                assert app.query_one("#views") is not None
+
+    asyncio.run(scenario())
+
+
+def test_viewer_bindings_and_footer_expose_safe_navigation(tmp_path: Path) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text("enabled: true\n", encoding="utf-8")
+    app = _make_app(tmp_path, executor="local", stdout_text=str(path))
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 35)) as pilot:
+            await pilot.pause()
+            app.push_screen(
+                TextViewerScreen(
+                    InspectableResource(
+                        key="config",
+                        label="config.yaml",
+                        path=path,
+                        kind="config",
+                        origin="test",
+                    )
+                )
+            )
+            await pilot.pause()
+            footer = str(app.screen.query_one("#viewer-shortcuts").render())
+            assert "Esc" in footer
+            assert "q" in footer
+            assert "PgUp/PgDn" in footer
+            assert "?" in footer
+            keys = {binding.key for binding in app.screen.BINDINGS}
+            assert {"escape", "q", "question_mark", "ctrl+c"} <= keys
 
     asyncio.run(scenario())
 

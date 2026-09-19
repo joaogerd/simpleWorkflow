@@ -80,41 +80,62 @@ _PROCESS_ORDER = ("OBS", "JEDI", "MPAS")
 
 _HELP_TEXT = """[bold]simpleWorkflow monitor[/bold]
 
-↑ / ↓        select task
+[bold]Navigation[/bold]
+↑ / ↓        select item or scroll text
 ← / →        previous / next cycle
-/            filter tasks
-Enter        inspect on narrow terminals
-Esc          clear filter / return to workflow
-Tab          next view
-Shift+Tab    previous view
-1..5         Monitor / Ciclos / Campanha / Problemas / Logs
-l            logs for selected task
-o / e        output / error log
-f            follow / pause log updates
-r            refresh
-?            help
-q            close monitor
+Tab          next view; Shift+Tab previous view
+1..5         Monitor / Cycles / Campaign / Problems / Logs
+Enter        open or inspect selected item
+Esc          close current context or return
+
+[bold]Files and logs[/bold]
+l            open logs for selected task
+o / e        select output / error log
+PgUp/PgDn    scroll one page
+/            filter tasks or search inside a file
+c            copy selected text or current line
+p            copy file path
+f            turn automatic log follow on/off
+r            refresh now
+
+[bold]General[/bold]
+? / F1       open this help
+q            close current context; quit on the main screen
+Ctrl+C       quit the monitor from anywhere
 
 Dates, cycle buttons and campaign rows are clickable.
 The monitor is read-only. Closing it never cancels the workflow.
-[dim]Esc closes this help.[/dim]"""
+[dim]Esc or q closes this help.[/dim]"""
 
 
 class HelpScreen(ModalScreen[None]):
     CSS = """
-    HelpScreen { align: center middle; background: rgba(0, 0, 0, 55%); }
+    HelpScreen { align: center middle; background: #000000 55%; }
     #help-dialog {
         width: 68; height: auto; max-height: 34; padding: 1 2;
         border: solid #394150; background: #111318; color: #d7dae0;
     }
+    #help-shortcuts {
+        width: 68; height: 1; padding: 0 2;
+        background: #111318; color: #697180;
+    }
     """
-    BINDINGS = [Binding("escape", "dismiss_help", "Close", priority=True)]
+    BINDINGS = [
+        Binding("escape", "dismiss_help", "Close", priority=True),
+        Binding("q", "dismiss_help", "Close", priority=True),
+        Binding("ctrl+c", "exit_monitor", "Exit", priority=True),
+    ]
 
     def compose(self) -> ComposeResult:
-        yield Static(_HELP_TEXT, id="help-dialog")
+        with Vertical():
+            yield Static(_HELP_TEXT, id="help-dialog")
+            yield Static("Esc/q Close   Ctrl+C Exit", id="help-shortcuts")
 
     def action_dismiss_help(self) -> None:
         self.dismiss()
+
+    def action_exit_monitor(self) -> None:
+        self.app.exit()
 
 
 def _task_names(config: dict[str, Any]) -> list[str]:
@@ -331,6 +352,7 @@ class WorkflowTui(App[None]):
 
     BINDINGS = [
         ("q", "quit", "Quit"),
+        Binding("ctrl+c", "quit", "Quit", priority=True),
         ("left", "previous_cycle", "Previous cycle"),
         ("right", "next_cycle", "Next cycle"),
         Binding("tab", "next_view", "Next view", priority=True),
@@ -349,6 +371,7 @@ class WorkflowTui(App[None]):
         Binding("enter", "inspect", "Inspect", priority=True),
         Binding("escape", "escape_context", "Back", priority=True),
         ("question_mark", "show_help", "Help"),
+        ("f1", "show_help", "Help"),
     ]
 
     def check_action(
@@ -356,6 +379,11 @@ class WorkflowTui(App[None]):
         action: str,
         parameters: tuple[object, ...],
     ) -> bool | None:
+        if action == "escape_context" and isinstance(
+            self.screen,
+            (HelpScreen, TextViewerScreen),
+        ):
+            return None
         if action != "inspect":
             return True
         del parameters
@@ -461,7 +489,7 @@ class WorkflowTui(App[None]):
                     yield Static(id="log-title")
                     for button_id, key in _LOG_BUTTONS.items():
                         yield Button(_LOG_LABELS[key], id=button_id, classes="log-button")
-                    yield Button("FOLLOW ●", id="log-follow")
+                    yield Button("Follow: ON", id="log-follow")
                 yield TextFileViewer(
                     refresh_seconds=self.refresh_seconds,
                     id="log-viewer",
@@ -491,21 +519,35 @@ class WorkflowTui(App[None]):
     def _apply_responsive_layout(self) -> None:
         try:
             body = self.query_one("#monitor-main")
-            shortcut = self.query_one("#shortcut-line", Static)
         except Exception:
             return
         narrow = self.size.width < 86
         body.set_class(narrow, "narrow")
-        shortcut.update(
-            "? help   Enter inspect   Tab view   q quit"
-            if narrow
-            else (
-                "↑↓ task   ←→ cycle   / filter   Enter inspect   Tab view   l logs   "
-                "f follow   r refresh   ? help   q quit"
-            )
-        )
+        self._update_shortcuts(narrow=narrow)
         if not narrow:
             body.remove_class("inspecting")
+
+    def _update_shortcuts(self, *, narrow: bool | None = None) -> None:
+        try:
+            views = self.query_one("#views", TabbedContent)
+            shortcut = self.query_one("#shortcut-line", Static)
+        except Exception:
+            return
+        if narrow is None:
+            narrow = self.size.width < 86
+        active = views.active or "monitor"
+        if active == "logs":
+            text = "↑/↓ Scroll   PgUp/PgDn Page   f Follow   / Search   ? Help   q Exit"
+        elif active == "monitor" and narrow:
+            text = "↑/↓ Navigate   Enter Open   Esc Back   ? Help   q Exit"
+        elif active == "monitor":
+            text = (
+                "↑/↓ Navigate   ←/→ Cycle   Enter Open   Tab View   "
+                "l Logs   ? Help   q Exit"
+            )
+        else:
+            text = "↑/↓ Navigate   Enter Open   Tab View   Esc Back   ? Help   q Exit"
+        shortcut.update(text)
 
     def _configure_tables(self) -> None:
         cycles = self.query_one("#cycles-table", DataTable)
@@ -950,12 +992,21 @@ class WorkflowTui(App[None]):
         views.active = _VIEW_IDS[(index + delta) % len(_VIEW_IDS)]
         if views.active == "campaign":
             self._sync_campaign_cursor()
+        self._update_shortcuts()
 
     def action_select_view(self, view_id: str) -> None:
         if view_id in _VIEW_IDS:
             self.query_one("#views", TabbedContent).active = view_id
             if view_id == "campaign":
                 self._sync_campaign_cursor()
+            self._update_shortcuts()
+
+    def on_tabbed_content_tab_activated(
+        self,
+        event: TabbedContent.TabActivated,
+    ) -> None:
+        if event.tabbed_content.id == "views":
+            self._update_shortcuts()
 
     def action_show_filter(self) -> None:
         field = self.query_one("#task-filter", Input)
@@ -978,6 +1029,7 @@ class WorkflowTui(App[None]):
         if self.selected_task is not None:
             self.query_one("#views", TabbedContent).active = "logs"
             self._refresh_logs(force=True)
+            self._update_shortcuts()
 
     def action_select_output(self) -> None:
         self._select_preferred_log(error=False)
@@ -1398,11 +1450,11 @@ class WorkflowTui(App[None]):
         try:
             viewer = self.query_one("#log-viewer", TextFileViewer)
         except Exception:
-            button.label = "FOLLOW ●"
+            button.label = "Follow: ON"
             button.set_class(True, "following")
             return
         following = viewer.state.follow
-        button.label = "FOLLOW ●" if following else "FOLLOW ‖"
+        button.label = "Follow: ON" if following else "Follow: OFF"
         button.set_class(following, "following")
 
     def _select_log_resource(self, key: str | None, *, force: bool = True) -> None:
@@ -1489,6 +1541,13 @@ class WorkflowTui(App[None]):
                 known_paths=known_paths,
             )
         )
+
+    def on_text_file_viewer_follow_changed(
+        self,
+        event: TextFileViewer.FollowChanged,
+    ) -> None:
+        if event.viewer_id == "log-viewer":
+            self._refresh_follow_button()
 
     def on_task_inspector_copy_value(
         self,
