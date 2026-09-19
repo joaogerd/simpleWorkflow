@@ -94,6 +94,8 @@ class CycleContext:
             "cycle_hour": self.value.strftime("%H"),
             "cycle_index": str(self.index),
             "cycle_count": str(self.count),
+            "is_first": "true" if self.is_first else "false",
+            "is_last": "true" if self.is_last else "false",
             "cycle_is_first": "true" if self.is_first else "false",
             "cycle_is_last": "true" if self.is_last else "false",
         }
@@ -155,17 +157,88 @@ def validate_cycle_mapping(value: Any) -> None:
         return
     if not isinstance(value, dict):
         raise CycleConfigurationError("'cycle' must be a mapping.")
-    unknown = set(value) - {"start", "end", "step"}
+    unknown = set(value) - {"start", "end", "duration", "step", "interval"}
     if unknown:
         names = ", ".join(sorted(unknown))
         raise CycleConfigurationError(f"'cycle' has unsupported keys: {names}.")
-    missing = [field for field in ("start", "end", "step") if field not in value]
-    if missing:
-        names = ", ".join(missing)
-        raise CycleConfigurationError(f"'cycle' is missing required field(s): {names}.")
+    if "start" not in value:
+        raise CycleConfigurationError("'cycle' is missing required field(s): start.")
+
+    end_fields = [field for field in ("end", "duration") if field in value]
+    if not end_fields:
+        raise CycleConfigurationError(
+            "'cycle' is missing required field: end or duration."
+        )
+    if len(end_fields) > 1:
+        raise CycleConfigurationError(
+            "'cycle' must define only one of 'end' or 'duration'."
+        )
+
+    interval_fields = [field for field in ("step", "interval") if field in value]
+    if not interval_fields:
+        raise CycleConfigurationError(
+            "'cycle' is missing required field: step or interval."
+        )
+    if len(interval_fields) > 1:
+        raise CycleConfigurationError(
+            "'cycle' must define only one of 'step' or 'interval'."
+        )
+
     parse_cycle_time(value["start"], label="cycle.start")
-    parse_cycle_time(value["end"], label="cycle.end")
-    parse_iso_duration(value["step"], label="cycle.step")
+    if "end" in value:
+        parse_cycle_time(value["end"], label="cycle.end")
+    else:
+        parse_iso_duration(value["duration"], label="cycle.duration")
+    parse_iso_duration(value[interval_fields[0]], label=f"cycle.{interval_fields[0]}")
+
+
+def _resolved_range(
+    config: dict[str, Any],
+    *,
+    start: str | None = None,
+    end: str | None = None,
+    step: str | None = None,
+) -> tuple[str, str, str]:
+    """Resolve one inclusive range while preserving compatible field aliases."""
+    if config:
+        validate_cycle_mapping(config)
+
+    raw_start = start if start is not None else config.get("start")
+    raw_step = step
+    if raw_step is None:
+        raw_step = config.get("step", config.get("interval"))
+
+    raw_end: Any = end
+    if raw_end is None:
+        if "end" in config:
+            raw_end = config["end"]
+        elif "duration" in config and raw_start is not None:
+            if not isinstance(raw_start, str):
+                raise CycleConfigurationError("Cycle range start must be a string.")
+            first = parse_cycle_time(raw_start, label="cycle start")
+            duration = parse_iso_duration(config["duration"], label="cycle duration")
+            raw_end = _iso(first.value + duration)
+
+    missing = [
+        label
+        for label, value in (
+            ("start", raw_start),
+            ("end or duration", raw_end),
+            ("step or interval", raw_step),
+        )
+        if value is None
+    ]
+    if missing:
+        raise CycleConfigurationError("Cycle range requires " + ", ".join(missing) + ".")
+    if (
+        not isinstance(raw_start, str)
+        or not isinstance(raw_end, str)
+        or not isinstance(raw_step, str)
+    ):
+        raise CycleConfigurationError(
+            "Cycle range start, end/duration, and step/interval must resolve to strings."
+        )
+    return raw_start, raw_end, raw_step
 
 
 def _range_values(start: str, end: str, step: str) -> list[datetime]:
@@ -226,12 +299,8 @@ def resolve_cycle_contexts(
             raise CycleConfigurationError("--cycle-time values must not repeat a cycle.")
 
         if cycle_config:
-            validate_cycle_mapping(cycle_config)
-            full = _positioned(
-                _range_values(
-                    cycle_config["start"], cycle_config["end"], cycle_config["step"]
-                )
-            )
+            raw_start, raw_end, raw_step = _resolved_range(cycle_config)
+            full = _positioned(_range_values(raw_start, raw_end, raw_step))
             by_id = {cycle.cycle_id: cycle for cycle in full}
             missing = [cycle.cycle_id for cycle in parsed if cycle.cycle_id not in by_id]
             if missing:
@@ -246,17 +315,10 @@ def resolve_cycle_contexts(
     if not config and all(value is None for value in (start, end, step)):
         return []
 
-    raw_start = start if start is not None else config.get("start")
-    raw_end = end if end is not None else config.get("end")
-    raw_step = step if step is not None else config.get("step")
-    missing = [
-        label
-        for label, value in (("start", raw_start), ("end", raw_end), ("step", raw_step))
-        if value is None
-    ]
-    if missing:
-        raise CycleConfigurationError("Cycle range requires " + ", ".join(missing) + ".")
-    if not isinstance(raw_start, str) or not isinstance(raw_end, str) or not isinstance(raw_step, str):
-        raise CycleConfigurationError("Cycle range start, end, and step must be strings.")
-
+    raw_start, raw_end, raw_step = _resolved_range(
+        config,
+        start=start,
+        end=end,
+        step=step,
+    )
     return _positioned(_range_values(raw_start, raw_end, raw_step))

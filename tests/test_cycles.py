@@ -9,7 +9,11 @@ import pytest
 
 from simpleworkflow.cli import main
 from simpleworkflow.config import load_workflow
-from simpleworkflow.cycles import CycleConfigurationError, resolve_cycle_contexts
+from simpleworkflow.cycles import (
+    CycleConfigurationError,
+    cycle_scope_matches,
+    resolve_cycle_contexts,
+)
 
 
 def _write_cycle_workflow(path: Path, output_dir: Path) -> Path:
@@ -348,6 +352,8 @@ def test_cycle_context_exposes_position_and_neighbors() -> None:
 
     assert first["cycle_index"] == "0"
     assert first["cycle_count"] == "3"
+    assert first["is_first"] == "true"
+    assert first["is_last"] == "false"
     assert first["cycle_is_first"] == "true"
     assert first["cycle_is_last"] == "false"
     assert first["previous_cycle_time"] == ""
@@ -357,6 +363,8 @@ def test_cycle_context_exposes_position_and_neighbors() -> None:
 
     assert middle["cycle_index"] == "1"
     assert middle["cycle_count"] == "3"
+    assert middle["is_first"] == "false"
+    assert middle["is_last"] == "false"
     assert middle["cycle_is_first"] == "false"
     assert middle["cycle_is_last"] == "false"
     assert middle["previous_cycle_time"] == "2018-04-15T00:00:00Z"
@@ -366,6 +374,8 @@ def test_cycle_context_exposes_position_and_neighbors() -> None:
 
     assert last["cycle_index"] == "2"
     assert last["cycle_count"] == "3"
+    assert last["is_first"] == "false"
+    assert last["is_last"] == "true"
     assert last["cycle_is_first"] == "false"
     assert last["cycle_is_last"] == "true"
     assert last["previous_cycle_time"] == "2018-04-15T06:00:00Z"
@@ -606,3 +616,165 @@ def test_workflow_without_initialization_or_scope_remains_compatible(tmp_path: P
     assert "initialization" not in loaded
     assert loaded["tasks"][0].get("cycle_scope") is None
     assert main(["run", str(workflow), "--workdir", str(tmp_path / "state")]) == 0
+
+
+@pytest.mark.parametrize(
+    ("duration", "expected_count", "expected_last"),
+    [
+        ("PT72H", 13, "20180418T000000Z"),
+        ("PT168H", 29, "20180422T000000Z"),
+        ("PT720H", 121, "20180515T000000Z"),
+    ],
+)
+def test_duration_and_interval_generate_inclusive_campaigns(
+    duration: str,
+    expected_count: int,
+    expected_last: str,
+) -> None:
+    cycles = resolve_cycle_contexts(
+        {
+            "start": "2018-04-15T00:00:00Z",
+            "duration": duration,
+            "interval": "PT6H",
+        }
+    )
+
+    assert len(cycles) == expected_count
+    assert cycles[0].cycle_id == "20180415T000000Z"
+    assert cycles[-1].cycle_id == expected_last
+
+
+@pytest.mark.parametrize(
+    ("duration", "expected_count"),
+    [("PT72H", 13), ("PT168H", 29), ("PT720H", 121)],
+)
+def test_not_last_scope_keeps_exact_campaign_position(
+    duration: str,
+    expected_count: int,
+) -> None:
+    cycles = resolve_cycle_contexts(
+        {
+            "start": "2018-04-15T00:00:00Z",
+            "duration": duration,
+            "interval": "PT6H",
+        }
+    )
+
+    assert sum(cycle_scope_matches("not_last", cycle) for cycle in cycles) == (
+        expected_count - 1
+    )
+
+
+def test_cycle_config_rejects_ambiguous_range_aliases(tmp_path: Path) -> None:
+    both_end_forms = tmp_path / "both-end-forms.yaml"
+    both_end_forms.write_text(
+        """
+workflow: {name: invalid_cycle}
+cycle:
+  start: "2018-04-15T00:00:00Z"
+  end: "2018-04-18T00:00:00Z"
+  duration: PT72H
+  step: PT6H
+tasks: []
+""".lstrip(),
+        encoding="utf-8",
+    )
+    with pytest.raises(CycleConfigurationError, match="only one of 'end' or 'duration'"):
+        load_workflow(both_end_forms)
+
+    both_interval_forms = tmp_path / "both-interval-forms.yaml"
+    both_interval_forms.write_text(
+        """
+workflow: {name: invalid_cycle}
+cycle:
+  start: "2018-04-15T00:00:00Z"
+  end: "2018-04-18T00:00:00Z"
+  step: PT6H
+  interval: PT6H
+tasks: []
+""".lstrip(),
+        encoding="utf-8",
+    )
+    with pytest.raises(CycleConfigurationError, match="only one of 'step' or 'interval'"):
+        load_workflow(both_interval_forms)
+
+
+def test_cycle_reset_preserves_initialization_state(tmp_path: Path) -> None:
+    products = tmp_path / "products"
+    workflow = _write_scoped_workflow(tmp_path / "workflow.yaml", products)
+    workdir = tmp_path / "state"
+
+    assert main(["run", str(workflow), "--workdir", str(workdir)]) == 0
+    assert (
+        main(
+            [
+                "reset",
+                str(workflow),
+                "--cycle-time",
+                "2018-04-15T06:00:00Z",
+                "--workdir",
+                str(workdir),
+            ]
+        )
+        == 0
+    )
+
+    connection = sqlite3.connect(workdir / "state.sqlite3")
+    init_status = connection.execute(
+        "SELECT status FROM task_state WHERE cycle_id = '' AND task = 'initialize'"
+    ).fetchone()
+    selected_cycle_rows = connection.execute(
+        "SELECT COUNT(*) FROM task_state WHERE cycle_id = ?",
+        ("20180415T060000Z",),
+    ).fetchone()[0]
+    other_cycle_rows = connection.execute(
+        "SELECT COUNT(*) FROM task_state WHERE cycle_id = ?",
+        ("20180415T000000Z",),
+    ).fetchone()[0]
+    connection.close()
+
+    assert init_status == ("success",)
+    assert selected_cycle_rows == 0
+    assert other_cycle_rows > 0
+
+
+def test_full_reset_clears_initialization_and_allows_it_to_run_again(
+    tmp_path: Path,
+) -> None:
+    products = tmp_path / "products"
+    workflow = _write_scoped_workflow(tmp_path / "workflow.yaml", products)
+    workdir = tmp_path / "state"
+
+    assert main(["run", str(workflow), "--workdir", str(workdir)]) == 0
+    assert (products / "order.log").read_text().splitlines().count("INIT") == 1
+
+    assert main(["reset", str(workflow), "--workdir", str(workdir)]) == 0
+    connection = sqlite3.connect(workdir / "state.sqlite3")
+    assert connection.execute("SELECT COUNT(*) FROM task_state").fetchone()[0] == 0
+    connection.close()
+
+    assert main(["run", str(workflow), "--workdir", str(workdir)]) == 0
+    assert (products / "order.log").read_text().splitlines().count("INIT") == 2
+
+
+def test_compact_yaml_task_definitions_do_not_grow_with_campaign_length(
+    tmp_path: Path,
+) -> None:
+    workflow = _write_scoped_workflow(tmp_path / "workflow.yaml", tmp_path / "products")
+    loaded = load_workflow(workflow)
+    initialization_tasks = loaded["initialization"]["tasks"]
+    cycle_tasks = loaded["tasks"]
+    structural_count = len(initialization_tasks) + len(cycle_tasks)
+
+    assert structural_count == 6
+
+    periods = [
+        ("2018-04-18T00:00:00Z", 13),
+        ("2018-04-22T00:00:00Z", 29),
+        ("2018-05-15T00:00:00Z", 121),
+    ]
+    for end, expected_count in periods:
+        cycles = resolve_cycle_contexts(loaded["cycle"], end=end)
+        assert len(cycles) == expected_count
+        assert len(initialization_tasks) + len(cycle_tasks) == structural_count
+
