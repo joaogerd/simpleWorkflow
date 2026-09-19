@@ -159,6 +159,8 @@ task set is executed sequentially for each cycle. All cycles belong to the same
 logical workflow instance and the same `.simpleworkflow/state.sqlite3`; task
 state is separated by the explicit `cycle_id` dimension.
 
+The existing `start/end/step` form remains supported:
+
 ```yaml
 cycle:
   start: "2018-04-15T00:00:00Z"
@@ -166,9 +168,23 @@ cycle:
   step: PT6H
 ```
 
-Both endpoints are inclusive. The example above therefore contains four cycles:
+The equivalent duration form is also accepted:
+
+```yaml
+cycle:
+  start: "2018-04-15T00:00:00Z"
+  duration: PT18H
+  interval: PT6H
+```
+
+Use exactly one of `end` or `duration`, and exactly one of `step` or
+`interval`. `step` and `interval` mean the same thing; `step` remains the
+name used by the existing `--step` CLI option.
+
+Both endpoints are inclusive. The examples above therefore contain four cycles:
 00Z, 06Z, 12Z and 18Z. A range from `2018-04-15T00:00:00Z` through
-`2018-04-18T00:00:00Z` at `PT6H` contains 13 cycles.
+`2018-04-18T00:00:00Z` at `PT6H` contains 13 cycles. Equivalently,
+`duration: PT72H` with `interval: PT6H` also contains 13 cycles.
 
 For every cycle, the following context values are added:
 
@@ -183,12 +199,17 @@ For every cycle, the following context values are added:
 
 {cycle_index}      0
 {cycle_count}      4
+{is_first}         true
+{is_last}          false
+
 {cycle_is_first}   true
 {cycle_is_last}    false
 ```
 
 Position is zero-based: the first cycle has `cycle_index=0` and the last has
-`cycle_index=cycle_count-1`.
+`cycle_index=cycle_count-1`. `is_first` and `is_last` are the preferred
+position flags. The older `cycle_is_first` and `cycle_is_last` names remain
+available as compatibility aliases.
 
 The immediate neighbours are also available:
 
