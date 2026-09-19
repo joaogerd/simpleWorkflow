@@ -8,6 +8,7 @@ from pathlib import Path
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.events import Key
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Input, Static, TextArea
@@ -30,6 +31,50 @@ class ViewerState:
     known_paths: tuple[Path, ...] = ()
 
 
+class ViewerTextArea(TextArea):
+    """Read-only text area that cannot trap an operator inside a modal."""
+
+    BINDINGS = [
+        Binding("escape", "close_context", "Close", priority=True),
+        Binding("q", "close_context", "Close", priority=True),
+        Binding("question_mark", "show_context_help", "Help", priority=True),
+        Binding("f1", "show_context_help", "Help", priority=True),
+        Binding("ctrl+c", "exit_monitor", "Exit", priority=True),
+    ]
+
+    def check_action(
+        self,
+        action: str,
+        parameters: tuple[object, ...],
+    ) -> bool | None:
+        del parameters
+        if action == "close_context":
+            return isinstance(self.screen, TextViewerScreen)
+        return True
+
+    def action_close_context(self) -> None:
+        if isinstance(self.screen, TextViewerScreen):
+            self.screen.dismiss(None)
+
+    def action_show_context_help(self) -> None:
+        show_help = getattr(self.app, "action_show_help", None)
+        if callable(show_help):
+            show_help()
+
+    def action_exit_monitor(self) -> None:
+        self.app.exit()
+
+    def on_key(self, event: Key) -> None:
+        if event.key not in {"up", "pageup", "home"}:
+            return
+        try:
+            viewer = self.query_ancestor(TextFileViewer)
+        except Exception:
+            return
+        if viewer.state.follow:
+            viewer.set_follow(False)
+
+
 class TextFileViewer(Vertical):
     """Searchable, copyable, bounded read-only view of one text resource."""
 
@@ -37,6 +82,12 @@ class TextFileViewer(Vertical):
         def __init__(self, resource: InspectableResource) -> None:
             super().__init__()
             self.resource = resource
+
+    class FollowChanged(Message):
+        def __init__(self, viewer_id: str | None, enabled: bool) -> None:
+            super().__init__()
+            self.viewer_id = viewer_id
+            self.enabled = enabled
 
     BINDINGS = [
         Binding("slash", "show_search", "Search"),
@@ -145,7 +196,7 @@ class TextFileViewer(Vertical):
             cursor_type="row",
             zebra_stripes=False,
         )
-        yield TextArea("", read_only=True, soft_wrap=False, id="viewer-text")
+        yield ViewerTextArea("", read_only=True, soft_wrap=False, id="viewer-text")
         yield Static("", id="viewer-status")
 
     def on_mount(self) -> None:
@@ -269,7 +320,7 @@ class TextFileViewer(Vertical):
         copy_path.disabled = False
         reload_button.disabled = False
         follow.display = resource.follow
-        follow.label = "FOLLOW ●" if self.state.follow else "FOLLOW ‖"
+        follow.label = "Follow: ON" if self.state.follow else "Follow: OFF"
         follow.set_class(self.state.follow, "following")
 
     def _read_bounded(self, path: Path, *, tail: bool) -> tuple[str, bool]:
@@ -342,11 +393,14 @@ class TextFileViewer(Vertical):
 
     def set_follow(self, enabled: bool) -> None:
         resource = self.state.resource
+        previous = self.state.follow
         self.state.follow = bool(enabled and resource is not None and resource.follow)
         self._refresh_controls()
         if self.state.follow:
             self.state.signature = None
             self.reload(force=True)
+        if self.state.follow != previous:
+            self.post_message(self.FollowChanged(self.id, self.state.follow))
 
     def search(self, query: str) -> int:
         self.state.query = query
@@ -485,6 +539,10 @@ class TextViewerScreen(ModalScreen[None]):
 
     BINDINGS = [
         Binding("escape", "close_viewer", "Back", priority=True),
+        Binding("q", "close_viewer", "Back", priority=True),
+        Binding("question_mark", "show_help", "Help", priority=True),
+        Binding("f1", "show_help", "Help", priority=True),
+        Binding("ctrl+c", "exit_monitor", "Exit", priority=True),
     ]
 
     DEFAULT_CSS = """
@@ -494,7 +552,14 @@ class TextViewerScreen(ModalScreen[None]):
     }
     TextViewerScreen > TextFileViewer {
         width: 100%;
-        height: 100%;
+        height: 1fr;
+    }
+    #viewer-shortcuts {
+        height: 1;
+        padding: 0 1;
+        border-top: solid #252b35;
+        background: #111318;
+        color: #697180;
     }
     """
 
@@ -519,6 +584,11 @@ class TextViewerScreen(ModalScreen[None]):
             refresh_seconds=self.refresh_seconds,
             id="context-viewer",
         )
+        yield Static(
+            "↑/↓ Scroll   PgUp/PgDn Page   / Search   c Copy   "
+            "Esc/q Close   ? Help",
+            id="viewer-shortcuts",
+        )
 
     def on_mount(self) -> None:
         self.query_one(TextFileViewer).open_resource(
@@ -539,3 +609,11 @@ class TextViewerScreen(ModalScreen[None]):
 
     def action_close_viewer(self) -> None:
         self.dismiss(None)
+
+    def action_show_help(self) -> None:
+        show_help = getattr(self.app, "action_show_help", None)
+        if callable(show_help):
+            show_help()
+
+    def action_exit_monitor(self) -> None:
+        self.app.exit()

@@ -251,10 +251,13 @@ def test_filter_inspector_logs_and_follow_are_interactive(tmp_path: Path) -> Non
             viewer = app.query_one("#log-viewer", TextFileViewer)
             assert "first line" in viewer.text
             assert viewer.state.follow
+            assert str(app.query_one("#log-follow").label) == "Follow: ON"
+            assert "PgUp/PgDn" in str(app.query_one("#shortcut-line").render())
 
             await pilot.click("#log-follow")
             await pilot.pause()
             assert not viewer.state.follow
+            assert str(app.query_one("#log-follow").label) == "Follow: OFF"
             stdout_path.write_text("first line\nsecond line\n", encoding="utf-8")
             app.refresh_runtime()
             assert "second line" not in viewer.text
@@ -263,6 +266,13 @@ def test_filter_inspector_logs_and_follow_are_interactive(tmp_path: Path) -> Non
             await pilot.pause()
             assert viewer.state.follow
             assert "second line" in viewer.text
+            assert str(app.query_one("#log-follow").label) == "Follow: ON"
+
+            app.query_one("#viewer-text").focus()
+            await pilot.press("up")
+            await pilot.pause()
+            assert not viewer.state.follow
+            assert str(app.query_one("#log-follow").label) == "Follow: OFF"
 
     asyncio.run(scenario())
 
