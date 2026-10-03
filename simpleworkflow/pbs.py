@@ -82,12 +82,22 @@ class PbsExecutor:
         os.replace(temporary, path)
 
     @staticmethod
-    def _pbs_result(output: str) -> int | None:
+    def _pbs_result(output: str) -> tuple[bool, int | None]:
+        """Return whether PBS is terminal and its confirmed exit status, if present."""
         state = _JOB_STATE.search(output)
         if not state or state.group(1).upper() not in {"F", "X"}:
-            return None
+            return False, None
         status = _EXIT_STATUS.search(output)
-        return int(status.group(1)) if status else 75
+        return True, int(status.group(1)) if status else None
+
+    @staticmethod
+    def _unknown_result(metadata: Mapping[str, Any], reason: str) -> ExecutionResult:
+        return ExecutionResult(
+            return_code=None,
+            metadata=metadata,
+            outcome="unknown",
+            reason=reason,
+        )
 
     @staticmethod
     def _scheduler_status_line(job_id: str, output: str) -> str:
@@ -239,6 +249,15 @@ class PbsExecutor:
             command.append("-V")
         command.append(str(script_path.resolve(strict=False)))
 
+        submission_metadata: dict[str, Any] = {
+            "executor": "pbs",
+            "wait_mode": "foreground-poll",
+            "qsub_argv": command,
+            "script": str(script_path.resolve(strict=False)),
+            "job_id": None,
+            "job_stdout": str(worker_stdout.resolve(strict=False)),
+            "job_stderr": str(worker_stderr.resolve(strict=False)),
+        }
         try:
             completed = subprocess.run(
                 command,
@@ -246,61 +265,93 @@ class PbsExecutor:
                 text=True,
                 capture_output=True,
                 check=False,
+                timeout=_CONTROL_TIMEOUT_SECONDS,
             )
+        except subprocess.TimeoutExpired:
+            reason = (
+                "qsub timed out before simpleWorkflow could confirm whether PBS accepted the job"
+            )
+            self._write(submit_stderr, f"simpleWorkflow: {reason}\n")
+            return self._unknown_result(submission_metadata, reason)
         except OSError as error:
             self._write(submit_stderr, f"simpleWorkflow could not start qsub: {error}\n")
-            return ExecutionResult(
-                return_code=127,
-                metadata={
-                    "executor": "pbs",
-                    "wait_mode": "foreground-poll",
-                    "qsub_argv": command,
-                    "script": str(script_path.resolve(strict=False)),
-                    "job_stdout": str(worker_stdout.resolve(strict=False)),
-                    "job_stderr": str(worker_stderr.resolve(strict=False)),
-                },
-            )
+            return ExecutionResult(return_code=127, metadata=submission_metadata)
 
         self._write(submit_stdout, f"[simpleworkflow] qsub: {shlex.join(command)}\n")
         self._write(submit_stdout, completed.stdout)
         self._write(submit_stderr, completed.stderr)
         combined_output = f"{completed.stdout}\n{completed.stderr}"
         job_id = self._job_id(combined_output)
-        base_metadata = {
-            "executor": "pbs",
-            "wait_mode": "foreground-poll",
-            "qsub_argv": command,
-            "script": str(script_path.resolve(strict=False)),
-            "job_id": job_id,
-            "job_stdout": str(worker_stdout.resolve(strict=False)),
-            "job_stderr": str(worker_stderr.resolve(strict=False)),
-        }
-        if completed.returncode != 0 or job_id is None:
-            return ExecutionResult(return_code=completed.returncode or 75, metadata=base_metadata)
+        base_metadata = {**submission_metadata, "job_id": job_id}
+
+        if completed.returncode != 0:
+            return ExecutionResult(return_code=completed.returncode, metadata=base_metadata)
+        if job_id is None:
+            reason = (
+                "qsub returned success but no reliable PBS job ID could be parsed; "
+                "submission outcome is uncertain"
+            )
+            self._write(submit_stderr, f"simpleWorkflow: {reason}\n")
+            return self._unknown_result(base_metadata, reason)
 
         scheduler_record = attempt_dir / "scheduler.json"
         self._write_scheduler_record(scheduler_record, base_metadata)
         qstat = shlex.split(str(self.options.get("qstat", "qstat")))
         qdel = shlex.split(str(self.options.get("qdel", "qdel")))
         interval = float(self.options["poll_interval"])
+        consecutive_query_failures = 0
+
         try:
             while True:
                 try:
                     status = subprocess.run(
-                        [*qstat, "-xf", job_id], text=True, capture_output=True, check=False
+                        [*qstat, "-xf", job_id],
+                        text=True,
+                        capture_output=True,
+                        check=False,
+                        timeout=_CONTROL_TIMEOUT_SECONDS,
                     )
-                except OSError as error:
-                    self._write(submit_stderr, f"simpleWorkflow could not run qstat: {error}\n")
-                    return ExecutionResult(return_code=75, metadata=base_metadata)
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    consecutive_query_failures += 1
+                    self._write(
+                        submit_stderr,
+                        "simpleWorkflow could not confirm PBS job "
+                        f"{job_id} ({consecutive_query_failures}/{_QSTAT_ATTEMPTS}): {error}\n",
+                    )
+                    if consecutive_query_failures >= _QSTAT_ATTEMPTS:
+                        reason = (
+                            f"PBS job {job_id} outcome is uncertain after "
+                            f"{_QSTAT_ATTEMPTS} failed qstat attempts"
+                        )
+                        return self._unknown_result(base_metadata, reason)
+                    time.sleep(interval)
+                    continue
+
                 status_output = f"{status.stdout}\n{status.stderr}"
                 self._write(submit_stdout, self._scheduler_status_line(job_id, status_output))
-                result = self._pbs_result(status_output)
-                if result is not None:
-                    return ExecutionResult(return_code=result, metadata=base_metadata)
                 if status.returncode != 0:
+                    consecutive_query_failures += 1
                     if status.stderr:
                         self._write(submit_stderr, status.stderr)
-                    return ExecutionResult(return_code=75, metadata=base_metadata)
+                    if consecutive_query_failures >= _QSTAT_ATTEMPTS:
+                        reason = (
+                            f"PBS job {job_id} outcome is uncertain after "
+                            f"{_QSTAT_ATTEMPTS} unsuccessful qstat responses"
+                        )
+                        return self._unknown_result(base_metadata, reason)
+                    time.sleep(interval)
+                    continue
+
+                consecutive_query_failures = 0
+                terminal, result = self._pbs_result(status_output)
+                if terminal:
+                    if result is None:
+                        reason = (
+                            f"PBS job {job_id} reached a terminal state without Exit_status; "
+                            "task outcome is uncertain"
+                        )
+                        return self._unknown_result(base_metadata, reason)
+                    return ExecutionResult(return_code=result, metadata=base_metadata)
                 time.sleep(interval)
         except KeyboardInterrupt:
             cancel_command = [*qdel, job_id]
@@ -316,8 +367,9 @@ class PbsExecutor:
                     text=True,
                     capture_output=True,
                     check=False,
+                    timeout=_CONTROL_TIMEOUT_SECONDS,
                 )
-            except OSError as error:
+            except (OSError, subprocess.TimeoutExpired) as error:
                 cancellation["qdel_return_code"] = 127
                 cancellation["qdel_error"] = str(error)
                 self._write(submit_stderr, f"simpleWorkflow could not run qdel: {error}\n")
