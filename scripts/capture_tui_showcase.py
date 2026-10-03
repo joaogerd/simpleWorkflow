@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -28,6 +29,13 @@ EXPECTED_FAILURES = {
     "09-timeout",
 }
 
+GENERATED_DIRS = {
+    "03-artifacts": ("demo-work",),
+    "04-campaign": ("campaign-work",),
+    "05-problems": ("problem-work",),
+    "07-invalid-output": ("invalid-output-work",),
+}
+
 
 def _swf(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -40,6 +48,9 @@ def _swf(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 def _prepare(case: str, workflow: Path) -> None:
+    shutil.rmtree(workflow.parent / ".simpleworkflow", ignore_errors=True)
+    for dirname in GENERATED_DIRS.get(case, ()):
+        shutil.rmtree(workflow.parent / dirname, ignore_errors=True)
     result = _swf("run", str(workflow), "--ui", "plain", "--color", "never")
     if result.returncode != 0 and case not in EXPECTED_FAILURES:
         raise RuntimeError(
