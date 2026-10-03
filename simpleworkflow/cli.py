@@ -407,39 +407,47 @@ def _run_plain(
 
 
 def _run_interactive(config: dict[str, Any], args: argparse.Namespace) -> int:
-    """Keep task execution on the main thread while Textual observes in a worker."""
+    """Run Textual on the main thread while workflow execution uses a worker."""
     workflow_path = Path(
         config.get("__simpleworkflow__", {}).get("source_path", args.workflow)
     ).resolve(strict=False)
     workdir = _resolve_workdir(config, args.workdir)
     completion: Future[int] = Future()
 
-    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="simpleworkflow-monitor") as pool:
-        monitor_future = pool.submit(
-            _launch_monitor,
-            config,
-            workflow_path,
-            workdir,
-            refresh_seconds=1.0,
-            color=_tui_color_enabled(args.color),
-            completion_future=completion,
-        )
+    def run_workflow() -> int:
         try:
             result = _run_plain(config, args, _QuietTerminalReporter())
         except BaseException as error:
             if not completion.done():
                 completion.set_exception(error)
-            # The TUI checks completion every 0.2 s and exits without consuming
-            # the result. Waiting here prevents an orphan terminal thread.
-            monitor_future.result()
             raise
         else:
             if not completion.done():
                 completion.set_result(result)
-            # q may have closed the monitor earlier; either way execution owns
-            # the command lifetime and completes on the signal-capable main thread.
-            monitor_future.result()
             return result
+
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="simpleworkflow-engine") as pool:
+        engine_future = pool.submit(run_workflow)
+        try:
+            # Textual's Linux driver installs signal handlers and therefore must
+            # run in the main thread of the main interpreter.
+            _launch_monitor(
+                config,
+                workflow_path,
+                workdir,
+                refresh_seconds=1.0,
+                color=_tui_color_enabled(args.color),
+                completion_future=completion,
+            )
+        except BaseException:
+            # Do not leave a state-changing workflow thread orphaned if the
+            # frontend itself fails. The executor context waits for completion.
+            engine_future.result()
+            raise
+
+        # q closes only the monitor. The workflow remains authoritative and the
+        # command does not return until execution has completed.
+        return engine_future.result()
 
 
 def _main(argv: list[str] | None = None) -> int:
