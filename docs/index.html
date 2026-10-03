@@ -1,16 +1,44 @@
 <!doctype html>
-<html lang="en">
+<html lang="pt-BR">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta http-equiv="refresh" content="0; url=tutorial/">
-  <title>simpleWorkflow documentation</title>
-  <style>
-    body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0d12;color:#eef2f8;font:16px system-ui,sans-serif}
-    a{color:#8ab4ff}
-  </style>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>simpleWorkflow — Documentação</title>
+<link rel="stylesheet" href="assets/site.css">
 </head>
 <body>
-  <p>Opening the <a href="tutorial/">simpleWorkflow TUI showcase</a>…</p>
-</body>
-</html>
+<nav class="site-nav"><div class="inner">
+  <a class="brand" href="./">simple<span>Workflow</span></a>
+  <div class="nav-links">
+    <a href="tutorial/">Tutorial</a>
+    <a href="tutorial/showcase.html">Galeria TUI</a>
+    <a class="optional" href="https://github.com/joaogerd/simpleWorkflow">GitHub</a>
+  </div>
+</div></nav>
+<header class="hero"><div class="inner">
+  <div class="eyebrow">Workflow simples, estado persistente, diagnóstico claro</div>
+  <h1>Comece simples.<br>Entenda tudo.</h1>
+  <p>simpleWorkflow executa workflows YAML locais ou PBS com dependências, estado persistente, logs por tentativa e uma TUI de monitoramento — sem servidor, daemon ou plataforma central.</p>
+  <div class="actions">
+    <a class="button primary" href="tutorial/">Começar pelo tutorial</a>
+    <a class="button" href="tutorial/showcase.html">Ver a TUI em ação</a>
+  </div>
+</div></header>
+<main>
+  <div class="cards">
+    <div class="card"><h3>Para começar</h3><p>Instale, crie seu primeiro <code>workflow.yaml</code>, valide, planeje e execute em poucos minutos.</p><p style="margin-top:14px"><a href="tutorial/">Tutorial passo a passo →</a></p></div>
+    <div class="card"><h3>Para entender a TUI</h3><p>Veja Monitor, Inspector, Logs, Problemas, Ciclos e Campanha em exemplos reais e reproduzíveis.</p><p style="margin-top:14px"><a href="tutorial/showcase.html">Galeria visual →</a></p></div>
+    <div class="card"><h3>Para uso avançado</h3><p>O repositório mantém documentação detalhada sobre formato YAML, estado persistente, PBS e recuperação.</p><p style="margin-top:14px"><a href="https://github.com/joaogerd/simpleWorkflow/tree/main/docs">Documentação técnica →</a></p></div>
+  </div>
+  <section style="margin-top:46px">
+    <h2>O fluxo mental é pequeno</h2>
+    <div class="grid-2">
+      <div class="card"><h3>1. Descreva</h3><p>Liste tarefas e dependências em YAML usando argumentos explícitos em <code>argv</code>.</p></div>
+      <div class="card"><h3>2. Valide</h3><p>Use <code>swf validate</code> e <code>swf plan</code> antes de executar.</p></div>
+      <div class="card"><h3>3. Execute</h3><p><code>swf run</code> usa TUI no terminal interativo ou saída compacta em batch/CI.</p></div>
+      <div class="card"><h3>4. Diagnostique</h3><p>Estado, tentativas, stdout/stderr e problemas permanecem em <code>.simpleworkflow/</code>.</p></div>
+    </div>
+  </section>
+</main>
+<footer><div class="inner">simpleWorkflow — documentação de usuário e referência visual.</div></footer>
+</body></html>
