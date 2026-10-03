@@ -461,7 +461,7 @@ class WorkflowEngine:
             return False
         self.state.set_status(
             task_name,
-            "success",
+            SUCCESS,
             previous.return_code,
             current.value,
             previous.reason or "assinatura legada validada e atualizada",
@@ -616,7 +616,7 @@ class WorkflowEngine:
                 recorder.write_started(
                     attempt,
                     {
-                        "status": "running",
+                        "status": RUNNING,
                         "command": {"argv": argv, "cwd": str(cwd) if cwd else None, "env": env},
                         "signature": signature.value,
                     },
@@ -631,7 +631,7 @@ class WorkflowEngine:
                 )
                 self.state.set_status(
                     task_name,
-                    "running",
+                    RUNNING,
                     None,
                     signature.value,
                     "tarefa iniciada",
