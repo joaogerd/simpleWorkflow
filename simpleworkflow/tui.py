@@ -84,7 +84,8 @@ _HELP_TEXT = """[bold]simpleWorkflow monitor[/bold]
 [bold]Navigation[/bold]
 ↑ / ↓        select item or scroll text
 ← / →        previous / next cycle
-Tab          next view; Shift+Tab previous view
+Tab          next panel; Shift+Tab previous panel
+Ctrl+Tab     next view; Ctrl+Shift+Tab previous view
 1..5         Monitor / Cycles / Campaign / Problems / Logs
 Enter        open or inspect selected item
 Esc          close current context or return
@@ -368,8 +369,10 @@ class WorkflowTui(App[None]):
         Binding("ctrl+c", "quit", "Quit", priority=True),
         ("left", "previous_cycle", "Previous cycle"),
         ("right", "next_cycle", "Next cycle"),
-        Binding("tab", "next_view", "Next view", priority=True),
-        Binding("shift+tab", "previous_view", "Previous view", priority=True),
+        Binding("tab", "next_panel", "Next panel", priority=True),
+        Binding("shift+tab", "previous_panel", "Previous panel", priority=True),
+        Binding("ctrl+tab", "next_view", "Next view", priority=True),
+        Binding("ctrl+shift+tab", "previous_view", "Previous view", priority=True),
         ("1", "select_view('monitor')", "Monitor"),
         ("2", "select_view('cycles')", "Cycles"),
         ("3", "select_view('campaign')", "Campaign"),
@@ -521,6 +524,7 @@ class WorkflowTui(App[None]):
         self._configure_tables()
         self._apply_responsive_layout()
         self.refresh_runtime(force=True)
+        self.call_after_refresh(self._focus_active_view)
         self.set_interval(self.refresh_seconds, self.refresh_runtime)
         if self.completion_future is not None:
             self.set_interval(0.2, self._check_completion)
@@ -578,16 +582,16 @@ class WorkflowTui(App[None]):
         if active == "logs":
             text = "↑/↓ Scroll   PgUp/PgDn Page   f Follow   r Refresh   s Save   / Search   ? Help   q Exit"
         elif active == "monitor" and narrow:
-            text = "↑/↓ Navigate   Enter Open   r Refresh   s Save   Esc Back   ? Help   q Exit"
+            text = "↑/↓ Navigate   Tab Panel   Ctrl+Tab View   Enter Open   r Refresh   s Save   Esc Back   ? Help   q Exit"
         elif active == "monitor":
             text = (
-                f"↑/↓ Navigate{cycle_hint}   Enter Open   Tab View   "
+                f"↑/↓ Navigate{cycle_hint}   Enter Open   Tab Panel   Ctrl+Tab View   "
                 "l Logs   r Refresh   s Save   ? Help   q Exit"
             )
         elif active == "problems":
-            text = "↑/↓ Navigate   Enter Open   / Filter   Tab View   r Refresh   s Save   Esc Back   ? Help   q Exit"
+            text = "↑/↓ Navigate   Tab Panel   Ctrl+Tab View   Enter Open   / Filter   r Refresh   s Save   Esc Back   ? Help   q Exit"
         else:
-            text = "↑/↓ Navigate   Enter Open   Tab View   r Refresh   s Save   Esc Back   ? Help   q Exit"
+            text = "↑/↓ Navigate   Enter Open   Tab Panel   Ctrl+Tab View   r Refresh   s Save   Esc Back   ? Help   q Exit"
         shortcut.update(text)
 
     def _configure_tables(self) -> None:
@@ -1029,6 +1033,92 @@ class WorkflowTui(App[None]):
             return
         self._select_cycle(ids[target])
 
+    def _focus_active_view(self) -> None:
+        views = self.query_one("#views", TabbedContent)
+        active = views.active or "monitor"
+        target = None
+        if active == "monitor":
+            target = self.query_one("#task-tree", Tree)
+        elif active == "cycles" and self.cycle_mode:
+            target = self.query_one("#cycles-table", DataTable)
+        elif active == "campaign" and self.cycle_mode:
+            target = self.query_one("#campaign-table", DataTable)
+        elif active == "problems":
+            target = self.query_one("#problems-table", DataTable)
+        elif active == "logs":
+            target = self.query_one("#log-viewer", TextFileViewer)
+        if target is not None and target.display:
+            target.focus()
+
+    @staticmethod
+    def _contains_focus(container: object, focused: object | None) -> bool:
+        if focused is None:
+            return False
+        if container is focused:
+            return True
+        try:
+            return any(widget is focused for widget in container.query("*"))
+        except Exception:
+            return False
+
+    def _focus_inspector_panel(self) -> None:
+        inspector = self.query_one("#inspector", TaskInspector)
+        resources = inspector.query_one("#inspector-resources", DataTable)
+        if resources.display:
+            resources.focus()
+            return
+        logs = inspector.query_one("#open-logs", Button)
+        if logs.display and not logs.disabled:
+            logs.focus()
+            return
+        inspector.query_one("#attempt-prev", Button).focus()
+
+    def _move_panel(self, delta: int) -> None:
+        views = self.query_one("#views", TabbedContent)
+        active = views.active or "monitor"
+
+        if active == "monitor":
+            body = self.query_one("#monitor-main")
+            if body.has_class("narrow"):
+                if body.has_class("inspecting"):
+                    body.remove_class("inspecting")
+                    self.query_one("#task-tree", Tree).focus()
+                else:
+                    body.add_class("inspecting")
+                    self._focus_inspector_panel()
+                return
+
+            left = self.query_one("#left")
+            right = self.query_one("#right")
+            focused = self.focused
+            if self._contains_focus(left, focused):
+                self._focus_inspector_panel()
+            elif self._contains_focus(right, focused):
+                self.query_one("#task-tree", Tree).focus()
+            elif delta >= 0:
+                self.query_one("#task-tree", Tree).focus()
+            else:
+                self._focus_inspector_panel()
+            return
+
+        if active == "logs":
+            viewer = self.query_one("#log-viewer", TextFileViewer)
+            follow = self.query_one("#log-follow", Button)
+            if self._contains_focus(self.query_one("#log-toolbar"), self.focused):
+                viewer.focus()
+            else:
+                follow.focus()
+            return
+
+        # Single-primary-panel views only need to restore focus to their table.
+        self._focus_active_view()
+
+    def action_next_panel(self) -> None:
+        self._move_panel(1)
+
+    def action_previous_panel(self) -> None:
+        self._move_panel(-1)
+
     def action_next_view(self) -> None:
         self._move_view(1)
 
@@ -1047,6 +1137,7 @@ class WorkflowTui(App[None]):
         if views.active == "campaign":
             self._sync_campaign_cursor()
         self._update_shortcuts()
+        self.call_after_refresh(self._focus_active_view)
 
     def action_select_view(self, view_id: str) -> None:
         if view_id in self._available_view_ids():
@@ -1054,6 +1145,7 @@ class WorkflowTui(App[None]):
             if view_id == "campaign":
                 self._sync_campaign_cursor()
             self._update_shortcuts()
+            self.call_after_refresh(self._focus_active_view)
 
     def on_tabbed_content_tab_activated(
         self,
@@ -1061,6 +1153,7 @@ class WorkflowTui(App[None]):
     ) -> None:
         if event.tabbed_content.id == "views":
             self._update_shortcuts()
+            self.call_after_refresh(self._focus_active_view)
 
     def action_show_filter(self) -> None:
         active = self.query_one("#views", TabbedContent).active or "monitor"
@@ -1096,6 +1189,7 @@ class WorkflowTui(App[None]):
             self.query_one("#views", TabbedContent).active = "logs"
             self._refresh_logs(force=True)
             self._update_shortcuts()
+            self.call_after_refresh(self._focus_active_view)
 
     def action_select_output(self) -> None:
         self._select_preferred_log(error=False)
