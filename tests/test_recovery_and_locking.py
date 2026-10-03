@@ -230,5 +230,7 @@ def test_unknown_recovery_blocks_automatic_reexecution(tmp_path: Path) -> None:
         engine.run()
 
     assert engine.state.get_status("task") == "unknown"
-    assert not list((workdir / "runs").glob("*/tasks/*/attempt-*"))
+    run_directories = [path.name for path in (workdir / "runs").iterdir() if path.is_dir()]
+    assert run_directories == ["run-block"]
+    assert not (attempt / "metadata.json").exists()
     engine.state.close()
