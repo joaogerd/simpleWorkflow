@@ -374,6 +374,7 @@ class WorkflowTui(App[None]):
         ("e", "select_error", "Error"),
         ("f", "toggle_follow", "Follow logs"),
         ("r", "refresh_now", "Refresh"),
+        ("s", "save_screenshot", "Save screenshot"),
         Binding("enter", "inspect", "Inspect", priority=True),
         Binding("escape", "escape_context", "Back", priority=True),
         ("question_mark", "show_help", "Help"),
@@ -561,16 +562,16 @@ class WorkflowTui(App[None]):
         active = views.active or "monitor"
         cycle_hint = "   ←/→ Cycle" if self.cycle_mode else ""
         if active == "logs":
-            text = "↑/↓ Scroll   PgUp/PgDn Page   f Follow   / Search   ? Help   q Exit"
+            text = "↑/↓ Scroll   PgUp/PgDn Page   f Follow   s Save   / Search   ? Help   q Exit"
         elif active == "monitor" and narrow:
-            text = "↑/↓ Navigate   Enter Open   Esc Back   ? Help   q Exit"
+            text = "↑/↓ Navigate   Enter Open   s Save   Esc Back   ? Help   q Exit"
         elif active == "monitor":
             text = (
                 f"↑/↓ Navigate{cycle_hint}   Enter Open   Tab View   "
-                "l Logs   ? Help   q Exit"
+                "l Logs   s Save   ? Help   q Exit"
             )
         else:
-            text = "↑/↓ Navigate   Enter Open   Tab View   Esc Back   ? Help   q Exit"
+            text = "↑/↓ Navigate   Enter Open   Tab View   s Save   Esc Back   ? Help   q Exit"
         shortcut.update(text)
 
     def _configure_tables(self) -> None:
@@ -1087,6 +1088,16 @@ class WorkflowTui(App[None]):
 
     def action_refresh_now(self) -> None:
         self.refresh_runtime(force=True)
+
+    def action_save_screenshot(self) -> None:
+        views = self.query_one("#views", TabbedContent)
+        view = views.active or "monitor"
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        output_dir = self.workdir / "screenshots"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{stamp}-{view}.svg"
+        saved = self.save_screenshot(filename=filename, path=output_dir)
+        self.notify(f"Screenshot saved: {saved}", timeout=4)
 
     def action_show_help(self) -> None:
         self.push_screen(HelpScreen())
