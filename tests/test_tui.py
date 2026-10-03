@@ -404,3 +404,35 @@ def test_interactive_save_key_writes_svg_to_workdir(tmp_path: Path) -> None:
     screenshots = list((workdir / "screenshots").glob("*-monitor.svg"))
     assert len(screenshots) == 1
     assert "<svg" in screenshots[0].read_text(encoding="utf-8")
+
+
+def test_shortcut_footer_is_docked_to_bottom_on_low_height_terminal(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text(
+        "workflow: {name: footer_demo}\ntasks: []\n",
+        encoding="utf-8",
+    )
+    app = WorkflowTui(
+        config={
+            "workflow": {"name": "footer_demo"},
+            "tasks": [],
+            "__simpleworkflow__": {
+                "source_path": str(workflow),
+                "source_dir": str(workflow.parent),
+            },
+        },
+        workflow_path=workflow,
+        workdir=tmp_path / ".simpleworkflow",
+        refresh_seconds=60.0,
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.pause()
+            footer = app.query_one("#shortcut-line", Static)
+            assert footer.display
+            assert footer.region.height == 1
+            assert footer.region.y + footer.region.height == app.size.height
+            assert "r Refresh" in str(footer.render())
+
+    asyncio.run(scenario())
