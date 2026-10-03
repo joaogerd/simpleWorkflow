@@ -1,0 +1,17 @@
+format_version: 1
+
+workflow:
+  name: tui_invalid_input_demo
+
+context:
+  python: python
+
+tasks:
+  - name: requires_missing_file
+    argv:
+      - "{python}"
+      - -c
+      - "print('This process should never start because the required input is missing')"
+    inputs:
+      required:
+        - missing-file.txt
