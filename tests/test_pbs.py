@@ -127,6 +127,7 @@ def test_pbs_executor_waits_for_job_and_records_rendered_script(tmp_path: Path) 
     assert execution["job_id"] == "12345.fake"
     assert "-W" not in execution["qsub_argv"]
     assert (attempt / "scheduler.json").is_file()
+    assert not list(attempt.glob(".scheduler.json.*.tmp"))
 
     launcher_log = (attempt / "stdout.log").read_text(encoding="utf-8")
     assert "job_id=12345.fake" in launcher_log
