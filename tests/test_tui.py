@@ -374,3 +374,33 @@ def test_low_height_terminal_uses_compact_layout_without_losing_core_panels(
             assert app.query_one("#inspector").region.height > 0
 
     asyncio.run(scenario())
+
+
+def test_interactive_save_key_writes_svg_to_workdir(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow: {name: screenshot_demo}\ntasks: []\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    app = WorkflowTui(
+        config={
+            "workflow": {"name": "screenshot_demo"},
+            "tasks": [],
+            "__simpleworkflow__": {
+                "source_path": str(workflow),
+                "source_dir": str(workflow.parent),
+            },
+        },
+        workflow_path=workflow,
+        workdir=workdir,
+        refresh_seconds=60.0,
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(100, 28)) as pilot:
+            await pilot.pause()
+            await pilot.press("s")
+            await pilot.pause()
+
+    asyncio.run(scenario())
+    screenshots = list((workdir / "screenshots").glob("*-monitor.svg"))
+    assert len(screenshots) == 1
+    assert "<svg" in screenshots[0].read_text(encoding="utf-8")
