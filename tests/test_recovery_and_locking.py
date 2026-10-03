@@ -13,6 +13,7 @@ import pytest
 from simpleworkflow.engine import WorkflowEngine
 from simpleworkflow.locking import WorkflowLockedError
 from simpleworkflow.runs import RunRecorder
+from simpleworkflow.state import WorkflowState
 
 
 def _run_sleeping_workflow(workdir: str, marker: str) -> None:
@@ -399,7 +400,7 @@ def test_finalize_attempt_rolls_back_if_task_state_update_fails(
 
     import sqlite3
 
-    monkeypatch.setattr(engine.state, "_write_task_state_event", fail_task_state)
+    monkeypatch.setattr(WorkflowState, "_write_task_state_event", fail_task_state)
     with pytest.raises(sqlite3.OperationalError, match="injected"):
         engine.state.finalize_attempt(
             run_id=attempt.run_id,
