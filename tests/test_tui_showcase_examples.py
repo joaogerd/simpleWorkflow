@@ -5,7 +5,6 @@ from pathlib import Path
 
 from simpleworkflow.cli import main
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SHOWCASE_ROOT = REPO_ROOT / "examples" / "tui-showcase"
 
