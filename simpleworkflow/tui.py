@@ -61,6 +61,7 @@ _ATTENTION = {
 }
 _COMPLETE = {"success", "skipped"}
 _VIEW_IDS = ("monitor", "cycles", "campaign", "problems", "logs")
+_BASIC_VIEW_IDS = ("monitor", "problems", "logs")
 _LOG_ORDER = ("pbs_stdout", "stdout", "pbs_stderr", "stderr")
 _LOG_ERROR_ORDER = ("pbs_stderr", "stderr", "pbs_stdout", "stdout")
 _LOG_BUTTONS = {
@@ -266,7 +267,9 @@ class WorkflowTui(App[None]):
     #topbar {
         height: 4; padding: 0 1; border-bottom: solid #303744; background: #111318;
     }
+    #topbar.compact { height: 3; }
     #summary { width: 1fr; height: 3; content-align: left middle; }
+    #summary.compact { height: 2; }
     #date-nav { width: 34; height: 3; align: right middle; }
     #prev-date, #next-date {
         width: 3; min-width: 3; height: 1; min-height: 1; padding: 0;
@@ -284,6 +287,7 @@ class WorkflowTui(App[None]):
     #cycle-line {
         height: 2; padding: 0 1; background: #171a21; align: left middle;
     }
+    #cycle-line.compact { height: 1; }
     #cycle-caption { width: 8; height: 1; color: #697180; content-align: left middle; }
     #cycle-prev, #cycle-next {
         width: 3; min-width: 3; height: 1; min-height: 1; padding: 0;
@@ -318,12 +322,14 @@ class WorkflowTui(App[None]):
         height: 2; padding: 0 1; color: #9fb9ff; text-style: bold;
         content-align: left middle;
     }
+    .pane-title.compact { height: 1; }
     #task-filter {
         display: none; height: 1; min-height: 1; margin: 0; padding: 0 1;
         border: none; background: #171a21; color: #d7dae0;
     }
     #task-tree { height: 1fr; padding: 0 1; }
     #inspector { height: auto; max-height: 14; }
+    #inspector.compact { max-height: 10; }
     #period-title {
         height: 2; padding: 0 1; border-top: solid #303744;
         color: #9fb9ff; text-style: bold; content-align: left middle;
@@ -427,6 +433,7 @@ class WorkflowTui(App[None]):
             and isinstance(task.get("name"), str)
         }
         self.snapshot = self._load_snapshot()
+        self.cycle_mode = bool(config.get("cycle")) or bool(self.snapshot.cycles)
         self.selected_cycle_id: str | None = None
         self.selected_task: str | None = None
         self.selected_log_key: str | None = None
@@ -449,17 +456,19 @@ class WorkflowTui(App[None]):
     def compose(self) -> ComposeResult:
         with Horizontal(id="topbar"):
             yield Static(id="summary")
-            with Horizontal(id="date-nav"):
-                yield Button("◀", id="prev-date")
-                yield Button("", id="date-current")
-                yield Static("", id="date-label")
-                yield Button("▶", id="next-date")
-        with Horizontal(id="cycle-line"):
-            yield Static("CICLOS", id="cycle-caption")
-            yield Button("‹", id="cycle-prev")
-            for index in range(_CYCLE_SLOT_COUNT):
-                yield Button("", id=f"cycle-slot-{index}", classes="cycle-button")
-            yield Button("›", id="cycle-next")
+            if self.cycle_mode:
+                with Horizontal(id="date-nav"):
+                    yield Button("◀", id="prev-date")
+                    yield Button("", id="date-current")
+                    yield Static("", id="date-label")
+                    yield Button("▶", id="next-date")
+        if self.cycle_mode:
+            with Horizontal(id="cycle-line"):
+                yield Static("CICLOS", id="cycle-caption")
+                yield Button("‹", id="cycle-prev")
+                for index in range(_CYCLE_SLOT_COUNT):
+                    yield Button("", id=f"cycle-slot-{index}", classes="cycle-button")
+                yield Button("›", id="cycle-next")
         with TabbedContent(initial="monitor", id="views"):
             with TabPane("Monitor", id="monitor"):
                 with Horizontal(id="monitor-main"):
@@ -470,18 +479,20 @@ class WorkflowTui(App[None]):
                     with Vertical(id="right"):
                         yield Label("INSPECTOR", classes="pane-title")
                         yield TaskInspector(color=self.color_enabled, id="inspector")
-                        yield Label("", id="period-title")
-                        yield DataTable(
-                            id="period-matrix",
-                            cursor_type="cell",
-                            zebra_stripes=False,
-                        )
-            with TabPane("Ciclos", id="cycles"):
-                yield DataTable(id="cycles-table", cursor_type="row", zebra_stripes=True)
-            with TabPane("Campanha", id="campaign"):
-                with Vertical(id="campaign-view"):
-                    yield Static(id="campaign-summary")
-                    yield DataTable(id="campaign-table", cursor_type="row", zebra_stripes=True)
+                        if self.cycle_mode:
+                            yield Label("", id="period-title")
+                            yield DataTable(
+                                id="period-matrix",
+                                cursor_type="cell",
+                                zebra_stripes=False,
+                            )
+            if self.cycle_mode:
+                with TabPane("Ciclos", id="cycles"):
+                    yield DataTable(id="cycles-table", cursor_type="row", zebra_stripes=True)
+                with TabPane("Campanha", id="campaign"):
+                    with Vertical(id="campaign-view"):
+                        yield Static(id="campaign-summary")
+                        yield DataTable(id="campaign-table", cursor_type="row", zebra_stripes=True)
             with TabPane("Problemas", id="problems"):
                 yield DataTable(id="problems-table", cursor_type="row", zebra_stripes=True)
             with TabPane("Logs", id="logs"):
@@ -494,11 +505,7 @@ class WorkflowTui(App[None]):
                     refresh_seconds=self.refresh_seconds,
                     id="log-viewer",
                 )
-        yield Static(
-            "↑↓ task   ←→ cycle   / filter   Enter inspect   Tab view   l logs   "
-            "f follow   r refresh   ? help   q quit",
-            id="shortcut-line",
-        )
+        yield Static("", id="shortcut-line")
 
     def on_mount(self) -> None:
         self._configure_tables()
@@ -519,10 +526,26 @@ class WorkflowTui(App[None]):
     def _apply_responsive_layout(self) -> None:
         try:
             body = self.query_one("#monitor-main")
+            topbar = self.query_one("#topbar")
+            summary = self.query_one("#summary")
+            inspector = self.query_one("#inspector")
         except Exception:
             return
         narrow = self.size.width < 86
+        compact = self.size.height < 32
         body.set_class(narrow, "narrow")
+        topbar.set_class(compact, "compact")
+        summary.set_class(compact, "compact")
+        inspector.set_class(compact, "compact")
+        for title in self.query(".pane-title"):
+            title.set_class(compact, "compact")
+        if self.cycle_mode:
+            cycle_line = self.query_one("#cycle-line")
+            cycle_line.set_class(compact, "compact")
+            period_title = self.query_one("#period-title")
+            period_matrix = self.query_one("#period-matrix")
+            period_title.display = not compact
+            period_matrix.display = not compact
         self._update_shortcuts(narrow=narrow)
         if not narrow:
             body.remove_class("inspecting")
@@ -536,13 +559,14 @@ class WorkflowTui(App[None]):
         if narrow is None:
             narrow = self.size.width < 86
         active = views.active or "monitor"
+        cycle_hint = "   ←/→ Cycle" if self.cycle_mode else ""
         if active == "logs":
             text = "↑/↓ Scroll   PgUp/PgDn Page   f Follow   / Search   ? Help   q Exit"
         elif active == "monitor" and narrow:
             text = "↑/↓ Navigate   Enter Open   Esc Back   ? Help   q Exit"
         elif active == "monitor":
             text = (
-                "↑/↓ Navigate   ←/→ Cycle   Enter Open   Tab View   "
+                f"↑/↓ Navigate{cycle_hint}   Enter Open   Tab View   "
                 "l Logs   ? Help   q Exit"
             )
         else:
@@ -550,12 +574,14 @@ class WorkflowTui(App[None]):
         shortcut.update(text)
 
     def _configure_tables(self) -> None:
-        cycles = self.query_one("#cycles-table", DataTable)
-        cycles.cursor_type = "cell"
-        campaign = self.query_one("#campaign-table", DataTable)
-        campaign.add_columns("Date", "Cycles", "Done", "Running", "Failed", "Pending", "State")
+        if self.cycle_mode:
+            cycles = self.query_one("#cycles-table", DataTable)
+            cycles.cursor_type = "cell"
+            campaign = self.query_one("#campaign-table", DataTable)
+            campaign.add_columns("Date", "Cycles", "Done", "Running", "Failed", "Pending", "State")
         problems = self.query_one("#problems-table", DataTable)
-        problems.add_columns("Cycle", "Task", "State", "Message")
+        first_column = "Cycle" if self.cycle_mode else "Scope"
+        problems.add_columns(first_column, "Task", "State", "Message")
 
     def _choose_initial_selection(self) -> None:
         if self.snapshot.cycles:
@@ -843,8 +869,9 @@ class WorkflowTui(App[None]):
         self.selected_task = str(task_name)
         self.selected_log_key = None
         self._refresh_header()
-        self._refresh_date_nav()
-        self._refresh_cycle_line()
+        if self.cycle_mode:
+            self._refresh_date_nav()
+            self._refresh_cycle_line()
         self._refresh_inspector()
         self._refresh_logs(force=True)
 
@@ -985,17 +1012,21 @@ class WorkflowTui(App[None]):
     def action_previous_view(self) -> None:
         self._move_view(-1)
 
+    def _available_view_ids(self) -> tuple[str, ...]:
+        return _VIEW_IDS if self.cycle_mode else _BASIC_VIEW_IDS
+
     def _move_view(self, delta: int) -> None:
         views = self.query_one("#views", TabbedContent)
-        current = views.active or _VIEW_IDS[0]
-        index = _VIEW_IDS.index(current) if current in _VIEW_IDS else 0
-        views.active = _VIEW_IDS[(index + delta) % len(_VIEW_IDS)]
+        available = self._available_view_ids()
+        current = views.active or available[0]
+        index = available.index(current) if current in available else 0
+        views.active = available[(index + delta) % len(available)]
         if views.active == "campaign":
             self._sync_campaign_cursor()
         self._update_shortcuts()
 
     def action_select_view(self, view_id: str) -> None:
-        if view_id in _VIEW_IDS:
+        if view_id in self._available_view_ids():
             self.query_one("#views", TabbedContent).active = view_id
             if view_id == "campaign":
                 self._sync_campaign_cursor()
@@ -1079,13 +1110,15 @@ class WorkflowTui(App[None]):
             self._choose_initial_selection()
         self._rebuild_tree(force=force)
         self._refresh_header()
-        self._refresh_date_nav()
-        self._refresh_cycle_line()
-        self._refresh_cycles()
-        self._refresh_campaign()
+        if self.cycle_mode:
+            self._refresh_date_nav()
+            self._refresh_cycle_line()
+            self._refresh_cycles()
+            self._refresh_campaign()
         self._refresh_problems()
         self._refresh_inspector()
-        self._refresh_period_matrix()
+        if self.cycle_mode:
+            self._refresh_period_matrix()
         self._refresh_follow_button()
         self._refresh_logs(force=force)
 
