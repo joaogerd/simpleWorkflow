@@ -9,6 +9,7 @@ context:
 
 tasks:
   - name: create_workspace
+    cwd: .
     argv:
       - "{python}"
       - -c
@@ -49,6 +50,7 @@ tasks:
 
   - name: summarize
     depends_on: [transform]
+    cwd: .
     argv:
       - "{python}"
       - -c
