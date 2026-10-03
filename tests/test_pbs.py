@@ -316,6 +316,35 @@ def test_pbs_successful_qsub_without_parseable_job_id_is_unknown(
     assert result.outcome == "unknown"
     assert result.return_code is None
     assert result.reason is not None and "job ID" in result.reason
+    scheduler = json.loads((attempt / "scheduler.json").read_text(encoding="utf-8"))
+    assert scheduler["job_id"] is None
+    assert scheduler["submission_uncertain"] is True
+
+
+def test_pbs_qsub_timeout_persists_uncertainty_before_return(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert command[0] == "qsub"
+        assert kwargs["timeout"] == 30.0
+        raise subprocess.TimeoutExpired(command, 30.0)
+
+    monkeypatch.setattr("simpleworkflow.pbs.subprocess.run", fake_run)
+    executor, attempt = _pbs_attempt_executor(tmp_path)
+
+    result = executor.run(
+        "analysis",
+        [sys.executable, "-c", "print('ok')"],
+        stdout_path=attempt / "stdout.log",
+        stderr_path=attempt / "stderr.log",
+    )
+
+    assert result.outcome == "unknown"
+    assert result.return_code is None
+    scheduler = json.loads((attempt / "scheduler.json").read_text(encoding="utf-8"))
+    assert scheduler["job_id"] is None
+    assert scheduler["submission_uncertain"] is True
+    assert "timed out" in scheduler["reason"]
 
 
 def test_pbs_qstat_timeout_becomes_unknown_after_bounded_retries(
