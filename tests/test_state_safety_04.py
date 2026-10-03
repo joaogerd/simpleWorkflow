@@ -116,3 +116,94 @@ tasks:
         before["attempt_history"] + 1
     )
     final.close()
+
+
+
+def test_state_bootstrap_rolls_back_schema_when_instance_creation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_path = tmp_path / ".simpleworkflow" / "state.sqlite3"
+
+    def fail_instance(
+        self: WorkflowState,
+        workflow_name: str,
+        source_path: str | Path | None,
+        *,
+        instance_id: str | None = None,
+        created_at: str | None = None,
+    ) -> None:
+        del self, workflow_name, source_path, instance_id, created_at
+        raise sqlite3.OperationalError("injected bootstrap failure")
+
+    monkeypatch.setattr(WorkflowState, "_create_instance", fail_instance)
+
+    with pytest.raises(sqlite3.OperationalError, match="injected bootstrap failure"):
+        WorkflowState(
+            state_path,
+            workflow_name="bootstrap",
+            source_path=tmp_path / "workflow.yaml",
+        )
+
+    connection = sqlite3.connect(state_path)
+    tables = {
+        row[0]
+        for row in connection.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+            """
+        )
+    }
+    connection.close()
+    assert tables == set()
+
+
+def test_empty_database_after_failed_bootstrap_can_initialize_normally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_path = tmp_path / ".simpleworkflow" / "state.sqlite3"
+    original = WorkflowState._create_instance
+    calls = 0
+
+    def fail_once(
+        self: WorkflowState,
+        workflow_name: str,
+        source_path: str | Path | None,
+        *,
+        instance_id: str | None = None,
+        created_at: str | None = None,
+    ) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise sqlite3.OperationalError("injected bootstrap failure")
+        original(
+            self,
+            workflow_name,
+            source_path,
+            instance_id=instance_id,
+            created_at=created_at,
+        )
+
+    monkeypatch.setattr(WorkflowState, "_create_instance", fail_once)
+
+    with pytest.raises(sqlite3.OperationalError):
+        WorkflowState(
+            state_path,
+            workflow_name="bootstrap-retry",
+            source_path=tmp_path / "workflow.yaml",
+        )
+
+    state = WorkflowState(
+        state_path,
+        workflow_name="bootstrap-retry",
+        source_path=tmp_path / "workflow.yaml",
+    )
+    try:
+        assert state.instance.workflow_name == "bootstrap-retry"
+        assert state.connection.execute(
+            "SELECT schema_version FROM schema_info WHERE singleton = 1"
+        ).fetchone() == (1,)
+    finally:
+        state.close()
