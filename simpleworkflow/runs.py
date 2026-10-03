@@ -17,6 +17,57 @@ import yaml
 RUN_SCHEMA_VERSION = 2
 
 
+def _fsync_directory(path: Path) -> None:
+    directory_fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _atomic_write(path: Path, serialized: str, *, replace: bool) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(serialized)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if replace:
+            os.replace(temporary, path)
+        else:
+            if path.exists():
+                raise FileExistsError(path)
+            os.link(temporary, path)
+        _fsync_directory(path.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def write_durable_json(path: str | Path, payload: Mapping[str, Any]) -> None:
+    """Atomically replace a small JSON runtime record and fsync its directory."""
+    target = Path(path)
+    serialized = json.dumps(dict(payload), sort_keys=True) + "\n"
+    _atomic_write(target, serialized, replace=True)
+
+
+def metadata_checksum_matches(metadata_path: str | Path) -> bool | None:
+    """Validate metadata.sha256 when present; None means a legacy record has no checksum."""
+    metadata = Path(metadata_path)
+    checksum = metadata.with_name("metadata.sha256")
+    if not checksum.is_file():
+        return None
+    try:
+        expected = checksum.read_text(encoding="utf-8").strip()
+        actual = hashlib.sha256(metadata.read_bytes()).hexdigest()
+    except OSError:
+        return False
+    return bool(expected) and expected == actual
+
+
 def _utc_timestamp() -> str:
     """Return an ISO-8601 UTC timestamp suitable for provenance records."""
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -173,23 +224,4 @@ class RunRecorder:
 
     @staticmethod
     def _atomic_exclusive_write(path: Path, serialized: str) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-        )
-        temporary = Path(temporary_name)
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                stream.write(serialized)
-                stream.flush()
-                os.fsync(stream.fileno())
-            if path.exists():
-                raise FileExistsError(path)
-            os.link(temporary, path)
-            directory_fd = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-        finally:
-            temporary.unlink(missing_ok=True)
+        _atomic_write(path, serialized, replace=False)

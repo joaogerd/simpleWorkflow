@@ -39,7 +39,7 @@ misspellings do not silently alter an experiment.
 | `depends_on` | One task name or a list of upstream task names. |
 | `enabled` | Optional boolean; disabled tasks are recorded as skipped during real execution. |
 | `cycle_scope` | Optional closed selector: `all`, `first`, `not_first`, `last`, or `not_last`. Default: `all`. |
-| `cwd` | Optional working directory, relative to the workflow YAML when not absolute. |
+| `cwd` | Optional working directory. Relative values resolve from the workflow YAML directory; when omitted, the effective directory is the directory from which `swf` was launched. |
 | `env` | Optional mapping of task-specific string environment variables. |
 | `executor` | `local` (default) or `pbs`. |
 | `pbs` | Required PBS settings when `executor: pbs`; see [PBS execution](pbs.md). |
@@ -47,6 +47,8 @@ misspellings do not silently alter an experiment.
 | `outputs` | Declared output artifact contract. |
 | `input_fingerprint` | `metadata` (default) or `sha256`. |
 | `timeout` | Optional local time limit in seconds; stops the whole process group. |
+
+For format version 1, omitting `cwd` deliberately preserves the historical launch-directory behavior. simpleWorkflow materializes that effective directory and records it in the task signature and attempt provenance, so launching the same workflow from a different directory invalidates reuse rather than silently executing relative arguments in a different location. An explicitly configured `cwd` is checked by `swf validate` and must exist as a directory.
 
 The historical `run` field is deliberately unsupported. A single command string
 would require shell parsing and could introduce implicit redirection, pipelines
@@ -184,7 +186,7 @@ name used by the existing `--step` CLI option.
 Both endpoints are inclusive. The examples above therefore contain four cycles:
 00Z, 06Z, 12Z and 18Z. A range from `2018-04-15T00:00:00Z` through
 `2018-04-18T00:00:00Z` at `PT6H` contains 13 cycles. Equivalently,
-`duration: PT72H` with `interval: PT6H` also contains 13 cycles.
+`duration: PT72H` with `interval: PT6H` also contains 13 cycles. Because both endpoints are inclusive, the end must be exactly reachable from the start by an integer number of steps; an unaligned range such as 00Z through 17Z at `PT6H` is rejected instead of silently omitting the declared endpoint.
 
 For every cycle, the following context values are added:
 
@@ -296,7 +298,7 @@ swf run workflow.yaml \
 ```
 
 `--cycle-time` may be repeated for multiple specific cycles, but cannot be
-combined with `--from`, `--to` or `--step`. When a workflow already declares a
+combined with `--from`, `--to` or `--step`. Repeated selections are normalized to chronological execution order regardless of the order in which they appear on the command line. When a workflow already declares a
 cycle range, an explicitly selected `--cycle-time` retains its original position
 in that declared campaign. For example, selecting the middle cycle does not
 make it become `first` or `last`; this keeps `cycle_scope` semantics stable for

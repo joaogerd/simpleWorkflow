@@ -46,7 +46,7 @@ def test_run_reconciles_and_returns_130_on_keyboard_interrupt(
     assert "Traceback" not in captured.err
 
 
-def test_pbs_interrupt_before_job_id_remains_unknown() -> None:
+def test_interrupt_reconciliation_uses_conservative_state_result() -> None:
     class FakeState:
         def __init__(self) -> None:
             self.current = SimpleNamespace(
@@ -55,49 +55,20 @@ def test_pbs_interrupt_before_job_id_remains_unknown() -> None:
                 signature_schema=4,
                 signature_payload={"signature_schema": 4},
                 attempt_path="attempt-001",
+                reason="tarefa iniciada",
             )
-
-        def get_status(self, _task: str, *, cycle_id: str | None = None) -> str:
-            assert cycle_id == "cycle-a"
-            return self.current.status
+            self.reconciled: list[str | None] = []
 
         def reconcile_running(self, *, cycle_id: str | None = None) -> None:
             assert cycle_id == "cycle-a"
+            self.reconciled.append(cycle_id)
             self.current = SimpleNamespace(
-                status="interrupted",
+                status="unknown",
                 signature="sig",
                 signature_schema=4,
                 signature_payload={"signature_schema": 4},
                 attempt_path="attempt-001",
-            )
-
-        def get_task_state(
-            self, _task: str, *, cycle_id: str | None = None
-        ) -> SimpleNamespace:
-            assert cycle_id == "cycle-a"
-            return self.current
-
-        def set_status(
-            self,
-            _task: str,
-            status: str,
-            _return_code: int | None,
-            signature: str | None,
-            reason: str,
-            attempt_path: str | None,
-            *,
-            cycle_id: str | None = None,
-            signature_schema: int | None = None,
-            signature_payload: dict[str, object] | None = None,
-        ) -> None:
-            assert cycle_id == "cycle-a"
-            self.current = SimpleNamespace(
-                status=status,
-                signature=signature,
-                signature_schema=signature_schema,
-                signature_payload=signature_payload,
-                reason=reason,
-                attempt_path=attempt_path,
+                reason="a execução foi iniciada, mas o resultado não pôde ser confirmado",
             )
 
     engine = SimpleNamespace(
@@ -108,7 +79,9 @@ def test_pbs_interrupt_before_job_id_remains_unknown() -> None:
 
     cli._reconcile_after_interrupt(engine)  # type: ignore[arg-type]
 
+    assert engine.state.reconciled == ["cycle-a"]
     assert engine.state.current.status == "unknown"
     assert engine.state.current.signature == "sig"
     assert engine.state.current.attempt_path == "attempt-001"
-    assert "verifique o escalonador" in engine.state.current.reason
+    assert "não pôde ser confirmado" in engine.state.current.reason
+

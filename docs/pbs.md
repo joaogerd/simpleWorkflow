@@ -75,8 +75,12 @@ still never accepts a free-form shell command string.
 | `block` | `true` | The controller remains in the foreground until completion. |
 
 Detached submission is intentionally rejected. Waiting remains inside the
-foreground command and requires no service. If scheduler state cannot be
-confirmed after an interruption, automatic repetition is blocked.
+foreground command and requires no service. Scheduler-control commands use a
+bounded timeout. Transient `qstat` failures are retried a small fixed number of
+times; if the job result still cannot be confirmed, the task becomes `unknown`
+and automatic repetition is blocked. A successful `qsub` response without a
+reliable job identifier is also treated as uncertain rather than as a task
+failure.
 
 ## Runtime records
 

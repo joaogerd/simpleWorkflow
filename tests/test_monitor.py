@@ -362,3 +362,108 @@ def test_snapshot_exposes_all_attempts_newest_first(tmp_path: Path) -> None:
     assert [attempt.attempt for attempt in task.attempts] == [2, 1]
     assert [attempt.status for attempt in task.attempts] == ["running", "failed"]
     assert task.attempt is task.attempts[0]
+
+
+def test_native_cycle_snapshot_respects_cycle_scope(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: scoped-campaign\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    config: dict[str, object] = {
+        "workflow": {"name": "scoped-campaign"},
+        "cycle": {
+            "start": "2018-04-15T00:00:00Z",
+            "end": "2018-04-15T12:00:00Z",
+            "step": "PT6H",
+        },
+        "tasks": [
+            {"name": "all", "argv": ["true"]},
+            {"name": "first", "argv": ["true"], "cycle_scope": "first"},
+            {"name": "not_first", "argv": ["true"], "cycle_scope": "not_first"},
+            {"name": "last", "argv": ["true"], "cycle_scope": "last"},
+            {"name": "not_last", "argv": ["true"], "cycle_scope": "not_last"},
+        ],
+        "__simpleworkflow__": {
+            "source_path": str(workflow),
+            "source_dir": str(workflow.parent),
+        },
+    }
+    state = WorkflowState(
+        workdir / "state.sqlite3",
+        workflow_name="scoped-campaign",
+        source_path=workflow,
+    )
+    cycles = [
+        ("c00", "2018-04-15T00:00:00Z", ("all", "first", "not_last")),
+        ("c06", "2018-04-15T06:00:00Z", ("all", "not_first", "not_last")),
+        ("c12", "2018-04-15T12:00:00Z", ("all", "not_first", "last")),
+    ]
+    for cycle_id, cycle_time, active in cycles:
+        state.ensure_cycle(cycle_id, cycle_time)
+        for name in active:
+            state.set_status(name, "success", 0, cycle_id=cycle_id)
+
+    # A stale row for an out-of-scope task must not contaminate the cycle view.
+    state.set_status("last", "failed", 7, cycle_id="c00")
+    state.close()
+
+    snapshot = load_monitor_snapshot(config, workflow, workdir)
+
+    assert [cycle.status for cycle in snapshot.cycles] == [
+        "success",
+        "success",
+        "success",
+    ]
+    assert [[task.name for task in cycle.tasks] for cycle in snapshot.cycles] == [
+        ["all", "first", "not_last"],
+        ["all", "not_first", "not_last"],
+        ["all", "not_first", "last"],
+    ]
+    assert snapshot.total_tasks == 9
+    assert snapshot.completed_tasks == 9
+    assert snapshot.failed_tasks == 0
+
+
+def test_native_cycles_keep_initialization_tasks_at_workflow_root(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: initialized-campaign\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    config: dict[str, object] = {
+        "workflow": {"name": "initialized-campaign"},
+        "initialization": {
+            "tasks": [{"name": "bootstrap", "argv": ["true"]}]
+        },
+        "cycle": {
+            "start": "2018-04-15T00:00:00Z",
+            "end": "2018-04-15T06:00:00Z",
+            "step": "PT6H",
+        },
+        "tasks": [{"name": "analysis", "argv": ["true"]}],
+        "__simpleworkflow__": {
+            "source_path": str(workflow),
+            "source_dir": str(workflow.parent),
+        },
+    }
+    state = WorkflowState(
+        workdir / "state.sqlite3",
+        workflow_name="initialized-campaign",
+        source_path=workflow,
+    )
+    state.set_status("bootstrap", "success", 0)
+    state.ensure_cycle("c00", "2018-04-15T00:00:00Z")
+    state.ensure_cycle("c06", "2018-04-15T06:00:00Z")
+    state.set_status("analysis", "success", 0, cycle_id="c00")
+    state.set_status("analysis", "running", None, cycle_id="c06")
+    state.close()
+
+    snapshot = load_monitor_snapshot(config, workflow, workdir)
+
+    assert [(task.name, task.status) for task in snapshot.tasks] == [
+        ("bootstrap", "success")
+    ]
+    assert [[task.name for task in cycle.tasks] for cycle in snapshot.cycles] == [
+        ["analysis"],
+        ["analysis"],
+    ]
+    assert snapshot.total_tasks == 3
+    assert snapshot.completed_tasks == 2
+    assert snapshot.running_tasks == 1

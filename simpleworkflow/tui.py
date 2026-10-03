@@ -142,14 +142,24 @@ class HelpScreen(ModalScreen[None]):
         self.app.exit()
 
 
+def _task_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
+    tasks: list[dict[str, Any]] = []
+    initialization = config.get("initialization")
+    if isinstance(initialization, dict):
+        raw_initialization = initialization.get("tasks", [])
+        if isinstance(raw_initialization, list):
+            tasks.extend(task for task in raw_initialization if isinstance(task, dict))
+    raw_tasks = config.get("tasks", [])
+    if isinstance(raw_tasks, list):
+        tasks.extend(task for task in raw_tasks if isinstance(task, dict))
+    return tasks
+
+
 def _task_names(config: dict[str, Any]) -> list[str]:
-    tasks = config.get("tasks", [])
-    if not isinstance(tasks, list):
-        return []
     return [
         str(task["name"])
-        for task in tasks
-        if isinstance(task, dict) and isinstance(task.get("name"), str)
+        for task in _task_configs(config)
+        if isinstance(task.get("name"), str)
     ]
 
 
@@ -436,13 +446,10 @@ class WorkflowTui(App[None]):
         self.color_enabled = bool(color) and not bool(os.environ.get("NO_COLOR"))
         self.completion_future = completion_future
         self.task_order = _task_names(config)
-        raw_tasks = config.get("tasks", [])
         self.task_map = {
             str(task["name"]): task
-            for task in raw_tasks
-            if isinstance(raw_tasks, list)
-            and isinstance(task, dict)
-            and isinstance(task.get("name"), str)
+            for task in _task_configs(config)
+            if isinstance(task.get("name"), str)
         }
         self.snapshot = self._load_snapshot()
         self.cycle_mode = bool(config.get("cycle")) or bool(self.snapshot.cycles)

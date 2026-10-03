@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .cycles import CycleContext, active_tasks_for_cycle, resolve_cycle_contexts
 from .state import StateSchemaError, WorkflowState
 
 _COMPLETE_STATES = frozenset({"success", "skipped"})
@@ -275,6 +276,24 @@ def _config_tasks(config: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     return tuple(task for task in raw_tasks if isinstance(task, dict))
 
 
+def _initialization_tasks(config: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    initialization = config.get("initialization")
+    if not isinstance(initialization, dict):
+        return ()
+    raw_tasks = initialization.get("tasks", [])
+    if not isinstance(raw_tasks, list):
+        return ()
+    return tuple(task for task in raw_tasks if isinstance(task, dict))
+
+
+def _initialization_task_names(config: dict[str, Any]) -> tuple[str, ...]:
+    return tuple(
+        str(task["name"])
+        for task in _initialization_tasks(config)
+        if isinstance(task.get("name"), str)
+    )
+
+
 def _task_names(config: dict[str, Any]) -> tuple[str, ...]:
     names: list[str] = []
     for task in _config_tasks(config):
@@ -363,6 +382,24 @@ def _presentation_cycles(
         if cycle is not None:
             groups[cycle.cycle_id].append(task_name)
     return assignment, groups
+
+
+def _native_cycle_contexts(
+    config: dict[str, Any], cycle_rows: list[tuple[Any, ...]]
+) -> dict[str, CycleContext]:
+    """Resolve persisted native cycles with the same campaign positions as execution."""
+    raw_cycle = config.get("cycle")
+    declared = resolve_cycle_contexts(raw_cycle if isinstance(raw_cycle, dict) else None)
+    declared_by_time = {cycle.cycle_time: cycle for cycle in declared}
+
+    persisted_times = [str(row[1]) for row in cycle_rows]
+    inferred = resolve_cycle_contexts(None, cycle_times=persisted_times)
+    inferred_by_time = {cycle.cycle_time: cycle for cycle in inferred}
+
+    return {
+        str(row[0]): declared_by_time.get(str(row[1]), inferred_by_time[str(row[1])])
+        for row in cycle_rows
+    }
 
 
 def _task_snapshot(
@@ -454,6 +491,7 @@ def load_monitor_snapshot(
     state_dir = Path(workdir).resolve(strict=False)
     workflow_name = str(config.get("workflow", {}).get("name", "workflow"))
     names = _task_names(config)
+    initialization_names = _initialization_task_names(config)
     config_assignment, config_groups = _presentation_cycles(config)
     config_cycles = {
         cycle.cycle_id: cycle for cycle in config_assignment.values()
@@ -478,13 +516,14 @@ def load_monitor_snapshot(
             grouped_names = set(config_assignment)
             pending_root_tasks = tuple(
                 _task_snapshot(name, None, cycle_id=None)
-                for name in names
-                if name not in grouped_names
+                for name in (*initialization_names, *names)
+                if name in initialization_names or name not in grouped_names
             )
         else:
             pending_cycles = ()
             pending_root_tasks = tuple(
-                _task_snapshot(name, None, cycle_id=None) for name in names
+                _task_snapshot(name, None, cycle_id=None)
+                for name in (*initialization_names, *names)
             )
         return MonitorSnapshot(
             workflow_name=workflow_name,
@@ -553,9 +592,18 @@ def load_monitor_snapshot(
         root_tasks: tuple[TaskSnapshot, ...]
 
         if cycle_rows:
+            native_contexts = _native_cycle_contexts(config, cycle_rows)
+            configured_tasks = _config_tasks(config)
             for cycle_id, cycle_time, cycle_updated_at in cycle_rows:
                 cycle_key = str(cycle_id)
                 task_rows = rows_for_cycle(cycle_key)
+                active_names = tuple(
+                    str(task["name"])
+                    for task in active_tasks_for_cycle(
+                        configured_tasks, native_contexts[cycle_key]
+                    )
+                    if isinstance(task.get("name"), str)
+                )
                 cycle_tasks = tuple(
                     _task_snapshot(
                         name,
@@ -563,7 +611,7 @@ def load_monitor_snapshot(
                         cycle_id=cycle_key,
                         attempts=attempts.get((cycle_key, name), ()),
                     )
-                    for name in names
+                    for name in active_names
                 )
                 cycles.append(
                     CycleSnapshot(
@@ -578,9 +626,17 @@ def load_monitor_snapshot(
                         persisted=True,
                     )
                 )
-            # Native cycle execution stores these task names per cycle. Root rows
-            # from an older/no-cycle invocation must not be counted a second time.
-            root_tasks = ()
+            # Native cycle tasks live in cycle namespaces. Initialization tasks
+            # remain in the root namespace and stay visible as workflow history.
+            root_tasks = tuple(
+                _task_snapshot(
+                    name,
+                    root_rows.get(name),
+                    cycle_id=None,
+                    attempts=attempts.get(("", name), ()),
+                )
+                for name in initialization_names
+            )
         elif config_groups:
             for cycle_id, task_names in config_groups.items():
                 cycle_tasks = tuple(
@@ -612,8 +668,8 @@ def load_monitor_snapshot(
                     cycle_id=None,
                     attempts=attempts.get(("", name), ()),
                 )
-                for name in names
-                if name not in grouped_names
+                for name in (*initialization_names, *names)
+                if name in initialization_names or name not in grouped_names
             )
         else:
             root_tasks = tuple(
@@ -623,7 +679,7 @@ def load_monitor_snapshot(
                     cycle_id=None,
                     attempts=attempts.get(("", name), ()),
                 )
-                for name in names
+                for name in (*initialization_names, *names)
             )
 
         run_rows = connection.execute(

@@ -1,4 +1,10 @@
-# simpleWorkflow
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/simpleworkflow-logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/simpleworkflow-logo-light.svg">
+    <img alt="simpleWorkflow" src="docs/assets/simpleworkflow-logo-light.svg" width="760">
+  </picture>
+</p>
 
 `simpleWorkflow` is a lightweight YAML workflow runner for scientific pipelines.
 It provides dependency ordering, restart-safe state, immutable task attempts and

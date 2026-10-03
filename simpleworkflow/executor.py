@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import signal
 import socket
@@ -9,7 +8,9 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
+
+from .runs import write_durable_json
 
 
 class _TerminationSignal(Exception):
@@ -25,13 +26,21 @@ def _raise_termination(signum: int, _frame: object) -> None:
 class ExecutionResult:
     """Outcome returned by a task execution backend.
 
-    Attributes:
-        return_code: Process or scheduler return code.
-        metadata: JSON-serializable backend details recorded in task provenance.
+    A known outcome requires a confirmed return code. An unknown outcome means
+    the backend cannot safely determine whether execution completed and callers
+    must not automatically repeat the task.
     """
 
-    return_code: int
+    return_code: int | None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    outcome: Literal["known", "unknown"] = "known"
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.outcome == "known" and self.return_code is None:
+            raise ValueError("known execution results require a return code")
+        if self.outcome == "unknown" and self.return_code is not None:
+            raise ValueError("unknown execution results must not invent a return code")
 
 
 @runtime_checkable
@@ -108,21 +117,42 @@ class LocalExecutor:
                     start_new_session=True,
                 )
                 process_record = stdout_file.parent / "process.json"
-                temporary_record = process_record.with_suffix(".json.tmp")
-                temporary_record.write_text(
-                    json.dumps(
+                try:
+                    write_durable_json(
+                        process_record,
                         {
                             "pid": process.pid,
                             "process_group": process.pid,
                             "host": socket.gethostname(),
                             "started_at_epoch": started_at,
                         },
-                        sort_keys=True,
                     )
-                    + "\n",
-                    encoding="utf-8",
-                )
-                os.replace(temporary_record, process_record)
+                except OSError as error:
+                    stderr.write(
+                        f"simpleWorkflow could not persist process identity: {error}\n"
+                    )
+                    try:
+                        os.killpg(process.pid, signal.SIGTERM)
+                        try:
+                            process_return_code = process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            os.killpg(process.pid, signal.SIGKILL)
+                            process_return_code = process.wait()
+                    except ProcessLookupError:
+                        process_return_code = process.wait()
+                    return ExecutionResult(
+                        return_code=127,
+                        metadata={
+                            "executor": "local",
+                            "pid": process.pid,
+                            "process_group": process.pid,
+                            "started_at_epoch": started_at,
+                            "finished_at_epoch": time.time(),
+                            "identity_persistence_failed": True,
+                            "process_return_code": process_return_code,
+                        },
+                        reason="local process identity could not be persisted; child was terminated",
+                    )
                 timed_out = False
                 interrupted_signal: int | None = None
                 previous_handlers: dict[signal.Signals, Any] = {}
