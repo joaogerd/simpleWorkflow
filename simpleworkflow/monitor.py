@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .cycles import CycleContext, active_tasks_for_cycle, resolve_cycle_contexts
 from .state import StateSchemaError, WorkflowState
 
 _COMPLETE_STATES = frozenset({"success", "skipped"})
@@ -365,6 +366,24 @@ def _presentation_cycles(
     return assignment, groups
 
 
+def _native_cycle_contexts(
+    config: dict[str, Any], cycle_rows: list[tuple[Any, ...]]
+) -> dict[str, CycleContext]:
+    """Resolve persisted native cycles with the same campaign positions as execution."""
+    raw_cycle = config.get("cycle")
+    declared = resolve_cycle_contexts(raw_cycle if isinstance(raw_cycle, dict) else None)
+    declared_by_time = {cycle.cycle_time: cycle for cycle in declared}
+
+    persisted_times = [str(row[1]) for row in cycle_rows]
+    inferred = resolve_cycle_contexts(None, cycle_times=persisted_times)
+    inferred_by_time = {cycle.cycle_time: cycle for cycle in inferred}
+
+    return {
+        str(row[0]): declared_by_time.get(str(row[1]), inferred_by_time[str(row[1])])
+        for row in cycle_rows
+    }
+
+
 def _task_snapshot(
     name: str,
     row: tuple[Any, ...] | None,
@@ -553,9 +572,18 @@ def load_monitor_snapshot(
         root_tasks: tuple[TaskSnapshot, ...]
 
         if cycle_rows:
+            native_contexts = _native_cycle_contexts(config, cycle_rows)
+            configured_tasks = _config_tasks(config)
             for cycle_id, cycle_time, cycle_updated_at in cycle_rows:
                 cycle_key = str(cycle_id)
                 task_rows = rows_for_cycle(cycle_key)
+                active_names = tuple(
+                    str(task["name"])
+                    for task in active_tasks_for_cycle(
+                        configured_tasks, native_contexts[cycle_key]
+                    )
+                    if isinstance(task.get("name"), str)
+                )
                 cycle_tasks = tuple(
                     _task_snapshot(
                         name,
@@ -563,7 +591,7 @@ def load_monitor_snapshot(
                         cycle_id=cycle_key,
                         attempts=attempts.get((cycle_key, name), ()),
                     )
-                    for name in names
+                    for name in active_names
                 )
                 cycles.append(
                     CycleSnapshot(
