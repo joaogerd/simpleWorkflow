@@ -370,11 +370,11 @@ class WorkflowTui(App[None]):
         ("left", "previous_cycle", "Previous cycle"),
         ("right", "next_cycle", "Next cycle"),
         ("p", "next_panel", "Panel"),
-        ("1", "select_view_number(1)", "Tab 1"),
-        ("2", "select_view_number(2)", "Tab 2"),
-        ("3", "select_view_number(3)", "Tab 3"),
-        ("4", "select_view_number(4)", "Tab 4"),
-        ("5", "select_view_number(5)", "Tab 5"),
+        Binding("1", "select_view_number(1)", "Tab 1", priority=True),
+        Binding("2", "select_view_number(2)", "Tab 2", priority=True),
+        Binding("3", "select_view_number(3)", "Tab 3", priority=True),
+        Binding("4", "select_view_number(4)", "Tab 4", priority=True),
+        Binding("5", "select_view_number(5)", "Tab 5", priority=True),
         ("slash", "show_filter", "Filter"),
         ("l", "open_logs", "Logs"),
         ("o", "select_output", "Output"),
@@ -397,6 +397,8 @@ class WorkflowTui(App[None]):
             self.screen,
             (HelpScreen, TextViewerScreen),
         ):
+            return None
+        if action == "select_view_number" and isinstance(self.focused, Input):
             return None
         if action != "inspect":
             return True
@@ -577,18 +579,18 @@ class WorkflowTui(App[None]):
         active = views.active or "monitor"
         cycle_hint = "   ←/→ Cycle" if self.cycle_mode and active == "monitor" else ""
         if active == "logs":
-            text = f"↑/↓ Scroll   PgUp/PgDn Page   f Follow   r Refresh   s Save   ? Help   q Exit"
+            text = "↑/↓ Scroll   PgUp/PgDn Page   f Follow   r Refresh   s Save   ? Help   q Exit"
         elif active == "monitor" and narrow:
-            text = f"↑/↓ Navigate   p Panel   Enter Open   r Refresh   s Save   Esc Back   ? Help   q Exit"
+            text = "↑/↓ Navigate   p Panel   Enter Open   r Refresh   s Save   Esc Back   ? Help   q Exit"
         elif active == "monitor":
             text = (
                 f"↑/↓ Navigate{cycle_hint}   p Panel   Enter Open   "
                 f"l Logs   r Refresh   s Save   ? Help   q Exit"
             )
         elif active == "problems":
-            text = f"↑/↓ Navigate   p Panel   Enter Open   / Filter   r Refresh   s Save   Esc Back   ? Help   q Exit"
+            text = "↑/↓ Navigate   p Panel   Enter Open   / Filter   r Refresh   s Save   Esc Back   ? Help   q Exit"
         else:
-            text = f"↑/↓ Navigate   Enter Open   r Refresh   s Save   Esc Back   ? Help   q Exit"
+            text = "↑/↓ Navigate   Enter Open   r Refresh   s Save   Esc Back   ? Help   q Exit"
         shortcut.update(text)
 
     def _configure_tables(self) -> None:
@@ -1043,7 +1045,7 @@ class WorkflowTui(App[None]):
         elif active == "problems":
             target = self.query_one("#problems-table", DataTable)
         elif active == "logs":
-            target = self.query_one("#log-viewer", TextFileViewer)
+            target = self.query_one("#viewer-text", TextArea)
         if target is not None and target.display:
             target.focus()
 
