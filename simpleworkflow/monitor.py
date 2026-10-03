@@ -27,19 +27,15 @@ from pathlib import Path
 from typing import Any
 
 from .cycles import CycleContext, active_tasks_for_cycle, resolve_cycle_contexts
-from .state import StateSchemaError, WorkflowState
-
-_COMPLETE_STATES = frozenset({"success", "skipped"})
-_ATTENTION_STATES = frozenset(
-    {
-        "failed",
-        "invalid-input",
-        "invalid-output",
-        "blocked",
-        "interrupted",
-        "unknown",
-    }
+from .lifecycle import (
+    ATTENTION_STATES,
+    COMPLETE_STATES,
+    FAILED,
+    PENDING,
+    RUNNING,
+    SUCCESS,
 )
+from .state import StateSchemaError, WorkflowState
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -181,15 +177,15 @@ class CycleSnapshot:
 
     @property
     def completed_tasks(self) -> int:
-        return sum(task.status in _COMPLETE_STATES for task in self.tasks)
+        return sum(task.status in COMPLETE_STATES for task in self.tasks)
 
     @property
     def running_tasks(self) -> int:
-        return sum(task.status == "running" for task in self.tasks)
+        return sum(task.status == RUNNING for task in self.tasks)
 
     @property
     def failed_tasks(self) -> int:
-        return sum(task.status in _ATTENTION_STATES for task in self.tasks)
+        return sum(task.status in ATTENTION_STATES for task in self.tasks)
 
     @property
     def pending_tasks(self) -> int:
@@ -237,7 +233,7 @@ class MonitorSnapshot:
 
     @property
     def current_run(self) -> RunSnapshot | None:
-        running = next((run for run in self.runs if run.status == "running"), None)
+        running = next((run for run in self.runs if run.status == RUNNING), None)
         return running or (self.runs[0] if self.runs else None)
 
     @property
@@ -251,15 +247,15 @@ class MonitorSnapshot:
 
     @property
     def completed_tasks(self) -> int:
-        return sum(task.status in _COMPLETE_STATES for task in self.all_tasks)
+        return sum(task.status in COMPLETE_STATES for task in self.all_tasks)
 
     @property
     def running_tasks(self) -> int:
-        return sum(task.status == "running" for task in self.all_tasks)
+        return sum(task.status == RUNNING for task in self.all_tasks)
 
     @property
     def failed_tasks(self) -> int:
-        return sum(task.status in _ATTENTION_STATES for task in self.all_tasks)
+        return sum(task.status in ATTENTION_STATES for task in self.all_tasks)
 
 
 @dataclass(frozen=True)
@@ -410,7 +406,7 @@ def _task_snapshot(
     attempts: tuple[AttemptSnapshot, ...] = (),
 ) -> TaskSnapshot:
     if row is None:
-        return TaskSnapshot(name=name, status="pending", cycle_id=cycle_id, attempts=attempts)
+        return TaskSnapshot(name=name, status=PENDING, cycle_id=cycle_id, attempts=attempts)
     return TaskSnapshot(
         name=name,
         status=str(row[0]),
@@ -424,15 +420,15 @@ def _task_snapshot(
 
 
 def _cycle_status(tasks: tuple[TaskSnapshot, ...]) -> str:
-    if any(task.status in _ATTENTION_STATES for task in tasks):
-        return "failed"
+    if any(task.status in ATTENTION_STATES for task in tasks):
+        return FAILED
     if any(task.status == "running" for task in tasks):
-        return "running"
-    if tasks and all(task.status in _COMPLETE_STATES for task in tasks):
-        return "success"
-    if any(task.status in _COMPLETE_STATES for task in tasks):
+        return RUNNING
+    if tasks and all(task.status in COMPLETE_STATES for task in tasks):
+        return SUCCESS
+    if any(task.status in COMPLETE_STATES for task in tasks):
         return "partial"
-    return "pending"
+    return PENDING
 
 
 def _max_timestamp(*values: str | None) -> str | None:
@@ -713,7 +709,7 @@ def load_monitor_snapshot(
                 updated_at=task.updated_at,
             )
             for task in visible_tasks
-            if task.status in _ATTENTION_STATES
+            if task.status in ATTENTION_STATES
         )
 
         updated_at = _max_timestamp(
