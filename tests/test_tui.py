@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from textual.widgets import Static
+
+from simpleworkflow.cli import main
 from simpleworkflow.state import WorkflowState
 from simpleworkflow.tui import WorkflowTui
 
@@ -439,5 +442,172 @@ def test_shortcut_footer_is_docked_to_bottom_on_low_height_terminal(tmp_path: Pa
             rendered = str(footer.render())
             assert "r Refresh" in rendered
             assert "q Exit" in rendered
+
+    asyncio.run(scenario())
+
+
+
+def test_wide_monitor_prioritizes_inspector_and_cycle_selector_is_local(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: MONAN-JEDI M3\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    _persist_campaign(workflow, workdir)
+    app = WorkflowTui(
+        config=_config(workflow),
+        workflow_path=workflow,
+        workdir=workdir,
+        refresh_seconds=60.0,
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.pause()
+            left = app.query_one("#left")
+            right = app.query_one("#right")
+            assert left.region.width < right.region.width
+            ratio = left.region.width / (left.region.width + right.region.width)
+            assert 0.30 <= ratio <= 0.40
+            cycle_line = app.query_one("#cycle-line")
+            assert cycle_line.parent is not None
+            assert cycle_line.parent.id == "monitor"
+
+    asyncio.run(scenario())
+
+
+def test_single_cycle_does_not_waste_space_on_period_matrix(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow: {name: one_cycle}\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    state = WorkflowState(
+        workdir / "state.sqlite3",
+        workflow_name="one_cycle",
+        source_path=workflow,
+    )
+    state.ensure_cycle("2026100300", "2026-10-03T00:00:00Z")
+    state.set_status("hello", "success", 0, cycle_id="2026100300")
+    state.close()
+    config: dict[str, object] = {
+        "workflow": {"name": "one_cycle"},
+        "tasks": [{"name": "hello", "argv": ["true"]}],
+        "__simpleworkflow__": {
+            "source_path": str(workflow),
+            "source_dir": str(workflow.parent),
+        },
+    }
+    app = WorkflowTui(
+        config=config,
+        workflow_path=workflow,
+        workdir=workdir,
+        refresh_seconds=60.0,
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 35)) as pilot:
+            await pilot.pause()
+            assert app.cycle_mode
+            assert not app.query_one("#period-title").display
+            assert not app.query_one("#period-matrix").display
+
+    asyncio.run(scenario())
+
+
+def test_problem_filter_searches_real_problem_fields(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow: {name: problems}\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    state = WorkflowState(
+        workdir / "state.sqlite3",
+        workflow_name="problems",
+        source_path=workflow,
+    )
+    state.set_status("download", "failed", 7, reason="network unavailable")
+    state.set_status("validate", "invalid-output", 0, reason="missing report")
+    state.close()
+    config: dict[str, object] = {
+        "workflow": {"name": "problems"},
+        "tasks": [
+            {"name": "download", "argv": ["false"]},
+            {"name": "validate", "argv": ["true"]},
+        ],
+        "__simpleworkflow__": {
+            "source_path": str(workflow),
+            "source_dir": str(workflow.parent),
+        },
+    }
+    app = WorkflowTui(
+        config=config,
+        workflow_path=workflow,
+        workdir=workdir,
+        refresh_seconds=60.0,
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 35)) as pilot:
+            await pilot.pause()
+            app.action_select_view("problems")
+            app.action_show_filter()
+            field = app.query_one("#problem-filter")
+            assert field.display
+            field.value = "invalid-output"
+            await pilot.pause()
+            assert app.problem_filter == "invalid-output"
+            table = app.query_one("#problems-table")
+            assert table.row_count == 1
+            field.value = "does-not-exist"
+            await pilot.pause()
+            assert table.row_count == 1
+            app.action_escape_context()
+            await pilot.pause()
+            assert app.problem_filter == ""
+            assert table.row_count == 2
+
+    asyncio.run(scenario())
+
+
+def test_inspector_stdout_opens_logs_view_directly(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text(
+        """
+format_version: 1
+workflow:
+  name: logs_direct
+tasks:
+  - name: hello
+    argv: [python, -c, "print('hello from stdout')"]
+""".lstrip(),
+        encoding="utf-8",
+    )
+    assert main(["run", str(workflow), "--ui", "plain", "--color", "never"]) == 0
+
+    config = {
+        "workflow": {"name": "logs_direct"},
+        "tasks": [{"name": "hello", "argv": ["python", "-c", "print('hello from stdout')"]}],
+        "__simpleworkflow__": {
+            "source_path": str(workflow),
+            "source_dir": str(workflow.parent),
+        },
+    }
+    app = WorkflowTui(
+        config=config,
+        workflow_path=workflow,
+        workdir=tmp_path / ".simpleworkflow",
+        refresh_seconds=60.0,
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 35)) as pilot:
+            await pilot.pause()
+            inspector = app.query_one("#inspector")
+            assert inspector.focus_resource("stdout")
+            resources = inspector.query_one("#inspector-resources")
+            resources.focus()
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.query_one("#views").active == "logs"
+            assert app.selected_log_key == "stdout"
+            viewer = app.query_one("#log-viewer")
+            assert viewer.state.resource is not None
+            assert viewer.state.resource.key == "stdout"
 
     asyncio.run(scenario())
