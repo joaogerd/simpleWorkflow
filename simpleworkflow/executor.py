@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import signal
 import socket
@@ -10,6 +9,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Protocol, runtime_checkable
+
+from .runs import write_durable_json
 
 
 class _TerminationSignal(Exception):
@@ -116,21 +117,15 @@ class LocalExecutor:
                     start_new_session=True,
                 )
                 process_record = stdout_file.parent / "process.json"
-                temporary_record = process_record.with_suffix(".json.tmp")
-                temporary_record.write_text(
-                    json.dumps(
-                        {
-                            "pid": process.pid,
-                            "process_group": process.pid,
-                            "host": socket.gethostname(),
-                            "started_at_epoch": started_at,
-                        },
-                        sort_keys=True,
-                    )
-                    + "\n",
-                    encoding="utf-8",
+                write_durable_json(
+                    process_record,
+                    {
+                        "pid": process.pid,
+                        "process_group": process.pid,
+                        "host": socket.gethostname(),
+                        "started_at_epoch": started_at,
+                    },
                 )
-                os.replace(temporary_record, process_record)
                 timed_out = False
                 interrupted_signal: int | None = None
                 previous_handlers: dict[signal.Signals, Any] = {}
