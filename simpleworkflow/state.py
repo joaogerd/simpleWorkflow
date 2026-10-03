@@ -586,6 +586,8 @@ class WorkflowState:
             if scheduler_record and scheduler_record.is_file():
                 try:
                     scheduler = json.loads(scheduler_record.read_text(encoding="utf-8"))
+                    if not isinstance(scheduler, Mapping):
+                        raise ValueError("scheduler record must be a JSON object")
                     raw_job_id = scheduler.get("job_id")
                     if raw_job_id:
                         reason = (
