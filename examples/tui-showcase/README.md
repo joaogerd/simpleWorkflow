@@ -1,11 +1,15 @@
 # simpleWorkflow TUI showcase
 
+Each showcase workflow lives in its own directory. This is intentional: the
+default `.simpleworkflow/` directory represents exactly one logical workflow
+instance, so sibling YAML files must not share the same state directory.
+
 These examples exercise the TUI without MONAN, JEDI, PBS or HPC dependencies.
 
 ## 1. Minimal
 
 ```bash
-swf run examples/tui-showcase/01-minimal.yaml --ui tui
+swf run examples/tui-showcase/01-minimal/workflow.yaml --ui tui
 ```
 
 Expected TUI concepts:
@@ -19,7 +23,7 @@ Expected TUI concepts:
 ## 2. Standard workflow
 
 ```bash
-swf run examples/tui-showcase/02-workflow.yaml --ui tui
+swf run examples/tui-showcase/02-workflow/workflow.yaml --ui tui
 ```
 
 Shows:
@@ -33,8 +37,8 @@ Shows:
 ## 3. Artifacts and contracts
 
 ```bash
-rm -rf examples/tui-showcase/demo-work
-swf run examples/tui-showcase/03-artifacts.yaml --ui tui
+rm -rf examples/tui-showcase/03-artifacts/demo-work
+swf run examples/tui-showcase/03-artifacts/workflow.yaml --ui tui
 ```
 
 Shows:
@@ -50,20 +54,20 @@ Shows:
 Run it a second time to see reuse of successful state:
 
 ```bash
-swf run examples/tui-showcase/03-artifacts.yaml --ui tui
+swf run examples/tui-showcase/03-artifacts/workflow.yaml --ui tui
 ```
 
 Force another execution to create another attempt/run history:
 
 ```bash
-swf run examples/tui-showcase/03-artifacts.yaml --ui tui --force
+swf run examples/tui-showcase/03-artifacts/workflow.yaml --ui tui --force
 ```
 
 ## 4. Generic campaign
 
 ```bash
-rm -rf examples/tui-showcase/campaign-work
-swf run examples/tui-showcase/04-campaign.yaml --ui tui
+rm -rf examples/tui-showcase/04-campaign/campaign-work
+swf run examples/tui-showcase/04-campaign/workflow.yaml --ui tui
 ```
 
 This is intentionally generic. It represents a batch-processing campaign rather
@@ -87,8 +91,8 @@ Shows:
 ## 5. Problems
 
 ```bash
-rm -rf examples/tui-showcase/problem-work
-swf run examples/tui-showcase/05-problems.yaml --ui tui
+rm -rf examples/tui-showcase/05-problems/problem-work
+swf run examples/tui-showcase/05-problems/workflow.yaml --ui tui
 ```
 
 This workflow intentionally exits with code 7.
@@ -105,7 +109,7 @@ Shows:
 After the failing run, reopen the persisted state without executing anything:
 
 ```bash
-swf monitor examples/tui-showcase/05-problems.yaml
+swf monitor examples/tui-showcase/05-problems/workflow.yaml
 ```
 
 ## Suggested progression
@@ -123,7 +127,7 @@ question at each step:
 ## 6. Invalid input
 
 ```bash
-swf run examples/tui-showcase/06-invalid-input.yaml --ui tui
+swf run examples/tui-showcase/06-invalid-input/workflow.yaml --ui tui
 ```
 
 Shows a task in `invalid-input` before its process starts.
@@ -131,8 +135,8 @@ Shows a task in `invalid-input` before its process starts.
 ## 7. Invalid output
 
 ```bash
-rm -rf examples/tui-showcase/invalid-output-work
-swf run examples/tui-showcase/07-invalid-output.yaml --ui tui
+rm -rf examples/tui-showcase/07-invalid-output/invalid-output-work
+swf run examples/tui-showcase/07-invalid-output/workflow.yaml --ui tui
 ```
 
 The process exits successfully but fails the declared output contract, producing
@@ -141,7 +145,7 @@ The process exits successfully but fails the declared output contract, producing
 ## 8. Blocked dependency
 
 ```bash
-swf run examples/tui-showcase/08-blocked.yaml --ui tui
+swf run examples/tui-showcase/08-blocked/workflow.yaml --ui tui
 ```
 
 Shows a disabled prerequisite as `skipped` and its dependent task as
@@ -150,7 +154,7 @@ Shows a disabled prerequisite as `skipped` and its dependent task as
 ## 9. Timeout
 
 ```bash
-swf run examples/tui-showcase/09-timeout.yaml --ui tui
+swf run examples/tui-showcase/09-timeout/workflow.yaml --ui tui
 ```
 
 Shows a local process terminated by its task timeout and recorded as a failed
@@ -183,3 +187,27 @@ reasonably produce on a local machine:
 `stale`, `interrupted`, `unknown` and PBS-specific states depend on restart,
 interruption or scheduler conditions rather than a normal deterministic example,
 so they are not fabricated by these YAML files.
+
+
+## Saving and reproducing screenshots
+
+While the interactive TUI is open, press `s`. The current screen is saved as
+SVG under that workflow's own:
+
+```text
+.simpleworkflow/screenshots/
+```
+
+For reproducible documentation images, use the headless capture command after a
+workflow has state:
+
+```bash
+swf capture-tui examples/tui-showcase/04-campaign/workflow.yaml \
+  --view campaign \
+  --size 140x45 \
+  --output docs/tutorial/images/04-campaign-campaign.svg
+```
+
+Valid views are `monitor`, `problems`, `logs`, and, for cyclic workflows,
+`cycles` and `campaign`. The virtual `--size` makes documentation captures
+independent of the real terminal dimensions.
