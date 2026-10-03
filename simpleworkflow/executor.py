@@ -117,15 +117,42 @@ class LocalExecutor:
                     start_new_session=True,
                 )
                 process_record = stdout_file.parent / "process.json"
-                write_durable_json(
-                    process_record,
-                    {
-                        "pid": process.pid,
-                        "process_group": process.pid,
-                        "host": socket.gethostname(),
-                        "started_at_epoch": started_at,
-                    },
-                )
+                try:
+                    write_durable_json(
+                        process_record,
+                        {
+                            "pid": process.pid,
+                            "process_group": process.pid,
+                            "host": socket.gethostname(),
+                            "started_at_epoch": started_at,
+                        },
+                    )
+                except OSError as error:
+                    stderr.write(
+                        f"simpleWorkflow could not persist process identity: {error}\n"
+                    )
+                    try:
+                        os.killpg(process.pid, signal.SIGTERM)
+                        try:
+                            process_return_code = process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            os.killpg(process.pid, signal.SIGKILL)
+                            process_return_code = process.wait()
+                    except ProcessLookupError:
+                        process_return_code = process.wait()
+                    return ExecutionResult(
+                        return_code=127,
+                        metadata={
+                            "executor": "local",
+                            "pid": process.pid,
+                            "process_group": process.pid,
+                            "started_at_epoch": started_at,
+                            "finished_at_epoch": time.time(),
+                            "identity_persistence_failed": True,
+                            "process_return_code": process_return_code,
+                        },
+                        reason="local process identity could not be persisted; child was terminated",
+                    )
                 timed_out = False
                 interrupted_signal: int | None = None
                 previous_handlers: dict[signal.Signals, Any] = {}
