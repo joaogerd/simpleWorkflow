@@ -419,6 +419,19 @@ class WorkflowEngine:
                     pending.append(name)
         return descendants
 
+    def _block_descendants(self, task_name: str, reason: str) -> list[str]:
+        """Persist blocked descendants together so the DAG never exposes a partial cascade."""
+        descendants = self._descendants(task_name)
+        if descendants:
+            self.state.mark_tasks(
+                descendants,
+                "blocked",
+                reason,
+                cycle_id=self.cycle_id,
+                return_code=BLOCKED_EXIT_CODE,
+            )
+        return descendants
+
     def _adopt_legacy_signature(
         self,
         task_name: str,
@@ -478,12 +491,13 @@ class WorkflowEngine:
                 if unavailable:
                     reason = "dependência indisponível: " + ", ".join(unavailable)
                     self.reporter.event("fail", task_name, reason, executor=executor_name)
-                    self.state.set_status(
-                        task_name,
+                    affected = [task_name, *self._descendants(task_name)]
+                    self.state.mark_tasks(
+                        affected,
                         "blocked",
-                        BLOCKED_EXIT_CODE,
-                        reason=reason,
+                        reason,
                         cycle_id=self.cycle_id,
+                        return_code=BLOCKED_EXIT_CODE,
                     )
                     exit_code = BLOCKED_EXIT_CODE
                     break
@@ -495,6 +509,10 @@ class WorkflowEngine:
                         0,
                         cycle_id=self.cycle_id,
                     )
+                    reason = f"dependência '{task_name}' foi desabilitada"
+                    if self._block_descendants(task_name, reason):
+                        exit_code = BLOCKED_EXIT_CODE
+                        break
                     continue
 
                 artifacts = self._task_artifacts(task)
@@ -511,6 +529,7 @@ class WorkflowEngine:
                         INVALID_INPUT_EXIT_CODE,
                         cycle_id=self.cycle_id,
                     )
+                    self._block_descendants(task_name, message)
                     exit_code = INVALID_INPUT_EXIT_CODE
                     break
 
@@ -649,13 +668,7 @@ class WorkflowEngine:
                         execution=execution,
                         reason=reason,
                     )
-                    if descendants:
-                        self.state.mark_tasks(
-                            descendants,
-                            "blocked",
-                            reason,
-                            cycle_id=self.cycle_id,
-                        )
+                    self._block_descendants(task_name, reason)
                     exit_code = UNKNOWN_EXIT_CODE
                     break
 
@@ -682,13 +695,7 @@ class WorkflowEngine:
                             process_return_code=return_code,
                             reason=reason,
                         )
-                        if descendants:
-                            self.state.mark_tasks(
-                                descendants,
-                                "blocked",
-                                reason,
-                                cycle_id=self.cycle_id,
-                            )
+                        self._block_descendants(task_name, reason)
                         exit_code = INVALID_OUTPUT_EXIT_CODE
                         break
                     self.reporter.event("ok", task_name, executor=executor_name)
@@ -729,13 +736,7 @@ class WorkflowEngine:
                         process_return_code=return_code,
                         reason=reason,
                     )
-                    if descendants:
-                        self.state.mark_tasks(
-                            descendants,
-                            "blocked",
-                            reason,
-                            cycle_id=self.cycle_id,
-                        )
+                    self._block_descendants(task_name, reason)
                     exit_code = return_code
                     break
 
