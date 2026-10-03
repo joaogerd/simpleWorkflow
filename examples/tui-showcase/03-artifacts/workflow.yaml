@@ -12,7 +12,9 @@ tasks:
     argv:
       - "{python}"
       - -c
-      - "from pathlib import Path; p=Path('{work}'); p.mkdir(exist_ok=True); (p/'input.txt').write_text('alpha\nbeta\ngamma\n')"
+      - >-
+        from pathlib import Path; p=Path('{work}'); p.mkdir(exist_ok=True);
+        (p/'input.txt').write_text('alpha\\nbeta\\ngamma\\n')
     outputs:
       required:
         - "{work}/input.txt"
@@ -28,7 +30,9 @@ tasks:
     argv:
       - "{python}"
       - -c
-      - "import os; from pathlib import Path; src=Path('input.txt'); dst=Path('output.txt'); dst.write_text(os.environ['DEMO_PREFIX']+'\n'+src.read_text())"
+      - >-
+        import os; from pathlib import Path; src=Path('input.txt'); dst=Path('output.txt');
+        dst.write_text(os.environ['DEMO_PREFIX']+'\\n'+src.read_text())
     cwd: "{work}"
     inputs:
       required:
