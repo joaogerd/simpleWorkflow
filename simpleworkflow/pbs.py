@@ -21,6 +21,9 @@ _DIRECTIVE_VALUE = re.compile(r"^[A-Za-z0-9_.@/+:-]+$")
 _JOB_STATE = re.compile(r"(?m)^\s*job_state\s*=\s*([A-Za-z])\s*$")
 _EXIT_STATUS = re.compile(r"(?m)^\s*Exit_status\s*=\s*(-?\d+)\s*$")
 
+_CONTROL_TIMEOUT_SECONDS = 30.0
+_QSTAT_ATTEMPTS = 3
+
 
 class PbsExecutor:
     """Submit one task to PBS and wait for the final job result.
