@@ -84,8 +84,8 @@ _HELP_TEXT = """[bold]simpleWorkflow monitor[/bold]
 [bold]Navigation[/bold]
 ↑ / ↓        select item or scroll text
 ← / →        previous / next cycle
-Tab          next panel; Shift+Tab previous panel
-Ctrl+Tab     next view; Ctrl+Shift+Tab previous view
+p            switch panel
+1..5         select tab directly
 1..5         Monitor / Cycles / Campaign / Problems / Logs
 Enter        open or inspect selected item
 Esc          close current context or return
@@ -369,15 +369,12 @@ class WorkflowTui(App[None]):
         Binding("ctrl+c", "quit", "Quit", priority=True),
         ("left", "previous_cycle", "Previous cycle"),
         ("right", "next_cycle", "Next cycle"),
-        Binding("tab", "next_panel", "Next panel", priority=True),
-        Binding("shift+tab", "previous_panel", "Previous panel", priority=True),
-        Binding("ctrl+tab", "next_view", "Next view", priority=True),
-        Binding("ctrl+shift+tab", "previous_view", "Previous view", priority=True),
-        ("1", "select_view('monitor')", "Monitor"),
-        ("2", "select_view('cycles')", "Cycles"),
-        ("3", "select_view('campaign')", "Campaign"),
-        ("4", "select_view('problems')", "Problems"),
-        ("5", "select_view('logs')", "Logs"),
+        ("p", "next_panel", "Panel"),
+        ("1", "select_view_number(1)", "Tab 1"),
+        ("2", "select_view_number(2)", "Tab 2"),
+        ("3", "select_view_number(3)", "Tab 3"),
+        ("4", "select_view_number(4)", "Tab 4"),
+        ("5", "select_view_number(5)", "Tab 5"),
         ("slash", "show_filter", "Filter"),
         ("l", "open_logs", "Logs"),
         ("o", "select_output", "Output"),
@@ -579,19 +576,24 @@ class WorkflowTui(App[None]):
             narrow = self.size.width < 86
         active = views.active or "monitor"
         cycle_hint = "   ←/→ Cycle" if self.cycle_mode and active == "monitor" else ""
+        tab_hint = (
+            "1 Monitor  2 Ciclos  3 Campanha  4 Problemas  5 Logs"
+            if self.cycle_mode
+            else "1 Monitor  2 Problemas  3 Logs"
+        )
         if active == "logs":
-            text = "↑/↓ Scroll   PgUp/PgDn Page   f Follow   r Refresh   s Save   / Search   ? Help   q Exit"
+            text = f"↑/↓ Scroll   PgUp/PgDn Page   f Follow   r Refresh   s Save   {tab_hint}   ? Help   q Exit"
         elif active == "monitor" and narrow:
-            text = "↑/↓ Navigate   Tab Panel   Ctrl+Tab View   Enter Open   r Refresh   s Save   Esc Back   ? Help   q Exit"
+            text = f"↑/↓ Navigate   p Panel   Enter Open   r Refresh   s Save   {tab_hint}   Esc Back   ? Help   q Exit"
         elif active == "monitor":
             text = (
-                f"↑/↓ Navigate{cycle_hint}   Enter Open   Tab Panel   Ctrl+Tab View   "
-                "l Logs   r Refresh   s Save   ? Help   q Exit"
+                f"↑/↓ Navigate{cycle_hint}   p Panel   Enter Open   "
+                f"l Logs   r Refresh   s Save   {tab_hint}   ? Help   q Exit"
             )
         elif active == "problems":
-            text = "↑/↓ Navigate   Tab Panel   Ctrl+Tab View   Enter Open   / Filter   r Refresh   s Save   Esc Back   ? Help   q Exit"
+            text = f"↑/↓ Navigate   p Panel   Enter Open   / Filter   r Refresh   s Save   {tab_hint}   Esc Back   ? Help   q Exit"
         else:
-            text = "↑/↓ Navigate   Enter Open   Tab Panel   Ctrl+Tab View   r Refresh   s Save   Esc Back   ? Help   q Exit"
+            text = f"↑/↓ Navigate   Enter Open   r Refresh   s Save   {tab_hint}   Esc Back   ? Help   q Exit"
         shortcut.update(text)
 
     def _configure_tables(self) -> None:
@@ -1138,6 +1140,12 @@ class WorkflowTui(App[None]):
             self._sync_campaign_cursor()
         self._update_shortcuts()
         self.call_after_refresh(self._focus_active_view)
+
+    def action_select_view_number(self, number: int) -> None:
+        available = self._available_view_ids()
+        index = number - 1
+        if 0 <= index < len(available):
+            self.action_select_view(available[index])
 
     def action_select_view(self, view_id: str) -> None:
         if view_id in self._available_view_ids():
