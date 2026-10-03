@@ -576,24 +576,19 @@ class WorkflowTui(App[None]):
             narrow = self.size.width < 86
         active = views.active or "monitor"
         cycle_hint = "   ←/→ Cycle" if self.cycle_mode and active == "monitor" else ""
-        tab_hint = (
-            "1 Monitor  2 Ciclos  3 Campanha  4 Problemas  5 Logs"
-            if self.cycle_mode
-            else "1 Monitor  2 Problemas  3 Logs"
-        )
         if active == "logs":
-            text = f"↑/↓ Scroll   PgUp/PgDn Page   f Follow   r Refresh   s Save   {tab_hint}   ? Help   q Exit"
+            text = f"↑/↓ Scroll   PgUp/PgDn Page   f Follow   r Refresh   s Save   ? Help   q Exit"
         elif active == "monitor" and narrow:
-            text = f"↑/↓ Navigate   p Panel   Enter Open   r Refresh   s Save   {tab_hint}   Esc Back   ? Help   q Exit"
+            text = f"↑/↓ Navigate   p Panel   Enter Open   r Refresh   s Save   Esc Back   ? Help   q Exit"
         elif active == "monitor":
             text = (
                 f"↑/↓ Navigate{cycle_hint}   p Panel   Enter Open   "
-                f"l Logs   r Refresh   s Save   {tab_hint}   ? Help   q Exit"
+                f"l Logs   r Refresh   s Save   ? Help   q Exit"
             )
         elif active == "problems":
-            text = f"↑/↓ Navigate   p Panel   Enter Open   / Filter   r Refresh   s Save   {tab_hint}   Esc Back   ? Help   q Exit"
+            text = f"↑/↓ Navigate   p Panel   Enter Open   / Filter   r Refresh   s Save   Esc Back   ? Help   q Exit"
         else:
-            text = f"↑/↓ Navigate   Enter Open   r Refresh   s Save   {tab_hint}   Esc Back   ? Help   q Exit"
+            text = f"↑/↓ Navigate   Enter Open   r Refresh   s Save   Esc Back   ? Help   q Exit"
         shortcut.update(text)
 
     def _configure_tables(self) -> None:
