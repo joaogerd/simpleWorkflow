@@ -26,6 +26,7 @@ from textual.widgets import (
     Tree,
 )
 
+from .lifecycle import ATTENTION_STATES, COMPLETE_STATES
 from .monitor import (
     AttemptSnapshot,
     CycleSnapshot,
@@ -51,15 +52,6 @@ _STATUS = {
     "skipped": ("–", "SKIPPED", "dim"),
     "partial": ("◐", "PARTIAL", "yellow"),
 }
-_ATTENTION = {
-    "failed",
-    "invalid-input",
-    "invalid-output",
-    "blocked",
-    "interrupted",
-    "unknown",
-}
-_COMPLETE = {"success", "skipped"}
 _VIEW_IDS = ("monitor", "cycles", "campaign", "problems", "logs")
 _LOG_ORDER = ("pbs_stdout", "stdout", "pbs_stderr", "stderr")
 _LOG_ERROR_ORDER = ("pbs_stderr", "stderr", "pbs_stdout", "stdout")
@@ -597,9 +589,9 @@ class WorkflowTui(App[None]):
             for task in tasks:
                 if status_group == "running" and task.status == "running":
                     return task.name
-                if status_group == "attention" and task.status in _ATTENTION:
+                if status_group == "attention" and task.status in ATTENTION_STATES:
                     return task.name
-                if status_group == "pending" and task.status not in _COMPLETE:
+                if status_group == "pending" and task.status not in COMPLETE_STATES:
                     return task.name
         return tasks[-1].name if tasks else None
 
@@ -1318,7 +1310,7 @@ class WorkflowTui(App[None]):
             tasks = [task for cycle in cycles for task in cycle.tasks]
             completed = sum(task.status in _COMPLETE for task in tasks)
             running = sum(task.status == "running" for task in tasks)
-            failed = sum(task.status in _ATTENTION for task in tasks)
+            failed = sum(task.status in ATTENTION_STATES for task in tasks)
             pending = len(tasks) - completed - running - failed
             state = self._aggregate_status([cycle.status for cycle in cycles])
             hours = " ".join(_format_cycle_hour(cycle.cycle_time) for cycle in cycles)
