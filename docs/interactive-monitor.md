@@ -215,23 +215,30 @@ and no dependency is changed by the monitor.
 The deliberately small shortcut set is:
 
 ```text
-↑ / ↓        select task when the tree has focus
+↑ / ↓        navigate the focused content
 ← / →        previous / next cycle
-/            filter tasks
-Enter        inspect selected task on narrow terminals
+p            switch Workflow / Inspector panel in Monitor
+/            filter tasks or problems when supported
+Enter        open/select the focused item
 Esc          clear filter / return to workflow
-Tab          next view
-Shift+Tab    previous view
-1..5         Monitor / Ciclos / Campanha / Problemas / Logs
+1..5         select an available tab directly
 l            logs for selected task
 o / e        preferred output / error log
 f            follow / pause log updates
 r            refresh now
-?            help overlay
+s            save the current TUI as SVG
+? / F1       help overlay
 q            close monitor
 ```
 
-The date controls, cycle buttons, campaign rows, cycle-matrix cells, Inspector
+The numeric tab mapping is compact for non-cyclic workflows: 1 Monitor, 2 Problems,
+3 Logs. Cyclic workflows expose 1 Monitor, 2 Cycles, 3 Campaign, 4 Problems and
+5 Logs. The permanent footer intentionally omits these numeric shortcuts; they
+remain available in the help overlay to keep the operational footer uncluttered.
+
+The main content receives keyboard focus automatically when the monitor opens or
+when a tab is selected, so arrow-key navigation does not require a preliminary
+mouse click. The date controls, cycle buttons, campaign rows, cycle-matrix cells, Inspector
 attempt/resource controls, problem rows, log-stream selectors and related-file
 rows are also clickable. The help overlay only lists commands that exist; there
 is no permanent Help tab.
