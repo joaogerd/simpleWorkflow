@@ -62,7 +62,12 @@ same case while preserving one workflow identity.
 
 Every attempt has separate start and final records, stdout, stderr and a SHA-256
 checksum for final metadata. Every run stores its effective `workflow.yaml`.
-Final metadata is published before successful task state is committed.
+Final metadata is published before successful task state is committed. Recovery
+verifies `metadata.sha256` when it is present; a mismatch is treated as
+`unknown`, while older attempt records without the checksum remain readable.
+Mutable runtime identity records such as `process.json` and `scheduler.json`
+are atomically replaced and synchronized before they are used for restart
+decisions.
 
 The SQLite database also indexes runs and attempts and records state transitions.
 `swf reset` clears the current reusable task state for the selected workflow/cycle

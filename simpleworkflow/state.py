@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .runs import metadata_checksum_matches
+
 STATE_SCHEMA_VERSION = 1
 _NO_CYCLE = ""
 
@@ -526,6 +528,20 @@ class WorkflowState:
             attempt = self.resolve_path(attempt_path)
             metadata = attempt / "metadata.json" if attempt else None
             if metadata and metadata.is_file():
+                checksum_matches = metadata_checksum_matches(metadata)
+                if checksum_matches is False:
+                    self.set_status(
+                        task,
+                        "unknown",
+                        None,
+                        signature,
+                        "metadata final existe, mas metadata.sha256 não corresponde ao conteúdo",
+                        attempt_path,
+                        cycle_id=cycle_id,
+                        signature_schema=schema,
+                        signature_payload=payload,
+                    )
+                    continue
                 try:
                     record = json.loads(metadata.read_text(encoding="utf-8"))
                     status = str(record["status"])

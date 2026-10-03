@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import os
 import re
 import shlex
 import subprocess
@@ -13,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .executor import ExecutionResult
+from .runs import write_durable_json
 
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _JOB_ID = re.compile(r"(?m)^\s*([0-9]+(?:\.[A-Za-z0-9_.-]+)?)\s*$")
@@ -80,9 +79,7 @@ class PbsExecutor:
 
     @staticmethod
     def _write_scheduler_record(path: Path, payload: Mapping[str, Any]) -> None:
-        temporary = path.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(dict(payload), sort_keys=True) + "\n", encoding="utf-8")
-        os.replace(temporary, path)
+        write_durable_json(path, payload)
 
     @staticmethod
     def _pbs_result(output: str) -> tuple[bool, int | None]:
@@ -262,6 +259,18 @@ class PbsExecutor:
             "job_stdout": str(worker_stdout.resolve(strict=False)),
             "job_stderr": str(worker_stderr.resolve(strict=False)),
         }
+        pending_submission = {**submission_metadata, "submission_pending": True}
+        try:
+            self._write_scheduler_record(scheduler_record, pending_submission)
+        except OSError as error:
+            reason = f"could not persist PBS submission marker before qsub: {error}"
+            self._write(submit_stderr, f"simpleWorkflow: {reason}\n")
+            return ExecutionResult(
+                return_code=127,
+                metadata=submission_metadata,
+                reason=reason,
+            )
+
         try:
             completed = subprocess.run(
                 command,
@@ -280,7 +289,10 @@ class PbsExecutor:
                 "submission_uncertain": True,
                 "reason": reason,
             }
-            self._write_scheduler_record(scheduler_record, uncertain_submission)
+            try:
+                self._write_scheduler_record(scheduler_record, uncertain_submission)
+            except OSError as persist_error:
+                uncertain_submission["scheduler_record_error"] = str(persist_error)
             self._write(submit_stderr, f"simpleWorkflow: {reason}\n")
             return self._unknown_result(uncertain_submission, reason)
         except OSError as error:
@@ -306,11 +318,27 @@ class PbsExecutor:
                 "submission_uncertain": True,
                 "reason": reason,
             }
-            self._write_scheduler_record(scheduler_record, uncertain_submission)
+            try:
+                self._write_scheduler_record(scheduler_record, uncertain_submission)
+            except OSError as persist_error:
+                uncertain_submission["scheduler_record_error"] = str(persist_error)
             self._write(submit_stderr, f"simpleWorkflow: {reason}\n")
             return self._unknown_result(uncertain_submission, reason)
 
-        self._write_scheduler_record(scheduler_record, base_metadata)
+        try:
+            self._write_scheduler_record(scheduler_record, base_metadata)
+        except OSError as error:
+            reason = (
+                f"PBS accepted job {job_id}, but its scheduler identity could not be "
+                f"durably updated: {error}"
+            )
+            uncertain_metadata = {
+                **base_metadata,
+                "scheduler_record_error": str(error),
+            }
+            self._write(submit_stderr, f"simpleWorkflow: {reason}\n")
+            return self._unknown_result(uncertain_metadata, reason)
+
         qstat = shlex.split(str(self.options.get("qstat", "qstat")))
         qdel = shlex.split(str(self.options.get("qdel", "qdel")))
         interval = float(self.options["poll_interval"])
