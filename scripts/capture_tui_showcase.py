@@ -111,87 +111,6 @@ def _write_gallery(images: list[tuple[str, str, Path]]) -> None:
 
 
 
-def _write_html(images: list[tuple[str, str, Path]]) -> None:
-    by_case: dict[str, list[tuple[str, Path]]] = {}
-    for case, view, image in images:
-        by_case.setdefault(case, []).append((view, image))
-
-    sections: list[str] = []
-    for case, title, description, _views in CASES:
-        figures: list[str] = []
-        for view, image in by_case.get(case, []):
-            rel = image.relative_to(OUTPUT.parent).as_posix()
-            figures.append(
-                f"""
-                <figure class="shot">
-                  <a href="{rel}" target="_blank" rel="noopener">
-                    <img src="{rel}" alt="{title} — {view}" loading="lazy">
-                  </a>
-                  <figcaption><strong>{view}</strong><span>Abrir SVG em tamanho original ↗</span></figcaption>
-                </figure>
-                """
-            )
-        sections.append(
-            f"""
-            <section id="{case}" class="case">
-              <div class="case-heading">
-                <span class="case-number">{case.split('-', 1)[0]}</span>
-                <div>
-                  <h2>{title}</h2>
-                  <p class="muted">{description}</p>
-                </div>
-              </div>
-              <div class="shots">{''.join(figures)}</div>
-            </section>
-            """
-        )
-
-    html = f"""<!doctype html>
-<html lang="pt-BR">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="color-scheme" content="dark">
-  <title>Galeria TUI — simpleWorkflow</title>
-  <link rel="stylesheet" href="../assets/site.css">
-</head>
-<body>
-<nav class="site-nav"><div class="inner">
-  <a class="brand" href="../">simple<span>Workflow</span></a>
-  <div class="nav-links">
-    <a href="./">Tutorial</a>
-    <a class="active" href="showcase.html">Galeria TUI</a>
-    <a class="optional" href="https://github.com/joaogerd/simpleWorkflow">GitHub</a>
-  </div>
-</div></nav>
-<header class="hero"><div class="inner">
-  <div class="eyebrow">Capturas reproduzíveis da interface</div>
-  <h1>TUI Showcase</h1>
-  <p>Do workflow mínimo a ciclos, contratos e diagnóstico de falhas. Todas as telas abaixo são geradas automaticamente a partir de exemplos executáveis do próprio repositório.</p>
-  <div class="actions">
-    <a class="button primary" href="./">Ler o tutorial</a>
-    <a class="button" href="#01-minimal">Ver as telas</a>
-  </div>
-</div></header>
-<main>
-  <div class="callout">
-    <strong>Como usar esta página:</strong> comece pelo exemplo 01 e avance em ordem.
-    Clique em qualquer imagem para abrir o SVG original. As capturas usam um terminal virtual
-    de 140 × 45 caracteres para permanecerem reproduzíveis.
-  </div>
-  {''.join(sections)}
-</main>
-<footer><div class="inner">
-  Gerado por <code>python scripts/capture_tui_showcase.py</code>.
-  As imagens e esta página são reconstruídas a partir dos exemplos do repositório.
-</div></footer>
-</body>
-</html>
-"""
-    page = OUTPUT.parent / "showcase.html"
-    page.parent.mkdir(parents=True, exist_ok=True)
-    page.write_text(html, encoding="utf-8")
-
 def main() -> int:
     OUTPUT.mkdir(parents=True, exist_ok=True)
     images: list[tuple[str, str, Path]] = []
@@ -201,7 +120,6 @@ def main() -> int:
         for view in views:
             images.append((case, view, _capture(case, workflow, view)))
     _write_gallery(images)
-    _write_html(images)
     print(OUTPUT.parent / "showcase.html")
     return 0
 
