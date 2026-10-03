@@ -586,27 +586,42 @@ class WorkflowState:
             if scheduler_record and scheduler_record.is_file():
                 try:
                     scheduler = json.loads(scheduler_record.read_text(encoding="utf-8"))
-                    job_id = str(scheduler["job_id"])
+                    if not isinstance(scheduler, Mapping):
+                        raise ValueError("scheduler record must be a JSON object")
+                    raw_job_id = scheduler.get("job_id")
+                    if raw_job_id:
+                        reason = (
+                            f"job PBS {raw_job_id} precisa ser reconciliado com o escalonador"
+                        )
+                    elif scheduler.get("submission_pending") or scheduler.get(
+                        "submission_uncertain"
+                    ):
+                        reason = (
+                            "submissão PBS foi iniciada, mas o job_id ou resultado "
+                            "não pôde ser confirmado"
+                        )
+                    else:
+                        reason = "registro PBS existe, mas não comprova um resultado terminal"
                     self.set_status(
                         task,
                         "unknown",
                         None,
                         signature,
-                        f"job PBS {job_id} precisa ser reconciliado com o escalonador",
+                        reason,
                         attempt_path,
                         cycle_id=cycle_id,
                         signature_schema=schema,
                         signature_payload=payload,
                     )
                     continue
-                except (OSError, ValueError, KeyError, TypeError):
+                except (OSError, ValueError, TypeError):
                     pass
             self.set_status(
                 task,
-                "interrupted",
+                "unknown",
                 None,
                 signature,
-                "o controlador anterior terminou antes de registrar o resultado",
+                "a execução foi iniciada, mas não há prova persistente de resultado terminal",
                 attempt_path,
                 cycle_id=cycle_id,
                 signature_schema=schema,

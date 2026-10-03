@@ -3,9 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import multiprocessing
+import socket
 import sys
 import time
 from pathlib import Path
+
+import pytest
 
 from simpleworkflow.engine import WorkflowEngine
 from simpleworkflow.locking import WorkflowLockedError
@@ -140,4 +143,150 @@ def test_descendants_become_blocked_after_dependency_failure(tmp_path: Path) -> 
     assert engine.run() == 7
     assert engine.state.get_status("b") == "blocked"
     assert engine.state.get_status("c") == "blocked"
+    engine.state.close()
+
+
+
+def test_running_attempt_without_terminal_record_becomes_unknown(tmp_path: Path) -> None:
+    workdir = tmp_path / ".simpleworkflow"
+    attempt = workdir / "runs" / "run-missing" / "tasks" / "task-a" / "attempt-001"
+    attempt.mkdir(parents=True)
+    engine = WorkflowEngine(
+        {"workflow": {"name": "recover-missing"}, "tasks": []},
+        workdir=workdir,
+    )
+    engine.state.set_status("task", "running", None, "signature", attempt_path=attempt)
+
+    engine.state.reconcile_running()
+
+    recovered = engine.state.get_task_state("task")
+    assert recovered is not None
+    assert recovered.status == "unknown"
+    assert recovered.return_code is None
+    assert recovered.reason is not None and "não há prova persistente" in recovered.reason
+    engine.state.close()
+
+
+def test_dead_local_process_without_terminal_record_becomes_unknown(tmp_path: Path) -> None:
+    workdir = tmp_path / ".simpleworkflow"
+    attempt = workdir / "runs" / "run-dead" / "tasks" / "task-a" / "attempt-001"
+    attempt.mkdir(parents=True)
+    process = multiprocessing.Process(target=lambda: None)
+    process.start()
+    pid = process.pid
+    process.join()
+    assert pid is not None
+    (attempt / "process.json").write_text(
+        json.dumps({"pid": pid, "host": socket.gethostname()}),
+        encoding="utf-8",
+    )
+    engine = WorkflowEngine(
+        {"workflow": {"name": "recover-dead"}, "tasks": []},
+        workdir=workdir,
+    )
+    engine.state.set_status("task", "running", None, "signature", attempt_path=attempt)
+
+    engine.state.reconcile_running()
+
+    assert engine.state.get_status("task") == "unknown"
+    engine.state.close()
+
+
+def test_pending_pbs_submission_without_job_id_becomes_unknown(tmp_path: Path) -> None:
+    workdir = tmp_path / ".simpleworkflow"
+    attempt = workdir / "runs" / "run-pbs" / "tasks" / "task-a" / "attempt-001"
+    attempt.mkdir(parents=True)
+    (attempt / "scheduler.json").write_text(
+        json.dumps({"job_id": None, "submission_pending": True}),
+        encoding="utf-8",
+    )
+    engine = WorkflowEngine(
+        {"workflow": {"name": "recover-pbs"}, "tasks": []},
+        workdir=workdir,
+    )
+    engine.state.set_status("task", "running", None, "signature", attempt_path=attempt)
+
+    engine.state.reconcile_running()
+
+    recovered = engine.state.get_task_state("task")
+    assert recovered is not None
+    assert recovered.status == "unknown"
+    assert recovered.reason is not None and "submissão PBS" in recovered.reason
+    engine.state.close()
+
+
+def test_unknown_recovery_blocks_automatic_reexecution(tmp_path: Path) -> None:
+    workdir = tmp_path / ".simpleworkflow"
+    attempt = workdir / "runs" / "run-block" / "tasks" / "task-a" / "attempt-001"
+    attempt.mkdir(parents=True)
+    config = {
+        "workflow": {"name": "recover-block"},
+        "tasks": [{"name": "task", "argv": [sys.executable, "-c", "print('must not run')"]}],
+    }
+    engine = WorkflowEngine(config, workdir=workdir)
+    engine.state.set_status("task", "running", None, "signature", attempt_path=attempt)
+
+    with pytest.raises(RuntimeError, match="não é seguro continuar"):
+        engine.run()
+
+    assert engine.state.get_status("task") == "unknown"
+    run_directories = [path.name for path in (workdir / "runs").iterdir() if path.is_dir()]
+    assert run_directories == ["run-block"]
+    assert not (attempt / "metadata.json").exists()
+    engine.state.close()
+
+
+
+@pytest.mark.parametrize("payload", ["null", "[]", '"not-an-object"'])
+def test_malformed_scheduler_json_falls_back_to_unknown(
+    tmp_path: Path, payload: str
+) -> None:
+    workdir = tmp_path / ".simpleworkflow"
+    attempt = workdir / "runs" / "run-malformed" / "tasks" / "task-a" / "attempt-001"
+    attempt.mkdir(parents=True)
+    (attempt / "scheduler.json").write_text(payload, encoding="utf-8")
+    engine = WorkflowEngine(
+        {"workflow": {"name": "recover-malformed"}, "tasks": []},
+        workdir=workdir,
+    )
+    engine.state.set_status("task", "running", None, "signature", attempt_path=attempt)
+
+    engine.state.reconcile_running()
+
+    recovered = engine.state.get_task_state("task")
+    assert recovered is not None
+    assert recovered.status == "unknown"
+    engine.state.close()
+
+
+def test_unrelated_unknown_task_does_not_block_selected_task(tmp_path: Path) -> None:
+    workdir = tmp_path / ".simpleworkflow"
+    config = {
+        "workflow": {"name": "selected-safe"},
+        "tasks": [
+            {"name": "wanted", "argv": [sys.executable, "-c", "print('wanted')"]},
+            {"name": "other", "argv": [sys.executable, "-c", "print('other')"]},
+        ],
+    }
+    engine = WorkflowEngine(config, workdir=workdir, selected_tasks={"wanted"})
+    engine.state.set_status("other", "unknown", None, reason="unrelated uncertain work")
+
+    assert engine.run() == 0
+    assert engine.state.get_status("wanted") == "success"
+    assert engine.state.get_status("other") == "unknown"
+    engine.state.close()
+
+
+def test_removed_unknown_task_does_not_block_current_workflow(tmp_path: Path) -> None:
+    workdir = tmp_path / ".simpleworkflow"
+    config = {
+        "workflow": {"name": "removed-safe"},
+        "tasks": [{"name": "current", "argv": [sys.executable, "-c", "print('current')"]}],
+    }
+    engine = WorkflowEngine(config, workdir=workdir)
+    engine.state.set_status("removed-task", "unknown", None, reason="old workflow definition")
+
+    assert engine.run() == 0
+    assert engine.state.get_status("current") == "success"
+    assert engine.state.get_status("removed-task") == "unknown"
     engine.state.close()

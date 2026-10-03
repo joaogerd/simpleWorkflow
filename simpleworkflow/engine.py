@@ -341,7 +341,12 @@ class WorkflowEngine:
             return self._run_dry()
         with WorkflowLock(self.workdir, self.workflow_name):
             self.state.reconcile_running(cycle_id=self.cycle_id)
-            uncertain = self.state.tasks_with_status("unknown", cycle_id=self.cycle_id)
+            planned_tasks = set(self.plan())
+            uncertain = [
+                task
+                for task in self.state.tasks_with_status("unknown", cycle_id=self.cycle_id)
+                if task in planned_tasks
+            ]
             if uncertain:
                 raise RuntimeError(
                     "não é seguro continuar; a atividade ainda não pôde ser confirmada para: "
