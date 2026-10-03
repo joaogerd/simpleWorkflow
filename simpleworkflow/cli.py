@@ -119,6 +119,36 @@ def build_parser() -> argparse.ArgumentParser:
         "--debug", action="store_true", help="Show technical traceback details."
     )
 
+
+    capture_parser = subparsers.add_parser(
+        "capture-tui",
+        help="Render one deterministic SVG screenshot of the read-only TUI.",
+    )
+    capture_parser.add_argument("workflow")
+    _add_workdir_option(capture_parser)
+    _add_display_options(capture_parser)
+    capture_parser.add_argument(
+        "--view",
+        choices=("monitor", "cycles", "campaign", "problems", "logs"),
+        default="monitor",
+        help="TUI view to capture (default: monitor).",
+    )
+    capture_parser.add_argument(
+        "--size",
+        default="120x35",
+        metavar="COLSxROWS",
+        help="Virtual terminal size used for rendering (default: 120x35).",
+    )
+    capture_parser.add_argument(
+        "--output",
+        required=True,
+        metavar="PATH",
+        help="Destination SVG path.",
+    )
+    capture_parser.add_argument(
+        "--debug", action="store_true", help="Show technical traceback details."
+    )
+
     migrate_parser = subparsers.add_parser(
         "migrate",
         help="Inspect or migrate a pre-0.4 state database.",
@@ -467,6 +497,28 @@ def _main(argv: list[str] | None = None) -> int:
             refresh_seconds=float(args.refresh_seconds),
             color=_tui_color_enabled(args.color),
         )
+        return 0
+
+    if args.command == "capture-tui":
+        if not tui_available():
+            raise RuntimeError(
+                'TUI capture requires pip install "simpleworkflow[tui]"'
+            )
+        from .tui_capture import capture_tui
+
+        workflow_path = Path(
+            config.get("__simpleworkflow__", {}).get("source_path", args.workflow)
+        ).resolve(strict=False)
+        output = capture_tui(
+            config=config,
+            workflow_path=workflow_path,
+            workdir=_resolve_workdir(config, args.workdir),
+            view=args.view,
+            size=args.size,
+            output=args.output,
+            color=_tui_color_enabled(args.color),
+        )
+        print(output)
         return 0
 
     reporter = TerminalReporter(color=args.color)
