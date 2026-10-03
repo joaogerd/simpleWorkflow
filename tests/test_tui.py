@@ -432,7 +432,10 @@ def test_shortcut_footer_is_docked_to_bottom_on_low_height_terminal(tmp_path: Pa
             footer = app.query_one("#shortcut-line", Static)
             assert footer.display
             assert footer.region.height == 1
+            assert footer.region.width == app.size.width
             assert footer.region.y + footer.region.height == app.size.height
-            assert "r Refresh" in str(footer.render())
+            rendered = str(footer.render())
+            assert "r Refresh" in rendered
+            assert "q Exit" in rendered
 
     asyncio.run(scenario())
