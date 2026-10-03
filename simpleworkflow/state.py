@@ -682,16 +682,17 @@ class WorkflowState:
             if metadata and metadata.is_file():
                 checksum_matches = metadata_checksum_matches(metadata)
                 if checksum_matches is False:
-                    self.set_status(
-                        task,
-                        "unknown",
-                        None,
-                        signature,
-                        "metadata final existe, mas metadata.sha256 não corresponde ao conteúdo",
-                        attempt_path,
+                    self._reconcile_task_state(
+                        task=task,
+                        status="unknown",
+                        return_code=None,
+                        signature=signature,
+                        reason="metadata final existe, mas metadata.sha256 não corresponde ao conteúdo",
+                        attempt_path=attempt_path,
                         cycle_id=cycle_id,
                         signature_schema=schema,
                         signature_payload=payload,
+                        terminal_metadata=False,
                     )
                     continue
                 try:
@@ -699,16 +700,17 @@ class WorkflowState:
                     status = str(record["status"])
                     return_code = record.get("return_code")
                     reason = record.get("reason") or "resultado recuperado do registro da tentativa"
-                    self.set_status(
-                        task,
-                        status,
-                        return_code,
-                        signature,
-                        reason,
-                        attempt_path,
+                    self._reconcile_task_state(
+                        task=task,
+                        status=status,
+                        return_code=return_code,
+                        signature=signature,
+                        reason=reason,
+                        attempt_path=attempt_path,
                         cycle_id=cycle_id,
                         signature_schema=schema,
                         signature_payload=payload,
+                        terminal_metadata=True,
                     )
                     continue
                 except (OSError, ValueError, KeyError, TypeError):
@@ -720,16 +722,17 @@ class WorkflowState:
                     pid = int(process["pid"])
                     if process.get("host") == socket.gethostname():
                         os.kill(pid, 0)
-                        self.set_status(
-                            task,
-                            "unknown",
-                            None,
-                            signature,
-                            f"processo {pid} ainda pode estar ativo neste computador",
-                            attempt_path,
+                        self._reconcile_task_state(
+                            task=task,
+                            status="unknown",
+                            return_code=None,
+                            signature=signature,
+                            reason=f"processo {pid} ainda pode estar ativo neste computador",
+                            attempt_path=attempt_path,
                             cycle_id=cycle_id,
                             signature_schema=schema,
                             signature_payload=payload,
+                            terminal_metadata=False,
                         )
                         continue
                 except (OSError, ValueError, KeyError, TypeError):
@@ -754,30 +757,32 @@ class WorkflowState:
                         )
                     else:
                         reason = "registro PBS existe, mas não comprova um resultado terminal"
-                    self.set_status(
-                        task,
-                        "unknown",
-                        None,
-                        signature,
-                        reason,
-                        attempt_path,
+                    self._reconcile_task_state(
+                        task=task,
+                        status="unknown",
+                        return_code=None,
+                        signature=signature,
+                        reason=reason,
+                        attempt_path=attempt_path,
                         cycle_id=cycle_id,
                         signature_schema=schema,
                         signature_payload=payload,
+                        terminal_metadata=False,
                     )
                     continue
                 except (OSError, ValueError, TypeError):
                     pass
-            self.set_status(
-                task,
-                "unknown",
-                None,
-                signature,
-                "a execução foi iniciada, mas não há prova persistente de resultado terminal",
-                attempt_path,
+            self._reconcile_task_state(
+                task=task,
+                status="unknown",
+                return_code=None,
+                signature=signature,
+                reason="a execução foi iniciada, mas não há prova persistente de resultado terminal",
+                attempt_path=attempt_path,
                 cycle_id=cycle_id,
                 signature_schema=schema,
                 signature_payload=payload,
+                terminal_metadata=False,
             )
 
     def tasks_with_status(self, status: str, *, cycle_id: str | None = None) -> list[str]:
