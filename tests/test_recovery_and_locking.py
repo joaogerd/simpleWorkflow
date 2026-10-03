@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import multiprocessing
 import sys
@@ -70,6 +71,59 @@ def test_running_attempt_is_recovered_from_final_metadata(tmp_path: Path) -> Non
     recovered = engine.state.get_task_state("task")
     assert recovered is not None and recovered.attempt_path is not None
     assert not Path(recovered.attempt_path).is_absolute()
+    engine.state.close()
+
+
+
+def test_running_attempt_with_valid_metadata_checksum_is_recovered(tmp_path: Path) -> None:
+    workdir = tmp_path / ".simpleworkflow"
+    attempt = workdir / "runs" / "run-checksum" / "tasks" / "task-a" / "attempt-001"
+    attempt.mkdir(parents=True)
+    metadata = attempt / "metadata.json"
+    metadata.write_text(
+        json.dumps({"status": "success", "return_code": 0}) + "\n",
+        encoding="utf-8",
+    )
+    (attempt / "metadata.sha256").write_text(
+        hashlib.sha256(metadata.read_bytes()).hexdigest() + "\n",
+        encoding="utf-8",
+    )
+    engine = WorkflowEngine(
+        {"workflow": {"name": "recover-checksum"}, "tasks": []},
+        workdir=workdir,
+    )
+    engine.state.set_status("task", "running", None, "signature", attempt_path=attempt)
+
+    engine.state.reconcile_running()
+
+    assert engine.state.get_status("task") == "success"
+    engine.state.close()
+
+
+def test_running_attempt_with_mismatched_metadata_checksum_becomes_unknown(
+    tmp_path: Path,
+) -> None:
+    workdir = tmp_path / ".simpleworkflow"
+    attempt = workdir / "runs" / "run-corrupt" / "tasks" / "task-a" / "attempt-001"
+    attempt.mkdir(parents=True)
+    (attempt / "metadata.json").write_text(
+        json.dumps({"status": "success", "return_code": 0}) + "\n",
+        encoding="utf-8",
+    )
+    (attempt / "metadata.sha256").write_text("0" * 64 + "\n", encoding="utf-8")
+    engine = WorkflowEngine(
+        {"workflow": {"name": "recover-corrupt"}, "tasks": []},
+        workdir=workdir,
+    )
+    engine.state.set_status("task", "running", None, "signature", attempt_path=attempt)
+
+    engine.state.reconcile_running()
+
+    recovered = engine.state.get_task_state("task")
+    assert recovered is not None
+    assert recovered.status == "unknown"
+    assert recovered.return_code is None
+    assert recovered.reason is not None and "metadata.sha256" in recovered.reason
     engine.state.close()
 
 
