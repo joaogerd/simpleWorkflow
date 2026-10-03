@@ -353,8 +353,10 @@ class WorkflowTui(App[None]):
     #shortcut-line {
         dock: bottom;
         width: 100%;
-        height: 1; padding: 0 1; border-top: solid #252b35;
-        background: #111318; color: #8c93a1;
+        height: 1;
+        padding: 0 1;
+        background: #111318;
+        color: #8c93a1;
     }
     """
 
