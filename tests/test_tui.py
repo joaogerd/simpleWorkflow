@@ -208,8 +208,11 @@ def test_representative_terminal_sizes_keep_all_views_operational(tmp_path: Path
             await pilot.pause()
             views = app.query_one("#views")
             assert views.active == "monitor"
-            for expected in ("cycles", "campaign", "problems", "logs"):
-                await pilot.press("2")
+            for key, expected in zip(
+                ("2", "3", "4", "5"),
+                ("cycles", "campaign", "problems", "logs"),
+            ):
+                await pilot.press(key)
                 await pilot.pause()
                 assert views.active == expected
             await pilot.press("1")
