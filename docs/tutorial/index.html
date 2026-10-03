@@ -11,8 +11,10 @@
   <a class="brand" href="../">simple<span>Workflow</span></a>
   <div class="nav-links">
     <a class="active" href="./">Tutorial</a>
-    <a href="showcase.html">Galeria TUI</a>
-    <a class="optional" href="https://github.com/joaogerd/simpleWorkflow">GitHub</a>
+    <a href="workflows.html">Workflows</a>
+    <a href="cycles.html">Ciclos</a>
+    <a href="../reference/yaml.html">Referência</a>
+    <a class="optional" href="showcase.html">Galeria</a>
   </div>
 </div></nav>
 <header class="hero"><div class="inner">
@@ -51,14 +53,14 @@
 
 <section id="instalacao">
 <h2>1. Instalação</h2>
-<p>Para usar também a interface interativa no terminal, instale o extra <code>tui</code>:</p>
-<pre><code>python -m pip install "simpleworkflow[tui]"</code></pre>
-<p>Em um checkout para desenvolvimento:</p>
-<pre><code>git clone https://github.com/joaogerd/simpleWorkflow.git
+<p>No estado atual do projeto, a instalação documentada parte do repositório GitHub. Não assuma que o pacote já está publicado em um índice Python.</p>
+<pre><code>python3 -m venv ~/.venvs/simpleworkflow
+source ~/.venvs/simpleworkflow/bin/activate
+git clone https://github.com/joaogerd/simpleWorkflow.git
 cd simpleWorkflow
-python -m pip install -e ".[dev]"</code></pre>
-<p>Confirme a instalação:</p>
-<pre><code>swf --help</code></pre>
+python -m pip install ".[tui]"
+swf --help</code></pre>
+<p>Se algum desses passos for novidade para você, use o <a href="install.html">guia de instalação detalhado</a>, que explica ambiente virtual, atualização e instalação para desenvolvimento.</p>
 </section>
 
 <section id="primeiros-passos">
@@ -78,6 +80,15 @@ tasks:
       - -c
       - "print('Olá do simpleWorkflow')"</code></pre>
 <div class="callout"><strong>Por que <code>argv</code>?</strong> Cada item é um argumento real do processo. O simpleWorkflow não interpreta uma string de shell escondida, o que deixa a execução mais previsível.</div>
+<h3>O que significam essas palavras?</h3>
+<table><thead><tr><th>Palavra</th><th>Neste primeiro exemplo</th></tr></thead><tbody>
+<tr><td><code>format_version</code></td><td>Diz qual versão do formato YAML estamos usando.</td></tr>
+<tr><td><code>workflow</code></td><td>Abre a seção que descreve o workflow.</td></tr>
+<tr><td><code>name</code></td><td>Dá um nome ao workflow ou à tarefa.</td></tr>
+<tr><td><code>tasks</code></td><td>Lista as tarefas que serão executadas.</td></tr>
+<tr><td><code>argv</code></td><td>Define o programa e cada argumento que será passado a ele.</td></tr>
+</tbody></table>
+<p>O tutorial inicial usa apenas o mínimo. Depois dele, siga para <a href="workflows.html">Construindo workflows</a> e consulte a <a href="../reference/yaml.html">referência completa de palavras-chave</a>.</p>
 </div></div>
 <div class="step"><div class="step-num">3</div><div><h3>Valide antes de executar</h3><pre><code>swf validate workflow.yaml
 swf plan workflow.yaml</code></pre><p><code>validate</code> procura erros de configuração. <code>plan</code> mostra o que será executado e em qual ordem.</p></div></div>
