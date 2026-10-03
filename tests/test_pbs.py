@@ -428,3 +428,73 @@ def test_engine_persists_unknown_pbs_result_and_blocks_resubmission(
         engine.run()
     assert calls == 1
     engine.state.close()
+
+
+
+def test_pbs_scheduler_identity_update_failure_keeps_submission_uncertain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_calls = 0
+    original_write = PbsExecutor._write_scheduler_record
+
+    def flaky_write(path: Path, payload: object) -> None:
+        nonlocal write_calls
+        write_calls += 1
+        if write_calls == 2:
+            raise OSError("fsync failed")
+        original_write(path, payload)  # type: ignore[arg-type]
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        if command[0] == "qsub":
+            return subprocess.CompletedProcess(command, 0, "12345.fake\n", "")
+        raise AssertionError(f"qstat must not run after scheduler identity persistence fails: {command}")
+
+    monkeypatch.setattr(PbsExecutor, "_write_scheduler_record", staticmethod(flaky_write))
+    monkeypatch.setattr("simpleworkflow.pbs.subprocess.run", fake_run)
+    executor, attempt = _pbs_attempt_executor(tmp_path)
+
+    result = executor.run(
+        "analysis",
+        [sys.executable, "-c", "print('ok')"],
+        stdout_path=attempt / "stdout.log",
+        stderr_path=attempt / "stderr.log",
+    )
+
+    assert result.outcome == "unknown"
+    assert result.return_code is None
+    assert result.metadata["job_id"] == "12345.fake"
+    assert result.reason is not None and "durably updated" in result.reason
+
+    scheduler = json.loads((attempt / "scheduler.json").read_text(encoding="utf-8"))
+    assert scheduler["submission_pending"] is True
+    assert scheduler["job_id"] is None
+
+
+def test_pbs_does_not_submit_when_pre_submission_marker_cannot_be_persisted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    qsub_calls = 0
+
+    def fail_write(_path: Path, _payload: object) -> None:
+        raise OSError("disk failure")
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        nonlocal qsub_calls
+        qsub_calls += 1
+        return subprocess.CompletedProcess(command, 0, "12345.fake\n", "")
+
+    monkeypatch.setattr(PbsExecutor, "_write_scheduler_record", staticmethod(fail_write))
+    monkeypatch.setattr("simpleworkflow.pbs.subprocess.run", fake_run)
+    executor, attempt = _pbs_attempt_executor(tmp_path)
+
+    result = executor.run(
+        "analysis",
+        [sys.executable, "-c", "print('ok')"],
+        stdout_path=attempt / "stdout.log",
+        stderr_path=attempt / "stderr.log",
+    )
+
+    assert result.outcome == "known"
+    assert result.return_code == 127
+    assert qsub_calls == 0
+    assert result.reason is not None and "before qsub" in result.reason
