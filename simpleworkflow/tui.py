@@ -1092,7 +1092,7 @@ class WorkflowTui(App[None]):
     def action_save_screenshot(self) -> None:
         views = self.query_one("#views", TabbedContent)
         view = views.active or "monitor"
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         output_dir = self.workdir / "screenshots"
         output_dir.mkdir(parents=True, exist_ok=True)
         filename = f"{stamp}-{view}.svg"
