@@ -9,7 +9,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 
 class _TerminationSignal(Exception):
@@ -25,13 +25,21 @@ def _raise_termination(signum: int, _frame: object) -> None:
 class ExecutionResult:
     """Outcome returned by a task execution backend.
 
-    Attributes:
-        return_code: Process or scheduler return code.
-        metadata: JSON-serializable backend details recorded in task provenance.
+    A known outcome requires a confirmed return code. An unknown outcome means
+    the backend cannot safely determine whether execution completed and callers
+    must not automatically repeat the task.
     """
 
-    return_code: int
+    return_code: int | None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    outcome: Literal["known", "unknown"] = "known"
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.outcome == "known" and self.return_code is None:
+            raise ValueError("known execution results require a return code")
+        if self.outcome == "unknown" and self.return_code is not None:
+            raise ValueError("unknown execution results must not invent a return code")
 
 
 @runtime_checkable
