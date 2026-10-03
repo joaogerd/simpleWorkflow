@@ -28,6 +28,7 @@ cycle:
 
 tasks:
   - name: campaign_start
+    cwd: .
     cycle_scope: first
     argv:
       - "{python}"
@@ -35,6 +36,7 @@ tasks:
       - "print('First cycle of the campaign:', '{cycle_time}')"
 
   - name: ingest
+    cwd: .
     argv:
       - "{python}"
       - -c
@@ -49,6 +51,7 @@ tasks:
         - "{work}/input_{cycle_yyyymmddhh}.txt"
 
   - name: process
+    cwd: .
     depends_on: [ingest]
     argv:
       - "{python}"
@@ -65,6 +68,7 @@ tasks:
         - "{work}/result_{cycle_yyyymmddhh}.txt"
 
   - name: compare_with_previous
+    cwd: .
     cycle_scope: not_first
     depends_on: [process]
     argv:
@@ -73,6 +77,7 @@ tasks:
       - "print('Previous cycle:', '{previous_cycle_time}', 'Current:', '{cycle_time}')"
 
   - name: prepare_next
+    cwd: .
     cycle_scope: not_last
     depends_on: [process]
     argv:
@@ -81,6 +86,7 @@ tasks:
       - "print('Current:', '{cycle_time}', 'Next:', '{next_cycle_time}')"
 
   - name: campaign_summary
+    cwd: .
     cycle_scope: last
     depends_on: [process]
     argv:
