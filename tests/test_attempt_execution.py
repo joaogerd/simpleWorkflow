@@ -4,7 +4,10 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 from simpleworkflow.engine import WorkflowEngine
+from simpleworkflow.executor import LocalExecutor
 
 
 def _attempt_directory(workdir: Path) -> Path:
@@ -85,3 +88,31 @@ def test_engine_records_failed_process_attempt(tmp_path: Path) -> None:
     assert metadata["return_code"] == 7
     assert metadata["process_return_code"] == 7
     assert metadata["reason"] == "process exited with return code 7"
+
+
+
+def test_local_identity_persistence_failure_terminates_spawned_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_write(_path: object, _payload: object) -> None:
+        raise OSError("disk failure")
+
+    monkeypatch.setattr("simpleworkflow.executor.write_durable_json", fail_write)
+    executor = LocalExecutor(tmp_path / "logs")
+    attempt = tmp_path / "attempt"
+    attempt.mkdir()
+
+    result = executor.run(
+        "analysis",
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        stdout_path=attempt / "stdout.log",
+        stderr_path=attempt / "stderr.log",
+    )
+
+    assert result.return_code == 127
+    assert result.metadata["identity_persistence_failed"] is True
+    pid = int(result.metadata["pid"])
+    with pytest.raises(ProcessLookupError):
+        import os
+
+        os.kill(pid, 0)
