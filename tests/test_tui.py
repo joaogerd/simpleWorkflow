@@ -93,7 +93,7 @@ def test_tab_cycles_through_exactly_five_operational_views(tmp_path: Path) -> No
             views = app.query_one("#views")
             visited = [views.active]
             for _ in range(4):
-                await pilot.press("tab")
+                await pilot.press("ctrl+tab")
                 await pilot.pause()
                 visited.append(views.active)
             assert visited == ["monitor", "cycles", "campaign", "problems", "logs"]
@@ -209,7 +209,7 @@ def test_representative_terminal_sizes_keep_all_views_operational(tmp_path: Path
             views = app.query_one("#views")
             assert views.active == "monitor"
             for expected in ("cycles", "campaign", "problems", "logs"):
-                await pilot.press("tab")
+                await pilot.press("ctrl+tab")
                 await pilot.pause()
                 assert views.active == expected
             await pilot.press("1")
@@ -333,10 +333,10 @@ def test_noncyclic_workflow_hides_cycle_specific_ui(tmp_path: Path) -> None:
 
             views = app.query_one("#views")
             visited = [views.active]
-            await pilot.press("tab")
+            await pilot.press("ctrl+tab")
             await pilot.pause()
             visited.append(views.active)
-            await pilot.press("tab")
+            await pilot.press("ctrl+tab")
             await pilot.pause()
             visited.append(views.active)
             assert visited == ["monitor", "problems", "logs"]
@@ -609,5 +609,99 @@ tasks:
             viewer = app.query_one("#log-viewer")
             assert viewer.state.resource is not None
             assert viewer.state.resource.key == "stdout"
+
+    asyncio.run(scenario())
+
+
+
+def test_tui_focuses_primary_content_on_open_and_view_change(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow: {name: focus_demo}\n", encoding="utf-8")
+    config: dict[str, object] = {
+        "workflow": {"name": "focus_demo"},
+        "tasks": [{"name": "hello", "argv": ["true"]}],
+        "__simpleworkflow__": {
+            "source_path": str(workflow),
+            "source_dir": str(workflow.parent),
+        },
+    }
+    workdir = tmp_path / ".simpleworkflow"
+    state = WorkflowState(
+        workdir / "state.sqlite3",
+        workflow_name="focus_demo",
+        source_path=workflow,
+    )
+    state.set_status("hello", "success", 0)
+    state.close()
+
+    app = WorkflowTui(
+        config=config,
+        workflow_path=workflow,
+        workdir=workdir,
+        refresh_seconds=60.0,
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 35)) as pilot:
+            await pilot.pause()
+            assert app.focused is app.query_one("#task-tree")
+
+            await pilot.press("ctrl+tab")
+            await pilot.pause()
+            assert app.query_one("#views").active == "problems"
+            assert app.focused is app.query_one("#problems-table")
+
+            await pilot.press("ctrl+tab")
+            await pilot.pause()
+            assert app.query_one("#views").active == "logs"
+            assert app.focused is app.query_one("#log-viewer")
+
+    asyncio.run(scenario())
+
+
+def test_tab_switches_monitor_panels_without_mouse_click(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text(
+        """
+format_version: 1
+workflow:
+  name: panel_demo
+tasks:
+  - name: hello
+    argv: [python, -c, "print('hello')"]
+""".lstrip(),
+        encoding="utf-8",
+    )
+    assert main(["run", str(workflow), "--ui", "plain", "--color", "never"]) == 0
+
+    config = {
+        "workflow": {"name": "panel_demo"},
+        "tasks": [{"name": "hello", "argv": ["python", "-c", "print('hello')"]}],
+        "__simpleworkflow__": {
+            "source_path": str(workflow),
+            "source_dir": str(workflow.parent),
+        },
+    }
+    app = WorkflowTui(
+        config=config,
+        workflow_path=workflow,
+        workdir=tmp_path / ".simpleworkflow",
+        refresh_seconds=60.0,
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 35)) as pilot:
+            await pilot.pause()
+            tree = app.query_one("#task-tree")
+            resources = app.query_one("#inspector-resources")
+            assert app.focused is tree
+
+            await pilot.press("tab")
+            await pilot.pause()
+            assert app.focused is resources
+
+            await pilot.press("shift+tab")
+            await pilot.pause()
+            assert app.focused is tree
 
     asyncio.run(scenario())
