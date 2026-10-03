@@ -48,6 +48,9 @@ def test_engine_records_successful_attempt_logs_and_metadata(tmp_path: Path) -> 
     assert attempt.joinpath("stderr.log").read_text(encoding="utf-8").endswith("stderr marker\n")
 
     metadata = json.loads(attempt.joinpath("metadata.json").read_text(encoding="utf-8"))
+    process = json.loads(attempt.joinpath("process.json").read_text(encoding="utf-8"))
+    assert process["pid"] > 0
+    assert not list(attempt.glob(".process.json.*.tmp"))
     assert metadata["status"] == "success"
     assert metadata["return_code"] == 0
     assert metadata["process_return_code"] == 0
