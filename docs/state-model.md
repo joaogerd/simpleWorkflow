@@ -198,3 +198,10 @@ of avoiding unsafe reuse.
 PBS recovery remains conservative: a job that cannot be proved finished remains
 `unknown` and automatic resubmission is blocked until the user verifies the
 scheduler state.
+
+When an upstream task becomes unusable or is about to be rerun, all affected
+descendant task states are updated as one SQLite transaction. This applies to
+stale propagation before rerun and to blocked propagation after failure,
+invalid input/output, uncertainty or a disabled prerequisite. An interruption
+cannot leave only part of a descendant set invalidated while older successful
+rows remain reusable.

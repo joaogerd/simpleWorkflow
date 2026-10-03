@@ -627,21 +627,26 @@ class WorkflowState:
         reason: str,
         *,
         cycle_id: str | None = None,
+        return_code: int | None = None,
     ) -> None:
+        """Update a related set of task states in one transaction."""
         self._require_writable()
-        for task in tasks:
-            previous = self.get_task_state(task, cycle_id=cycle_id)
-            self.set_status(
-                task,
-                status,
-                None,
-                previous.signature if previous else None,
-                reason,
-                previous.attempt_path if previous else None,
-                cycle_id=cycle_id,
-                signature_schema=previous.signature_schema if previous else None,
-                signature_payload=previous.signature_payload if previous else None,
-            )
+        timestamp = _utc_timestamp()
+        with self.connection:
+            for task in tasks:
+                previous = self.get_task_state(task, cycle_id=cycle_id)
+                self._write_task_state_event(
+                    task,
+                    status,
+                    return_code,
+                    previous.signature if previous else None,
+                    reason,
+                    previous.attempt_path if previous else None,
+                    cycle_id=cycle_id,
+                    signature_schema=previous.signature_schema if previous else None,
+                    signature_payload=previous.signature_payload if previous else None,
+                    timestamp=timestamp,
+                )
 
     def portable_path(self, value: str | Path) -> str:
         path = Path(value)
