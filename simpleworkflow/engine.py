@@ -186,12 +186,13 @@ class WorkflowEngine:
                     pending.append(dependency)
         return [name for name in ordered if name in required]
 
-    def _task_cwd(self, task: dict[str, Any]) -> Path | None:
+    def _task_cwd(self, task: dict[str, Any]) -> Path:
         raw_cwd = task.get("cwd")
         if raw_cwd is None:
-            return None
+            return Path.cwd().resolve(strict=False)
         path = Path(render_template(raw_cwd, self.context))
-        return path if path.is_absolute() else self.source_dir / path
+        resolved = path if path.is_absolute() else self.source_dir / path
+        return resolved.resolve(strict=False)
 
     def _task_env(self, task: dict[str, Any]) -> dict[str, str]:
         return {
@@ -246,7 +247,7 @@ class WorkflowEngine:
         task_name: str,
         task: dict[str, Any],
         argv: list[str],
-        cwd: Path | None,
+        cwd: Path,
         env: dict[str, str],
         artifacts: ResolvedArtifacts,
     ) -> TaskSignature:
@@ -787,7 +788,12 @@ class WorkflowEngine:
         for task_name in self.plan():
             task = task_map[task_name]
             render_argv(task["argv"], self.context)
-            self._task_cwd(task)
+            cwd = self._task_cwd(task)
+            if task.get("cwd") is not None:
+                if not cwd.exists():
+                    problems.append(f"{task_name}: diretório de trabalho ausente: {cwd}")
+                elif not cwd.is_dir():
+                    problems.append(f"{task_name}: cwd não é um diretório: {cwd}")
             self._task_env(task)
             self._task_timeout(task)
             self._task_executor(task)
