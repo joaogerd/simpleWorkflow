@@ -336,7 +336,7 @@ def test_noncyclic_workflow_hides_cycle_specific_ui(tmp_path: Path) -> None:
             await pilot.press("2")
             await pilot.pause()
             visited.append(views.active)
-            await pilot.press("2")
+            await pilot.press("3")
             await pilot.pause()
             visited.append(views.active)
             assert visited == ["monitor", "problems", "logs"]
@@ -654,7 +654,7 @@ def test_tui_focuses_primary_content_on_open_and_view_change(tmp_path: Path) -> 
             await pilot.press("3")
             await pilot.pause()
             assert app.query_one("#views").active == "logs"
-            assert app.focused is app.query_one("#log-viewer")
+            assert app.focused is app.query_one("#viewer-text")
 
     asyncio.run(scenario())
 
