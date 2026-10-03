@@ -13,7 +13,9 @@ initialization:
       argv:
         - "{python}"
         - -c
-        - "from pathlib import Path; p=Path('{work}'); p.mkdir(exist_ok=True); (p/'initialized.txt').write_text('ready\n')"
+        - >-
+          from pathlib import Path; p=Path('{work}'); p.mkdir(exist_ok=True);
+          (p/'initialized.txt').write_text('ready\\n')
       outputs:
         required:
           - "{work}/initialized.txt"
@@ -35,7 +37,9 @@ tasks:
     argv:
       - "{python}"
       - -c
-      - "from pathlib import Path; p=Path('{work}/input_{cycle_yyyymmddhh}.txt'); p.write_text('cycle={cycle_time}\nindex={cycle_index}\n'); print('created', p)"
+      - >-
+        from pathlib import Path; p=Path('{work}/input_{cycle_yyyymmddhh}.txt');
+        p.write_text('cycle={cycle_time}\\nindex={cycle_index}\\n'); print('created', p)
     inputs:
       required:
         - "{work}/initialized.txt"
@@ -48,7 +52,10 @@ tasks:
     argv:
       - "{python}"
       - -c
-      - "from pathlib import Path; src=Path('{work}/input_{cycle_yyyymmddhh}.txt'); dst=Path('{work}/result_{cycle_yyyymmddhh}.txt'); dst.write_text(src.read_text()+'processed=true\n'); print('processed {cycle_time}')"
+      - >-
+        from pathlib import Path; src=Path('{work}/input_{cycle_yyyymmddhh}.txt');
+        dst=Path('{work}/result_{cycle_yyyymmddhh}.txt');
+        dst.write_text(src.read_text()+'processed=true\\n'); print('processed {cycle_time}')
     inputs:
       required:
         - "{work}/input_{cycle_yyyymmddhh}.txt"
