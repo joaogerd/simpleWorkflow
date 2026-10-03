@@ -232,6 +232,7 @@ class PbsExecutor:
         script_path = attempt_dir / "job.pbs"
         worker_stdout = attempt_dir / "pbs.stdout.log"
         worker_stderr = attempt_dir / "pbs.stderr.log"
+        scheduler_record = attempt_dir / "scheduler.json"
         script_path.write_text(
             self._build_script(
                 task_name=task_name,
@@ -274,8 +275,14 @@ class PbsExecutor:
             reason = (
                 "qsub timed out before simpleWorkflow could confirm whether PBS accepted the job"
             )
+            uncertain_submission = {
+                **submission_metadata,
+                "submission_uncertain": True,
+                "reason": reason,
+            }
+            self._write_scheduler_record(scheduler_record, uncertain_submission)
             self._write(submit_stderr, f"simpleWorkflow: {reason}\n")
-            return self._unknown_result(submission_metadata, reason)
+            return self._unknown_result(uncertain_submission, reason)
         except OSError as error:
             self._write(submit_stderr, f"simpleWorkflow could not start qsub: {error}\n")
             return ExecutionResult(return_code=127, metadata=submission_metadata)
@@ -294,10 +301,15 @@ class PbsExecutor:
                 "qsub returned success but no reliable PBS job ID could be parsed; "
                 "submission outcome is uncertain"
             )
+            uncertain_submission = {
+                **base_metadata,
+                "submission_uncertain": True,
+                "reason": reason,
+            }
+            self._write_scheduler_record(scheduler_record, uncertain_submission)
             self._write(submit_stderr, f"simpleWorkflow: {reason}\n")
-            return self._unknown_result(base_metadata, reason)
+            return self._unknown_result(uncertain_submission, reason)
 
-        scheduler_record = attempt_dir / "scheduler.json"
         self._write_scheduler_record(scheduler_record, base_metadata)
         qstat = shlex.split(str(self.options.get("qstat", "qstat")))
         qdel = shlex.split(str(self.options.get("qdel", "qdel")))
