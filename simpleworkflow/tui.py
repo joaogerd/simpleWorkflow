@@ -23,6 +23,7 @@ from textual.widgets import (
     Tab,
     TabbedContent,
     TabPane,
+    TextArea,
     Tree,
 )
 
