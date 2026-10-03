@@ -284,3 +284,93 @@ def test_representative_terminal_sizes_keep_monitor_reachable(tmp_path: Path) ->
 
     for size in ((140, 45), (100, 32), (80, 24), (72, 26)):
         asyncio.run(scenario(size))
+
+
+def test_noncyclic_workflow_hides_cycle_specific_ui(tmp_path: Path) -> None:
+    workflow = tmp_path / "hello.yaml"
+    workflow.write_text("workflow: {name: hello_world}\n", encoding="utf-8")
+    config: dict[str, object] = {
+        "workflow": {"name": "hello_world"},
+        "tasks": [
+            {"name": "hello", "argv": ["echo", "hello"]},
+            {"name": "finish", "argv": ["echo", "done"], "depends_on": ["hello"]},
+        ],
+        "__simpleworkflow__": {
+            "source_path": str(workflow),
+            "source_dir": str(workflow.parent),
+        },
+    }
+    workdir = tmp_path / ".simpleworkflow"
+    state = WorkflowState(
+        workdir / "state.sqlite3",
+        workflow_name="hello_world",
+        source_path=workflow,
+    )
+    state.set_status("hello", "success", 0)
+    state.set_status("finish", "success", 0)
+    state.close()
+
+    app = WorkflowTui(
+        config=config,
+        workflow_path=workflow,
+        workdir=workdir,
+        refresh_seconds=60.0,
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(100, 28)) as pilot:
+            await pilot.pause()
+            assert app.cycle_mode is False
+            assert list(app.query("#date-nav")) == []
+            assert list(app.query("#cycle-line")) == []
+            assert list(app.query("#cycles")) == []
+            assert list(app.query("#campaign")) == []
+            assert list(app.query("#period-title")) == []
+            assert list(app.query("#period-matrix")) == []
+
+            views = app.query_one("#views")
+            visited = [views.active]
+            await pilot.press("tab")
+            await pilot.pause()
+            visited.append(views.active)
+            await pilot.press("tab")
+            await pilot.pause()
+            visited.append(views.active)
+            assert visited == ["monitor", "problems", "logs"]
+
+            app.action_select_view("cycles")
+            assert views.active == "logs"
+            app.action_select_view("monitor")
+            assert views.active == "monitor"
+
+    asyncio.run(scenario())
+
+
+def test_low_height_terminal_uses_compact_layout_without_losing_core_panels(
+    tmp_path: Path,
+) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: MONAN-JEDI M3\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    _persist_campaign(workflow, workdir)
+    app = WorkflowTui(
+        config=_config(workflow),
+        workflow_path=workflow,
+        workdir=workdir,
+        refresh_seconds=60.0,
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(156, 30)) as pilot:
+            await pilot.pause()
+            body = app.query_one("#monitor-main")
+            assert not body.has_class("narrow")
+            assert app.query_one("#topbar").has_class("compact")
+            assert app.query_one("#summary").has_class("compact")
+            assert app.query_one("#inspector").has_class("compact")
+            assert not app.query_one("#period-title").display
+            assert not app.query_one("#period-matrix").display
+            assert app.query_one("#task-tree").region.height > 0
+            assert app.query_one("#inspector").region.height > 0
+
+    asyncio.run(scenario())
