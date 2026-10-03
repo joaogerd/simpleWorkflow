@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -84,3 +85,43 @@ def test_metadata_checksum_validation_supports_legacy_and_detects_tampering(tmp_
 
     metadata.write_text('{"status":"failed"}\n', encoding="utf-8")
     assert metadata_checksum_matches(metadata) is False
+
+
+
+def test_durable_json_replace_failure_preserves_previous_record(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "runtime.json"
+    write_durable_json(path, {"state": "old"})
+
+    def fail_replace(_source, _target) -> None:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr("simpleworkflow.runs.os.replace", fail_replace)
+    with pytest.raises(OSError, match="replace failed"):
+        write_durable_json(path, {"state": "new"})
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"state": "old"}
+    assert not list(tmp_path.glob(".runtime.json.*.tmp"))
+
+
+def test_durable_json_directory_fsync_failure_never_leaves_partial_json(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "runtime.json"
+    original_fsync = os.fsync
+    calls = 0
+
+    def fail_directory_fsync(descriptor: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("directory fsync failed")
+        original_fsync(descriptor)
+
+    monkeypatch.setattr("simpleworkflow.runs.os.fsync", fail_directory_fsync)
+    with pytest.raises(OSError, match="directory fsync failed"):
+        write_durable_json(path, {"state": "complete"})
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"state": "complete"}
+    assert not list(tmp_path.glob(".runtime.json.*.tmp"))
