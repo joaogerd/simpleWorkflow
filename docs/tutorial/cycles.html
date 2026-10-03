@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="pt-BR"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark"><title>Ciclos e campanhas — simpleWorkflow</title>
+<link rel="stylesheet" href="../assets/site.css"></head><body>
+<nav class="site-nav"><div class="inner"><a class="brand" href="../">simple<span>Workflow</span></a>
+<div class="nav-links"><a href="./">Tutorial</a><a href="install.html">Instalação</a><a href="workflows.html">Workflows</a><a class="active" href="cycles.html">Ciclos</a><a href="../reference/yaml.html">Referência</a><a class="optional" href="showcase.html">Galeria</a></div></div></nav>
+<header class="hero"><div class="inner"><div class="eyebrow">Tutorial avançado</div><h1>Ciclos e campanhas,<br>passo a passo.</h1><p>Defina uma inicialização executada uma vez, expanda tarefas sobre uma série temporal e use contexto de ciclo sem duplicar o YAML.</p></div></header>
+<main><div class="layout"><aside class="toc"><strong>Neste tutorial</strong><a href="#modelo">Modelo mental</a><a href="#init">Initialization</a><a href="#cycle">Cycle</a><a href="#contexto">Contexto automático</a><a href="#scopes">cycle_scope</a><a href="#dependencias">Dependências</a><a href="#cli">Selecionar ciclos</a><a href="#tui">TUI</a><a href="#completo">Exemplo completo</a></aside>
+<article>
+<section id="modelo"><h2>1. Modelo mental</h2>
+<pre><code>Workflow
+├── Initialization   ← uma vez
+└── Cycles
+    ├── 00Z
+    │   ├── ingest
+    │   └── process
+    ├── 06Z
+    │   ├── ingest
+    │   └── process
+    └── 12Z
+        ├── ingest
+        └── process</code></pre>
+<p>O YAML define o processo uma vez. O simpleWorkflow cria instâncias de tarefa por ciclo no mesmo estado persistente.</p></section>
+
+<section id="init"><h2>2. Inicialização executada uma vez</h2>
+<pre><code>initialization:
+  tasks:
+    - name: initialize_workspace
+      argv: [python, initialize.py]
+      outputs:
+        required:
+          - work/initialized.txt</code></pre>
+<p><code>initialization.tasks</code> usa o mesmo schema de tarefas normais, mas fica fora do intervalo de ciclos. Em restart, tarefas de inicialização bem-sucedidas podem ser reutilizadas.</p>
+<div class="callout">Initialization ocorre antes do primeiro ciclo. Se ela falhar, nenhum ciclo começa.</div></section>
+
+<section id="cycle"><h2>3. Declarando a campanha</h2>
+<p>Forma com início/fim:</p>
+<pre><code>cycle:
+  start: "2026-10-03T00:00:00Z"
+  end: "2026-10-03T18:00:00Z"
+  step: PT6H</code></pre>
+<p>Isso gera quatro ciclos inclusivos: 00Z, 06Z, 12Z e 18Z.</p>
+<p>Forma equivalente por duração:</p>
+<pre><code>cycle:
+  start: "2026-10-03T00:00:00Z"
+  duration: PT18H
+  interval: PT6H</code></pre>
+<p>Use exatamente um de <code>end</code>/<code>duration</code> e um de <code>step</code>/<code>interval</code>.</p></section>
+
+<section id="contexto"><h2>4. Contexto automático de cada ciclo</h2>
+<table><thead><tr><th>Placeholder</th><th>Exemplo</th></tr></thead><tbody>
+<tr><td><code>{cycle_time}</code></td><td>2026-10-03T06:00:00Z</td></tr>
+<tr><td><code>{cycle_id}</code></td><td>20261003T060000Z</td></tr>
+<tr><td><code>{cycle_yyyymmddhh}</code></td><td>2026100306</td></tr>
+<tr><td><code>{cycle_year}</code></td><td>2026</td></tr>
+<tr><td><code>{cycle_month}</code></td><td>10</td></tr>
+<tr><td><code>{cycle_day}</code></td><td>03</td></tr>
+<tr><td><code>{cycle_hour}</code></td><td>06</td></tr>
+<tr><td><code>{cycle_index}</code></td><td>1</td></tr>
+<tr><td><code>{cycle_count}</code></td><td>4</td></tr>
+<tr><td><code>{previous_cycle_time}</code></td><td>ciclo anterior ou string vazia</td></tr>
+<tr><td><code>{next_cycle_time}</code></td><td>próximo ciclo ou string vazia</td></tr>
+</tbody></table>
+<pre><code>- name: ingest
+  argv:
+    - python
+    - ingest.py
+    - "--cycle"
+    - "{cycle_yyyymmddhh}"</code></pre></section>
+
+<section id="scopes"><h2>5. Executando tarefas só em certas posições</h2>
+<table><thead><tr><th><code>cycle_scope</code></th><th>Executa em</th></tr></thead><tbody>
+<tr><td><code>all</code></td><td>Todos os ciclos (default).</td></tr>
+<tr><td><code>first</code></td><td>Somente primeiro ciclo.</td></tr>
+<tr><td><code>not_first</code></td><td>Todos menos o primeiro.</td></tr>
+<tr><td><code>last</code></td><td>Somente último ciclo.</td></tr>
+<tr><td><code>not_last</code></td><td>Todos menos o último.</td></tr>
+</tbody></table>
+<pre><code>- name: campaign_start
+  cycle_scope: first
+  argv: [python, start.py, "{cycle_time}"]
+
+- name: compare_previous
+  cycle_scope: not_first
+  argv: [python, compare.py, "{previous_cycle_time}", "{cycle_time}"]
+
+- name: final_summary
+  cycle_scope: last
+  argv: [python, summary.py, "{cycle_time}"]</code></pre></section>
+
+<section id="dependencias"><h2>6. Dependências dentro de cada ciclo</h2>
+<pre><code>tasks:
+  - name: ingest
+    argv: [python, ingest.py, "{cycle_time}"]
+
+  - name: process
+    depends_on: [ingest]
+    argv: [python, process.py, "{cycle_time}"]</code></pre>
+<p>A campanha é executada sequencialmente por ciclo e de forma fail-fast. O ciclo seguinte só é liberado depois que o ciclo atual termina com sucesso.</p>
+<p>Isso permite produzir dados no ciclo atual que serão utilizados pelo seguinte sem criar um daemon esperando arquivos.</p></section>
+
+<section id="cli"><h2>7. Executando apenas parte da campanha</h2>
+<p>Um ciclo específico:</p>
+<pre><code>swf run workflow.yaml --cycle-time 2026-10-03T06:00:00Z</code></pre>
+<p>Vários ciclos específicos:</p>
+<pre><code>swf run workflow.yaml \
+  --cycle-time 2026-10-03T06:00:00Z \
+  --cycle-time 2026-10-03T12:00:00Z</code></pre>
+<p>Ou sobrescreva temporariamente o intervalo:</p>
+<pre><code>swf run workflow.yaml \
+  --from 2026-10-03T06:00:00Z \
+  --to   2026-10-03T18:00:00Z \
+  --step PT6H</code></pre>
+<div class="callout warn"><code>--cycle-time</code> não pode ser combinado com <code>--from</code>, <code>--to</code> ou <code>--step</code>.</div></section>
+
+<section id="tui"><h2>8. O que muda na TUI?</h2>
+<p>Quando ciclos existem, duas abas adicionais aparecem:</p><div class="grid-2"><div class="card"><h3>Ciclos</h3><p>Matriz operacional por processo e ciclo.</p></div><div class="card"><h3>Campanha</h3><p>Resumo por dia do conjunto de ciclos.</p></div></div>
+<figure class="figure"><img src="tui-showcase/04-campaign-monitor.svg" alt="Monitor com ciclos"><figcaption>O seletor de ciclo fica dentro do Monitor; Ciclos e Campanha aparecem apenas quando fazem sentido.</figcaption></figure></section>
+
+<section id="completo"><h2>9. Exemplo completo de campanha</h2>
+<pre><code>format_version: 1
+
+workflow:
+  name: campanha_exemplo
+
+context:
+  python: python
+  work: campaign-work
+
+initialization:
+  tasks:
+    - name: initialize
+      argv:
+        - "{python}"
+        - -c
+        - "from pathlib import Path; Path('{work}').mkdir(exist_ok=True)"
+      outputs:
+        required: ["{work}"]
+
+cycle:
+  start: "2026-10-03T00:00:00Z"
+  end: "2026-10-03T18:00:00Z"
+  step: PT6H
+
+tasks:
+  - name: ingest
+    argv: ["{python}", ingest.py, "{cycle_yyyymmddhh}"]
+
+  - name: process
+    depends_on: [ingest]
+    argv: ["{python}", process.py, "{cycle_yyyymmddhh}"]
+
+  - name: compare_previous
+    cycle_scope: not_first
+    depends_on: [process]
+    argv: ["{python}", compare.py, "{previous_cycle_yyyymmddhh}", "{cycle_yyyymmddhh}"]
+
+  - name: final_summary
+    cycle_scope: last
+    depends_on: [process]
+    argv: ["{python}", summary.py]</code></pre>
+<pre><code>swf validate workflow.yaml
+swf plan workflow.yaml
+swf run workflow.yaml --ui tui</code></pre>
+<div class="callout good">A <a href="../reference/yaml.html">referência YAML</a> lista todos os campos, inclusive PBS, fingerprints e checks.</div></section>
+</article></div></main><footer><div class="inner">Tutorial de ciclos e campanhas do simpleWorkflow.</div></footer></body></html>
