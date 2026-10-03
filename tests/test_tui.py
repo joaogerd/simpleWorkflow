@@ -76,7 +76,7 @@ def test_monitor_mounts_with_approved_five_views_and_inspector(tmp_path: Path) -
     asyncio.run(scenario())
 
 
-def test_tab_cycles_through_exactly_five_operational_views(tmp_path: Path) -> None:
+def test_number_keys_select_exactly_five_operational_tabs(tmp_path: Path) -> None:
     workflow = tmp_path / "workflow.yaml"
     workflow.write_text("workflow:\n  name: MONAN-JEDI M3\n", encoding="utf-8")
     workdir = tmp_path / ".simpleworkflow"
@@ -92,8 +92,8 @@ def test_tab_cycles_through_exactly_five_operational_views(tmp_path: Path) -> No
         async with app.run_test(size=(120, 35)) as pilot:
             views = app.query_one("#views")
             visited = [views.active]
-            for _ in range(4):
-                await pilot.press("2")
+            for key in ("2", "3", "4", "5"):
+                await pilot.press(key)
                 await pilot.pause()
                 visited.append(views.active)
             assert visited == ["monitor", "cycles", "campaign", "problems", "logs"]
@@ -651,7 +651,7 @@ def test_tui_focuses_primary_content_on_open_and_view_change(tmp_path: Path) -> 
             assert app.query_one("#views").active == "problems"
             assert app.focused is app.query_one("#problems-table")
 
-            await pilot.press("2")
+            await pilot.press("3")
             await pilot.pause()
             assert app.query_one("#views").active == "logs"
             assert app.focused is app.query_one("#log-viewer")
@@ -659,7 +659,7 @@ def test_tui_focuses_primary_content_on_open_and_view_change(tmp_path: Path) -> 
     asyncio.run(scenario())
 
 
-def test_tab_switches_monitor_panels_without_mouse_click(tmp_path: Path) -> None:
+def test_panel_key_switches_monitor_panels_without_mouse_click(tmp_path: Path) -> None:
     workflow = tmp_path / "workflow.yaml"
     workflow.write_text(
         """
