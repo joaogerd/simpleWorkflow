@@ -673,7 +673,7 @@ class WorkflowTui(App[None]):
         if chosen is None:
             chosen = next((cycle for cycle in cycles if cycle.status == "running"), None)
         if chosen is None:
-            chosen = next((cycle for cycle in cycles if cycle.status in _ATTENTION), None)
+            chosen = next((cycle for cycle in cycles if cycle.status in ATTENTION_STATES), None)
         if chosen is None:
             chosen = next(
                 (cycle for cycle in cycles if cycle.status in {"partial", "pending"}),
@@ -1223,13 +1223,13 @@ class WorkflowTui(App[None]):
     def _aggregate_status(statuses: list[str]) -> str:
         if not statuses:
             return "pending"
-        if any(status in _ATTENTION for status in statuses):
+        if any(status in ATTENTION_STATES for status in statuses):
             return "failed"
         if "running" in statuses:
             return "running"
-        if all(status in _COMPLETE for status in statuses):
+        if all(status in COMPLETE_STATES for status in statuses):
             return "success"
-        if any(status in _COMPLETE for status in statuses):
+        if any(status in COMPLETE_STATES for status in statuses):
             return "partial"
         return "pending"
 
