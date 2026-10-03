@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .lifecycle import INTERRUPTED, RUNNING, UNKNOWN
 from .runs import metadata_checksum_matches
 
 STATE_SCHEMA_VERSION = 1
@@ -617,7 +618,7 @@ class WorkflowState:
             cycle_id=cycle_id,
             signature_schema=signature_schema,
             signature_payload=signature_payload,
-            finish_run_status="interrupted" if terminal_metadata else "unknown",
+            finish_run_status=INTERRUPTED if terminal_metadata else UNKNOWN,
         )
 
     def mark_tasks(
@@ -676,9 +677,9 @@ class WorkflowState:
             """
             SELECT task, signature, signature_schema, signature_payload, attempt_path
             FROM task_state
-            WHERE cycle_id = ? AND status = 'running'
+            WHERE cycle_id = ? AND status = ?
             """,
-            (_cycle_key(cycle_id),),
+            (_cycle_key(cycle_id), RUNNING),
         ).fetchall()
         for task, signature, schema, payload_json, attempt_path in rows:
             payload = _decode_payload(payload_json)
@@ -689,7 +690,7 @@ class WorkflowState:
                 if checksum_matches is False:
                     self._reconcile_task_state(
                         task=task,
-                        status="unknown",
+                        status=UNKNOWN,
                         return_code=None,
                         signature=signature,
                         reason="metadata final existe, mas metadata.sha256 não corresponde ao conteúdo",
