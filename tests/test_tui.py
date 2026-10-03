@@ -434,6 +434,8 @@ def test_shortcut_footer_is_docked_to_bottom_on_low_height_terminal(tmp_path: Pa
             assert footer.region.height == 1
             assert footer.region.width == app.size.width
             assert footer.region.y + footer.region.height == app.size.height
+            assert footer.content_region.height == 1
+            assert footer.content_region.width > 0
             rendered = str(footer.render())
             assert "r Refresh" in rendered
             assert "q Exit" in rendered
