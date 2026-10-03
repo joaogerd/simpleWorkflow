@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import os
 import re
 import shlex
 import subprocess
@@ -13,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .executor import ExecutionResult
+from .runs import write_durable_json
 
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _JOB_ID = re.compile(r"(?m)^\s*([0-9]+(?:\.[A-Za-z0-9_.-]+)?)\s*$")
@@ -80,9 +79,7 @@ class PbsExecutor:
 
     @staticmethod
     def _write_scheduler_record(path: Path, payload: Mapping[str, Any]) -> None:
-        temporary = path.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(dict(payload), sort_keys=True) + "\n", encoding="utf-8")
-        os.replace(temporary, path)
+        write_durable_json(path, payload)
 
     @staticmethod
     def _pbs_result(output: str) -> tuple[bool, int | None]:
