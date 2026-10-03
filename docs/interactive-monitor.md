@@ -14,29 +14,27 @@ socket, REST API or separate scheduler process.
 
 ## Installation
 
-The core package stays lightweight:
+The current user-facing installation path is from the GitHub source checkout.
+Do not assume a package-index release unless one is explicitly published and
+documented.
+
+For normal use with the full-screen monitor:
 
 ```bash
-python -m pip install simpleworkflow
+git clone https://github.com/joaogerd/simpleWorkflow.git
+cd simpleWorkflow
+python -m pip install ".[tui]"
 ```
 
-This installs the YAML runner and plain terminal reporter without Textual or
-Rich. To enable the full-screen monitor, install the optional TUI extra:
+For development:
 
 ```bash
-python -m pip install "simpleworkflow[tui]"
-```
-
-Development installations use the same separation:
-
-```bash
-python -m pip install -e .
-python -m pip install -e ".[tui]"
 python -m pip install -e ".[dev]"
 ```
 
 The development extra includes the TUI libraries so the headless presentation
-tests can run in CI.
+tests can run in CI. See `docs/tutorial/install.html` for the beginner-oriented
+installation procedure.
 
 ## `run` presentation modes
 
