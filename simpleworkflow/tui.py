@@ -306,9 +306,12 @@ class WorkflowTui(App[None]):
     TabbedContent { height: 1fr; }
     #monitor-main { height: 1fr; }
     #left {
-        width: 48%; min-width: 28; border-right: solid #303744; background: #0f1116;
+        width: 35%; min-width: 28; border-right: solid #303744; background: #0f1116;
     }
-    #right { width: 52%; background: #0d0f13; }
+    #right { width: 65%; background: #0d0f13; }
+    #left:focus-within, #right:focus-within {
+        outline: solid #4f6b9d;
+    }
     #monitor-main.narrow { layout: vertical; }
     #monitor-main.narrow #left {
         width: 1fr; min-width: 1; height: 1fr; border-right: none;
@@ -323,7 +326,7 @@ class WorkflowTui(App[None]):
         content-align: left middle;
     }
     .pane-title.compact { height: 1; }
-    #task-filter {
+    #task-filter, #problem-filter {
         display: none; height: 1; min-height: 1; margin: 0; padding: 0 1;
         border: none; background: #171a21; color: #d7dae0;
     }
@@ -443,6 +446,7 @@ class WorkflowTui(App[None]):
         self.selected_task: str | None = None
         self.selected_log_key: str | None = None
         self.task_filter = ""
+        self.problem_filter = ""
         self.cycle_slots: dict[str, str] = {}
         self.cycle_matrix_columns: list[str] = []
         self.cycle_matrix_cells: dict[tuple[int, int], str] = {}
@@ -467,15 +471,15 @@ class WorkflowTui(App[None]):
                     yield Button("", id="date-current")
                     yield Static("", id="date-label")
                     yield Button("▶", id="next-date")
-        if self.cycle_mode:
-            with Horizontal(id="cycle-line"):
-                yield Static("CICLOS", id="cycle-caption")
-                yield Button("‹", id="cycle-prev")
-                for index in range(_CYCLE_SLOT_COUNT):
-                    yield Button("", id=f"cycle-slot-{index}", classes="cycle-button")
-                yield Button("›", id="cycle-next")
         with TabbedContent(initial="monitor", id="views"):
             with TabPane("Monitor", id="monitor"):
+                if self.cycle_mode:
+                    with Horizontal(id="cycle-line"):
+                        yield Static("CICLOS", id="cycle-caption")
+                        yield Button("‹", id="cycle-prev")
+                        for index in range(_CYCLE_SLOT_COUNT):
+                            yield Button("", id=f"cycle-slot-{index}", classes="cycle-button")
+                        yield Button("›", id="cycle-next")
                 with Horizontal(id="monitor-main"):
                     with Vertical(id="left"):
                         yield Label("WORKFLOW", classes="pane-title")
@@ -499,6 +503,7 @@ class WorkflowTui(App[None]):
                         yield Static(id="campaign-summary")
                         yield DataTable(id="campaign-table", cursor_type="row", zebra_stripes=True)
             with TabPane("Problemas", id="problems"):
+                yield Input(placeholder="Filter problems…", id="problem-filter")
                 yield DataTable(id="problems-table", cursor_type="row", zebra_stripes=True)
             with TabPane("Logs", id="logs"):
                 with Horizontal(id="log-toolbar"):
@@ -549,8 +554,13 @@ class WorkflowTui(App[None]):
             cycle_line.set_class(compact, "compact")
             period_title = self.query_one("#period-title")
             period_matrix = self.query_one("#period-matrix")
-            period_title.display = not compact
-            period_matrix.display = not compact
+            selected_date = self._selected_date()
+            useful_period = (
+                selected_date is not None
+                and len(self._cycles_for_date(selected_date)) >= 2
+            )
+            period_title.display = useful_period and not compact
+            period_matrix.display = useful_period and not compact
         self._update_shortcuts(narrow=narrow)
         if not narrow:
             body.remove_class("inspecting")
@@ -564,7 +574,7 @@ class WorkflowTui(App[None]):
         if narrow is None:
             narrow = self.size.width < 86
         active = views.active or "monitor"
-        cycle_hint = "   ←/→ Cycle" if self.cycle_mode else ""
+        cycle_hint = "   ←/→ Cycle" if self.cycle_mode and active == "monitor" else ""
         if active == "logs":
             text = "↑/↓ Scroll   PgUp/PgDn Page   f Follow   r Refresh   s Save   / Search   ? Help   q Exit"
         elif active == "monitor" and narrow:
@@ -574,6 +584,8 @@ class WorkflowTui(App[None]):
                 f"↑/↓ Navigate{cycle_hint}   Enter Open   Tab View   "
                 "l Logs   r Refresh   s Save   ? Help   q Exit"
             )
+        elif active == "problems":
+            text = "↑/↓ Navigate   Enter Open   / Filter   Tab View   r Refresh   s Save   Esc Back   ? Help   q Exit"
         else:
             text = "↑/↓ Navigate   Enter Open   Tab View   r Refresh   s Save   Esc Back   ? Help   q Exit"
         shortcut.update(text)
@@ -921,18 +933,24 @@ class WorkflowTui(App[None]):
         self._select_log_resource(key)
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id != "task-filter":
+        if event.input.id == "task-filter":
+            self.task_filter = event.value.strip()
+            self._tree_signature = None
+            self._rebuild_tree(force=True)
+            self._refresh_inspector()
             return
-        self.task_filter = event.value.strip()
-        self._tree_signature = None
-        self._rebuild_tree(force=True)
-        self._refresh_inspector()
+        if event.input.id == "problem-filter":
+            self.problem_filter = event.value.strip()
+            self._refresh_problems()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id != "task-filter":
+        if event.input.id == "task-filter":
+            event.input.display = False
+            self.query_one("#task-tree", Tree).focus()
             return
-        event.input.display = False
-        self.query_one("#task-tree", Tree).focus()
+        if event.input.id == "problem-filter":
+            event.input.display = False
+            self.query_one("#problems-table", DataTable).focus()
 
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
         if event.data_table.id != "cycles-table":
@@ -1045,11 +1063,23 @@ class WorkflowTui(App[None]):
             self._update_shortcuts()
 
     def action_show_filter(self) -> None:
-        field = self.query_one("#task-filter", Input)
+        active = self.query_one("#views", TabbedContent).active or "monitor"
+        if active == "problems":
+            field = self.query_one("#problem-filter", Input)
+        else:
+            field = self.query_one("#task-filter", Input)
         field.display = True
         field.focus()
 
     def action_escape_context(self) -> None:
+        problem_field = self.query_one("#problem-filter", Input)
+        if problem_field.display or self.problem_filter:
+            problem_field.value = ""
+            problem_field.display = False
+            self.problem_filter = ""
+            self._refresh_problems()
+            self.query_one("#problems-table", DataTable).focus()
+            return
         field = self.query_one("#task-filter", Input)
         if field.display or self.task_filter:
             field.value = ""
@@ -1288,12 +1318,14 @@ class WorkflowTui(App[None]):
         table.clear(columns=True)
 
         selected_date = self._selected_date()
-        if selected_date is None:
-            title.update("PERÍODO / CICLAGEM")
-            table.add_column("Process")
+        cycles = self._cycles_for_date(selected_date) if selected_date is not None else []
+        useful = selected_date is not None and len(cycles) >= 2
+        compact = self.size.height < 32
+        title.display = useful and not compact
+        table.display = useful and not compact
+        if not useful:
             return
 
-        cycles = self._cycles_for_date(selected_date)
         title.update(f"PERÍODO / CICLAGEM · {selected_date.strftime('%d/%m/%Y')}")
         table.add_columns(
             "Process",
@@ -1399,7 +1431,19 @@ class WorkflowTui(App[None]):
     def _refresh_problems(self) -> None:
         table = self.query_one("#problems-table", DataTable)
         table.clear(columns=False)
+        needle = self.problem_filter.casefold()
+        visible = []
         for problem in self.snapshot.problems:
+            fields = (
+                problem.cycle_id or "workflow",
+                problem.task_name,
+                _task_label(problem.task_name, problem.cycle_id),
+                problem.status,
+                problem.reason or "",
+            )
+            if needle and not any(needle in str(field).casefold() for field in fields):
+                continue
+            visible.append(problem)
             key = f"{problem.cycle_id or ''}::{problem.task_name}"
             table.add_row(
                 problem.cycle_id or "workflow",
@@ -1409,7 +1453,8 @@ class WorkflowTui(App[None]):
                 key=key,
             )
         if table.row_count == 0:
-            table.add_row("—", "No problems detected.", "", "")
+            message = "No matching problems." if needle else "No problems detected."
+            table.add_row("—", message, "", "")
         try:
             problems_tab = self.query_one("#--content-tab-problems", Tab)
             problems_tab.label = (
@@ -1562,6 +1607,16 @@ class WorkflowTui(App[None]):
     ) -> None:
         task = self._selected_task_snapshot()
         attempt = self._selected_attempt()
+        if event.resource.key in _LOG_ORDER:
+            self.selected_log_key = event.resource.key
+            self.query_one("#views", TabbedContent).active = "logs"
+            viewer = self.query_one("#log-viewer", TextFileViewer)
+            if task is not None and task.status == "running":
+                viewer.set_follow(True)
+            self._refresh_logs(force=True)
+            self._update_shortcuts()
+            viewer.focus()
+            return
         cwd, attempt_dir, known_paths = self._viewer_context(task, attempt)
         self.push_screen(
             TextViewerScreen(
