@@ -162,6 +162,17 @@ def parse_iso_duration(value: Any, *, label: str = "cycle step") -> timedelta:
     return duration
 
 
+def _validate_range_alignment(
+    start: datetime, end: datetime, interval: timedelta
+) -> None:
+    if start > end:
+        raise CycleConfigurationError("cycle start must not be later than cycle end.")
+    if (end - start) % interval != timedelta(0):
+        raise CycleConfigurationError(
+            "cycle end must align exactly with the cycle step from cycle start."
+        )
+
+
 def validate_cycle_mapping(value: Any) -> None:
     """Validate the optional top-level ``cycle`` configuration mapping."""
     if value is None:
@@ -195,12 +206,16 @@ def validate_cycle_mapping(value: Any) -> None:
             "'cycle' must define only one of 'step' or 'interval'."
         )
 
-    parse_cycle_time(value["start"], label="cycle.start")
+    first = parse_cycle_time(value["start"], label="cycle.start")
     if "end" in value:
-        parse_cycle_time(value["end"], label="cycle.end")
+        last = parse_cycle_time(value["end"], label="cycle.end")
     else:
-        parse_iso_duration(value["duration"], label="cycle.duration")
-    parse_iso_duration(value[interval_fields[0]], label=f"cycle.{interval_fields[0]}")
+        duration = parse_iso_duration(value["duration"], label="cycle.duration")
+        last = CycleContext(first.value + duration)
+    interval = parse_iso_duration(
+        value[interval_fields[0]], label=f"cycle.{interval_fields[0]}"
+    )
+    _validate_range_alignment(first.value, last.value, interval)
 
 
 def _resolved_range(
@@ -256,8 +271,7 @@ def _range_values(start: str, end: str, step: str) -> list[datetime]:
     first = parse_cycle_time(start, label="cycle start")
     last = parse_cycle_time(end, label="cycle end")
     interval = parse_iso_duration(step, label="cycle step")
-    if first.value > last.value:
-        raise CycleConfigurationError("cycle start must not be later than cycle end.")
+    _validate_range_alignment(first.value, last.value, interval)
 
     values: list[datetime] = []
     current = first.value
@@ -304,7 +318,10 @@ def resolve_cycle_contexts(
             raise CycleConfigurationError(
                 "--cycle-time cannot be combined with --from, --to, or --step."
             )
-        parsed = [parse_cycle_time(value, label="--cycle-time") for value in requested]
+        parsed = sorted(
+            (parse_cycle_time(value, label="--cycle-time") for value in requested),
+            key=lambda cycle: cycle.value,
+        )
         identifiers = [cycle.cycle_id for cycle in parsed]
         if len(set(identifiers)) != len(identifiers):
             raise CycleConfigurationError("--cycle-time values must not repeat a cycle.")
