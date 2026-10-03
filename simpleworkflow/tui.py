@@ -14,6 +14,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
+from textual.widget import Widget
 from textual.widgets import (
     Button,
     DataTable,
@@ -1051,7 +1052,7 @@ class WorkflowTui(App[None]):
             target.focus()
 
     @staticmethod
-    def _contains_focus(container: object, focused: object | None) -> bool:
+    def _contains_focus(container: Widget, focused: Widget | None) -> bool:
         if focused is None:
             return False
         if container is focused:
@@ -1425,6 +1426,7 @@ class WorkflowTui(App[None]):
         table.display = useful and not compact
         if not useful:
             return
+        assert selected_date is not None
 
         title.update(f"PERÍODO / CICLAGEM · {selected_date.strftime('%d/%m/%Y')}")
         table.add_columns(
