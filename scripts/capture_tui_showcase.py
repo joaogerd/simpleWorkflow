@@ -55,7 +55,8 @@ def _prepare(case: str, workflow: Path) -> None:
     if result.returncode != 0 and case not in EXPECTED_FAILURES:
         raise RuntimeError(
             f"showcase {case} failed unexpectedly with {result.returncode}:\n"
-            f"{result.stderr}"
+            f"--- stdout ---\n{result.stdout}\n"
+            f"--- stderr ---\n{result.stderr}"
         )
 
 
