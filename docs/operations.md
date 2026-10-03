@@ -70,6 +70,13 @@ are atomically replaced and synchronized before they are used for restart
 decisions.
 
 The SQLite database also indexes runs and attempts and records state transitions.
+When an attempt reaches a terminal result, its `attempt_history`, current
+`task_state` and corresponding state event are committed in one transaction.
+If recovery finds trustworthy terminal metadata after a controller loss, those
+indexes are reconciled together and the abandoned run is marked `interrupted`
+rather than being left as a false current run. Controller-side exceptions also
+close their run-history entry in a `finally` path.
+
 `swf reset` clears the current reusable task state for the selected workflow/cycle
 but deliberately keeps historical runs, attempts, state events and migration
 history. A later run executes the cleared task again rather than reusing history
