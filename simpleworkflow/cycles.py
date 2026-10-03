@@ -121,6 +121,17 @@ def cycle_scope_matches(scope: str | None, cycle: CycleContext) -> bool:
     }[normalized]
 
 
+def active_tasks_for_cycle(
+    tasks: Iterable[dict[str, Any]], cycle: CycleContext
+) -> list[dict[str, Any]]:
+    """Return configured tasks whose cycle scope applies to the cycle."""
+    return [
+        task
+        for task in tasks
+        if cycle_scope_matches(task.get("cycle_scope"), cycle)
+    ]
+
+
 def parse_cycle_time(value: Any, *, label: str = "cycle time") -> CycleContext:
     """Parse one timezone-aware ISO-8601 timestamp as UTC."""
     if not isinstance(value, str) or not value:
