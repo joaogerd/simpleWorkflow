@@ -778,3 +778,68 @@ def test_compact_yaml_task_definitions_do_not_grow_with_campaign_length(
         assert len(cycles) == expected_count
         assert len(initialization_tasks) + len(cycle_tasks) == structural_count
 
+
+
+def test_explicit_cycle_selection_is_executed_chronologically_with_campaign() -> None:
+    cycles = resolve_cycle_contexts(
+        {
+            "start": "2018-04-15T00:00:00Z",
+            "end": "2018-04-15T12:00:00Z",
+            "step": "PT6H",
+        },
+        cycle_times=[
+            "2018-04-15T12:00:00Z",
+            "2018-04-15T06:00:00Z",
+        ],
+    )
+
+    assert [cycle.cycle_id for cycle in cycles] == [
+        "20180415T060000Z",
+        "20180415T120000Z",
+    ]
+    assert [cycle.index for cycle in cycles] == [1, 2]
+    assert cycles[0].count == 3
+    assert cycles[0].previous_value is not None
+    assert cycles[0].previous_value.isoformat().startswith("2018-04-15T00:00:00")
+
+
+def test_explicit_cycle_selection_is_chronological_without_campaign() -> None:
+    cycles = resolve_cycle_contexts(
+        None,
+        cycle_times=[
+            "2018-04-15T12:00:00Z",
+            "2018-04-15T00:00:00Z",
+            "2018-04-15T06:00:00Z",
+        ],
+    )
+
+    assert [cycle.cycle_id for cycle in cycles] == [
+        "20180415T000000Z",
+        "20180415T060000Z",
+        "20180415T120000Z",
+    ]
+    assert [cycle.index for cycle in cycles] == [0, 1, 2]
+    assert cycles[1].previous_value == cycles[0].value
+    assert cycles[1].next_value == cycles[2].value
+
+
+def test_cycle_range_rejects_unaligned_inclusive_end() -> None:
+    with pytest.raises(CycleConfigurationError, match="align exactly"):
+        resolve_cycle_contexts(
+            {
+                "start": "2018-04-15T00:00:00Z",
+                "end": "2018-04-15T17:00:00Z",
+                "step": "PT6H",
+            }
+        )
+
+
+def test_cycle_duration_rejects_unaligned_interval() -> None:
+    with pytest.raises(CycleConfigurationError, match="align exactly"):
+        resolve_cycle_contexts(
+            {
+                "start": "2018-04-15T00:00:00Z",
+                "duration": "PT17H",
+                "interval": "PT6H",
+            }
+        )
