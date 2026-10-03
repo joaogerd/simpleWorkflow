@@ -3,9 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import multiprocessing
+import socket
 import sys
 import time
 from pathlib import Path
+
+import pytest
 
 from simpleworkflow.engine import WorkflowEngine
 from simpleworkflow.locking import WorkflowLockedError
@@ -140,4 +143,92 @@ def test_descendants_become_blocked_after_dependency_failure(tmp_path: Path) -> 
     assert engine.run() == 7
     assert engine.state.get_status("b") == "blocked"
     assert engine.state.get_status("c") == "blocked"
+    engine.state.close()
+
+
+
+def test_running_attempt_without_terminal_record_becomes_unknown(tmp_path: Path) -> None:
+    workdir = tmp_path / ".simpleworkflow"
+    attempt = workdir / "runs" / "run-missing" / "tasks" / "task-a" / "attempt-001"
+    attempt.mkdir(parents=True)
+    engine = WorkflowEngine(
+        {"workflow": {"name": "recover-missing"}, "tasks": []},
+        workdir=workdir,
+    )
+    engine.state.set_status("task", "running", None, "signature", attempt_path=attempt)
+
+    engine.state.reconcile_running()
+
+    recovered = engine.state.get_task_state("task")
+    assert recovered is not None
+    assert recovered.status == "unknown"
+    assert recovered.return_code is None
+    assert recovered.reason is not None and "não há prova persistente" in recovered.reason
+    engine.state.close()
+
+
+def test_dead_local_process_without_terminal_record_becomes_unknown(tmp_path: Path) -> None:
+    workdir = tmp_path / ".simpleworkflow"
+    attempt = workdir / "runs" / "run-dead" / "tasks" / "task-a" / "attempt-001"
+    attempt.mkdir(parents=True)
+    process = multiprocessing.Process(target=lambda: None)
+    process.start()
+    pid = process.pid
+    process.join()
+    assert pid is not None
+    (attempt / "process.json").write_text(
+        json.dumps({"pid": pid, "host": socket.gethostname()}),
+        encoding="utf-8",
+    )
+    engine = WorkflowEngine(
+        {"workflow": {"name": "recover-dead"}, "tasks": []},
+        workdir=workdir,
+    )
+    engine.state.set_status("task", "running", None, "signature", attempt_path=attempt)
+
+    engine.state.reconcile_running()
+
+    assert engine.state.get_status("task") == "unknown"
+    engine.state.close()
+
+
+def test_pending_pbs_submission_without_job_id_becomes_unknown(tmp_path: Path) -> None:
+    workdir = tmp_path / ".simpleworkflow"
+    attempt = workdir / "runs" / "run-pbs" / "tasks" / "task-a" / "attempt-001"
+    attempt.mkdir(parents=True)
+    (attempt / "scheduler.json").write_text(
+        json.dumps({"job_id": None, "submission_pending": True}),
+        encoding="utf-8",
+    )
+    engine = WorkflowEngine(
+        {"workflow": {"name": "recover-pbs"}, "tasks": []},
+        workdir=workdir,
+    )
+    engine.state.set_status("task", "running", None, "signature", attempt_path=attempt)
+
+    engine.state.reconcile_running()
+
+    recovered = engine.state.get_task_state("task")
+    assert recovered is not None
+    assert recovered.status == "unknown"
+    assert recovered.reason is not None and "submissão PBS" in recovered.reason
+    engine.state.close()
+
+
+def test_unknown_recovery_blocks_automatic_reexecution(tmp_path: Path) -> None:
+    workdir = tmp_path / ".simpleworkflow"
+    attempt = workdir / "runs" / "run-block" / "tasks" / "task-a" / "attempt-001"
+    attempt.mkdir(parents=True)
+    config = {
+        "workflow": {"name": "recover-block"},
+        "tasks": [{"name": "task", "argv": [sys.executable, "-c", "print('must not run')"]}],
+    }
+    engine = WorkflowEngine(config, workdir=workdir)
+    engine.state.set_status("task", "running", None, "signature", attempt_path=attempt)
+
+    with pytest.raises(RuntimeError, match="não é seguro continuar"):
+        engine.run()
+
+    assert engine.state.get_status("task") == "unknown"
+    assert not list((workdir / "runs").glob("*/tasks/*/attempt-*"))
     engine.state.close()
