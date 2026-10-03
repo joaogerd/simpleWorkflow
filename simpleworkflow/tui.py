@@ -1308,7 +1308,7 @@ class WorkflowTui(App[None]):
         for current in sorted(groups):
             cycles = groups[current]
             tasks = [task for cycle in cycles for task in cycle.tasks]
-            completed = sum(task.status in _COMPLETE for task in tasks)
+            completed = sum(task.status in COMPLETE_STATES for task in tasks)
             running = sum(task.status == "running" for task in tasks)
             failed = sum(task.status in ATTENTION_STATES for task in tasks)
             pending = len(tasks) - completed - running - failed
