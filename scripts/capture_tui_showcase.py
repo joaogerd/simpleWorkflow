@@ -116,11 +116,9 @@ def _write_html(images: list[tuple[str, str, Path]]) -> None:
     for case, view, image in images:
         by_case.setdefault(case, []).append((view, image))
 
-    nav = []
-    sections = []
+    sections: list[str] = []
     for case, title, description, _views in CASES:
-        nav.append(f'<a href="#{case}">{title}</a>')
-        figures = []
+        figures: list[str] = []
         for view, image in by_case.get(case, []):
             rel = image.relative_to(OUTPUT.parent).as_posix()
             figures.append(
@@ -129,7 +127,7 @@ def _write_html(images: list[tuple[str, str, Path]]) -> None:
                   <a href="{rel}" target="_blank" rel="noopener">
                     <img src="{rel}" alt="{title} — {view}" loading="lazy">
                   </a>
-                  <figcaption><strong>{view}</strong><span>Open full-size SVG ↗</span></figcaption>
+                  <figcaption><strong>{view}</strong><span>Abrir SVG em tamanho original ↗</span></figcaption>
                 </figure>
                 """
             )
@@ -140,7 +138,7 @@ def _write_html(images: list[tuple[str, str, Path]]) -> None:
                 <span class="case-number">{case.split('-', 1)[0]}</span>
                 <div>
                   <h2>{title}</h2>
-                  <p>{description}</p>
+                  <p class="muted">{description}</p>
                 </div>
               </div>
               <div class="shots">{''.join(figures)}</div>
@@ -149,109 +147,50 @@ def _write_html(images: list[tuple[str, str, Path]]) -> None:
         )
 
     html = f"""<!doctype html>
-<html lang="en">
+<html lang="pt-BR">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>simpleWorkflow — TUI Showcase</title>
-  <style>
-    :root {{
-      --bg:#0b0d12; --panel:#121620; --panel2:#171c27; --line:#2a3242;
-      --text:#eef2f8; --muted:#9aa7b8; --accent:#8ab4ff; --accent2:#b9ccff;
-      --max:1500px;
-    }}
-    * {{ box-sizing:border-box; }}
-    html {{ scroll-behavior:smooth; }}
-    body {{
-      margin:0; background:var(--bg); color:var(--text);
-      font:16px/1.55 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-    }}
-    a {{ color:var(--accent); }}
-    header {{
-      border-bottom:1px solid var(--line);
-      background:linear-gradient(180deg,#121722 0%,#0b0d12 100%);
-    }}
-    .hero {{ max-width:var(--max); margin:auto; padding:64px 28px 40px; }}
-    .eyebrow {{
-      display:inline-block; color:var(--accent); font-weight:700; letter-spacing:.12em;
-      text-transform:uppercase; font-size:.78rem; margin-bottom:12px;
-    }}
-    h1 {{ font-size:clamp(2.2rem,6vw,5rem); line-height:.96; margin:0 0 22px; letter-spacing:-.045em; }}
-    .lead {{ max-width:820px; color:var(--muted); font-size:1.15rem; margin:0; }}
-    .meta {{ margin-top:24px; display:flex; gap:10px; flex-wrap:wrap; }}
-    .pill {{
-      border:1px solid var(--line); background:var(--panel); border-radius:999px;
-      padding:7px 11px; color:var(--muted); font-size:.9rem;
-    }}
-    nav {{
-      position:sticky; top:0; z-index:10; border-bottom:1px solid var(--line);
-      background:rgba(11,13,18,.94); backdrop-filter:blur(10px);
-      overflow:auto; white-space:nowrap;
-    }}
-    nav .inner {{
-      max-width:var(--max); margin:auto; padding:12px 28px; display:flex; gap:18px;
-    }}
-    nav a {{ text-decoration:none; color:var(--muted); font-size:.92rem; }}
-    nav a:hover {{ color:var(--text); }}
-    main {{ max-width:var(--max); margin:auto; padding:18px 28px 80px; }}
-    .case {{ padding:56px 0; border-bottom:1px solid var(--line); scroll-margin-top:55px; }}
-    .case-heading {{ display:flex; gap:18px; align-items:flex-start; margin-bottom:24px; }}
-    .case-number {{
-      min-width:46px; height:46px; display:grid; place-items:center; border:1px solid var(--line);
-      background:var(--panel); border-radius:12px; color:var(--accent2); font-weight:800;
-    }}
-    h2 {{ margin:0 0 5px; font-size:1.7rem; }}
-    .case-heading p {{ margin:0; color:var(--muted); max-width:820px; }}
-    .shots {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,620px),1fr)); gap:20px; }}
-    .shot {{
-      margin:0; border:1px solid var(--line); background:var(--panel);
-      border-radius:14px; overflow:hidden; box-shadow:0 10px 30px rgba(0,0,0,.18);
-    }}
-    .shot a {{ display:block; background:#080a0e; }}
-    .shot img {{ display:block; width:100%; height:auto; }}
-    figcaption {{
-      display:flex; justify-content:space-between; gap:16px; padding:12px 14px;
-      border-top:1px solid var(--line); text-transform:capitalize;
-    }}
-    figcaption span {{ color:var(--muted); font-size:.88rem; }}
-    footer {{ max-width:var(--max); margin:auto; padding:0 28px 55px; color:var(--muted); }}
-    code {{ background:var(--panel2); border:1px solid var(--line); border-radius:5px; padding:2px 5px; }}
-    @media (max-width:650px) {{
-      .hero {{ padding-top:42px; }}
-      .hero, main, nav .inner, footer {{ padding-left:18px; padding-right:18px; }}
-      .case {{ padding:38px 0; }}
-      .case-heading {{ gap:12px; }}
-      figcaption {{ align-items:flex-start; flex-direction:column; gap:2px; }}
-    }}
-  </style>
+  <title>Galeria TUI — simpleWorkflow</title>
+  <link rel="stylesheet" href="../assets/site.css">
 </head>
 <body>
-<header>
-  <div class="hero">
-    <span class="eyebrow">simpleWorkflow 0.6.0</span>
-    <h1>TUI Showcase</h1>
-    <p class="lead">A visual tour from the smallest local workflow to cycles, campaign views and failure diagnostics. Every screenshot is generated deterministically from runnable examples.</p>
-    <div class="meta">
-      <span class="pill">140 × 45 virtual terminal</span>
-      <span class="pill">SVG screenshots</span>
-      <span class="pill">Generic examples — no MONAN/JEDI dependency</span>
-    </div>
+<nav class="site-nav"><div class="inner">
+  <a class="brand" href="../">simple<span>Workflow</span></a>
+  <div class="nav-links">
+    <a href="./">Tutorial</a>
+    <a class="active" href="showcase.html">Galeria TUI</a>
+    <a class="optional" href="https://github.com/joaogerd/simpleWorkflow">GitHub</a>
   </div>
-</header>
-<nav><div class="inner">{''.join(nav)}</div></nav>
-<main>{''.join(sections)}</main>
-<footer>
-  Generated by <code>python scripts/capture_tui_showcase.py</code>.
-  Click any screenshot to inspect the original SVG at full size.
-</footer>
+</div></nav>
+<header class="hero"><div class="inner">
+  <div class="eyebrow">Capturas reproduzíveis da interface</div>
+  <h1>TUI Showcase</h1>
+  <p>Do workflow mínimo a ciclos, contratos e diagnóstico de falhas. Todas as telas abaixo são geradas automaticamente a partir de exemplos executáveis do próprio repositório.</p>
+  <div class="actions">
+    <a class="button primary" href="./">Ler o tutorial</a>
+    <a class="button" href="#01-minimal">Ver as telas</a>
+  </div>
+</div></header>
+<main>
+  <div class="callout">
+    <strong>Como usar esta página:</strong> comece pelo exemplo 01 e avance em ordem.
+    Clique em qualquer imagem para abrir o SVG original. As capturas usam um terminal virtual
+    de 140 × 45 caracteres para permanecerem reproduzíveis.
+  </div>
+  {''.join(sections)}
+</main>
+<footer><div class="inner">
+  Gerado por <code>python scripts/capture_tui_showcase.py</code>.
+  As imagens e esta página são reconstruídas a partir dos exemplos do repositório.
+</div></footer>
 </body>
 </html>
 """
-    page = OUTPUT.parent / "index.html"
+    page = OUTPUT.parent / "showcase.html"
     page.parent.mkdir(parents=True, exist_ok=True)
     page.write_text(html, encoding="utf-8")
-
 
 def main() -> int:
     OUTPUT.mkdir(parents=True, exist_ok=True)
@@ -263,7 +202,7 @@ def main() -> int:
             images.append((case, view, _capture(case, workflow, view)))
     _write_gallery(images)
     _write_html(images)
-    print(OUTPUT.parent / "index.html")
+    print(OUTPUT.parent / "showcase.html")
     return 0
 
 
