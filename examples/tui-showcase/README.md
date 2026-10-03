@@ -211,3 +211,28 @@ swf capture-tui examples/tui-showcase/04-campaign/workflow.yaml \
 Valid views are `monitor`, `problems`, `logs`, and, for cyclic workflows,
 `cycles` and `campaign`. The virtual `--size` makes documentation captures
 independent of the real terminal dimensions.
+
+
+## Visual tutorial page
+
+Generate the complete showcase and HTML page:
+
+```bash
+python scripts/capture_tui_showcase.py
+```
+
+Then preview it locally from the repository root:
+
+```bash
+python -m http.server 8000 -d docs
+```
+
+Open:
+
+```text
+http://localhost:8000/
+```
+
+The root documentation page redirects to the visual TUI showcase. On `main`,
+the GitHub Pages workflow regenerates the screenshots and publishes the `docs/`
+tree automatically.
