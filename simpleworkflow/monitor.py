@@ -276,6 +276,24 @@ def _config_tasks(config: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     return tuple(task for task in raw_tasks if isinstance(task, dict))
 
 
+def _initialization_tasks(config: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    initialization = config.get("initialization")
+    if not isinstance(initialization, dict):
+        return ()
+    raw_tasks = initialization.get("tasks", [])
+    if not isinstance(raw_tasks, list):
+        return ()
+    return tuple(task for task in raw_tasks if isinstance(task, dict))
+
+
+def _initialization_task_names(config: dict[str, Any]) -> tuple[str, ...]:
+    return tuple(
+        str(task["name"])
+        for task in _initialization_tasks(config)
+        if isinstance(task.get("name"), str)
+    )
+
+
 def _task_names(config: dict[str, Any]) -> tuple[str, ...]:
     names: list[str] = []
     for task in _config_tasks(config):
@@ -473,6 +491,7 @@ def load_monitor_snapshot(
     state_dir = Path(workdir).resolve(strict=False)
     workflow_name = str(config.get("workflow", {}).get("name", "workflow"))
     names = _task_names(config)
+    initialization_names = _initialization_task_names(config)
     config_assignment, config_groups = _presentation_cycles(config)
     config_cycles = {
         cycle.cycle_id: cycle for cycle in config_assignment.values()
@@ -497,13 +516,14 @@ def load_monitor_snapshot(
             grouped_names = set(config_assignment)
             pending_root_tasks = tuple(
                 _task_snapshot(name, None, cycle_id=None)
-                for name in names
-                if name not in grouped_names
+                for name in (*initialization_names, *names)
+                if name in initialization_names or name not in grouped_names
             )
         else:
             pending_cycles = ()
             pending_root_tasks = tuple(
-                _task_snapshot(name, None, cycle_id=None) for name in names
+                _task_snapshot(name, None, cycle_id=None)
+                for name in (*initialization_names, *names)
             )
         return MonitorSnapshot(
             workflow_name=workflow_name,
@@ -606,9 +626,17 @@ def load_monitor_snapshot(
                         persisted=True,
                     )
                 )
-            # Native cycle execution stores these task names per cycle. Root rows
-            # from an older/no-cycle invocation must not be counted a second time.
-            root_tasks = ()
+            # Native cycle tasks live in cycle namespaces. Initialization tasks
+            # remain in the root namespace and stay visible as workflow history.
+            root_tasks = tuple(
+                _task_snapshot(
+                    name,
+                    root_rows.get(name),
+                    cycle_id=None,
+                    attempts=attempts.get(("", name), ()),
+                )
+                for name in initialization_names
+            )
         elif config_groups:
             for cycle_id, task_names in config_groups.items():
                 cycle_tasks = tuple(
@@ -640,8 +668,8 @@ def load_monitor_snapshot(
                     cycle_id=None,
                     attempts=attempts.get(("", name), ()),
                 )
-                for name in names
-                if name not in grouped_names
+                for name in (*initialization_names, *names)
+                if name in initialization_names or name not in grouped_names
             )
         else:
             root_tasks = tuple(
@@ -651,7 +679,7 @@ def load_monitor_snapshot(
                     cycle_id=None,
                     attempts=attempts.get(("", name), ()),
                 )
-                for name in names
+                for name in (*initialization_names, *names)
             )
 
         run_rows = connection.execute(
