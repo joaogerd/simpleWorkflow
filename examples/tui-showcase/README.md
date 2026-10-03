@@ -118,3 +118,68 @@ question at each step:
 3. What does a workflow with real file contracts look like?
 4. What does the maximum cycle/campaign interface look like?
 5. What does diagnosis of a failure look like?
+
+
+## 6. Invalid input
+
+```bash
+swf run examples/tui-showcase/06-invalid-input.yaml --ui tui
+```
+
+Shows a task in `invalid-input` before its process starts.
+
+## 7. Invalid output
+
+```bash
+rm -rf examples/tui-showcase/invalid-output-work
+swf run examples/tui-showcase/07-invalid-output.yaml --ui tui
+```
+
+The process exits successfully but fails the declared output contract, producing
+`invalid-output`.
+
+## 8. Blocked dependency
+
+```bash
+swf run examples/tui-showcase/08-blocked.yaml --ui tui
+```
+
+Shows a disabled prerequisite as `skipped` and its dependent task as
+`blocked`.
+
+## 9. Timeout
+
+```bash
+swf run examples/tui-showcase/09-timeout.yaml --ui tui
+```
+
+Shows a local process terminated by its task timeout and recorded as a failed
+attempt with a timeout reason.
+
+## What the showcase covers
+
+Together these examples exercise the main states and surfaces a user can
+reasonably produce on a local machine:
+
+- pending;
+- running;
+- success;
+- skipped;
+- failed;
+- invalid-input;
+- invalid-output;
+- blocked;
+- stdout and stderr;
+- exit codes and timeout reasons;
+- dependency trees;
+- inputs, outputs and validation checks;
+- context, cwd and environment variables;
+- state reuse and forced re-execution;
+- initialization;
+- cycles and campaign navigation;
+- first / not_first / not_last / last cycle scopes;
+- Monitor, Problems, Logs, Cycles and Campaign views.
+
+`stale`, `interrupted`, `unknown` and PBS-specific states depend on restart,
+interruption or scheduler conditions rather than a normal deterministic example,
+so they are not fabricated by these YAML files.
