@@ -186,7 +186,7 @@ name used by the existing `--step` CLI option.
 Both endpoints are inclusive. The examples above therefore contain four cycles:
 00Z, 06Z, 12Z and 18Z. A range from `2018-04-15T00:00:00Z` through
 `2018-04-18T00:00:00Z` at `PT6H` contains 13 cycles. Equivalently,
-`duration: PT72H` with `interval: PT6H` also contains 13 cycles.
+`duration: PT72H` with `interval: PT6H` also contains 13 cycles. Because both endpoints are inclusive, the end must be exactly reachable from the start by an integer number of steps; an unaligned range such as 00Z through 17Z at `PT6H` is rejected instead of silently omitting the declared endpoint.
 
 For every cycle, the following context values are added:
 
@@ -298,7 +298,7 @@ swf run workflow.yaml \
 ```
 
 `--cycle-time` may be repeated for multiple specific cycles, but cannot be
-combined with `--from`, `--to` or `--step`. When a workflow already declares a
+combined with `--from`, `--to` or `--step`. Repeated selections are normalized to chronological execution order regardless of the order in which they appear on the command line. When a workflow already declares a
 cycle range, an explicitly selected `--cycle-time` retains its original position
 in that declared campaign. For example, selecting the middle cycle does not
 make it become `first` or `last`; this keeps `cycle_scope` semantics stable for
