@@ -133,8 +133,7 @@ class WorkflowState:
         if not self._has_user_tables():
             if self.read_only:
                 raise StateSchemaError(f"state database {self.path} does not contain a schema")
-            self._create_schema()
-            self._create_instance(workflow_name, source_path)
+            self._bootstrap(workflow_name, source_path)
             return
         if not self._table_exists("schema_info"):
             raise StateMigrationRequired(
@@ -159,11 +158,29 @@ class WorkflowState:
             )
         self._bind_instance(workflow_name, source_path)
 
+    def _bootstrap(
+        self,
+        workflow_name: str,
+        source_path: str | Path | None,
+    ) -> None:
+        """Create schema and workflow identity as one SQLite transaction."""
+        self._require_writable()
+        try:
+            self._create_schema()
+            self._create_instance(workflow_name, source_path)
+            self.connection.commit()
+        except Exception:
+            if self.connection.in_transaction:
+                self.connection.rollback()
+            raise
+
     def _create_schema(self) -> None:
         self._require_writable()
         now = _utc_timestamp()
         self.connection.executescript(
             """
+            BEGIN IMMEDIATE;
+
             CREATE TABLE schema_info (
                 singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
                 schema_version INTEGER NOT NULL,
@@ -256,7 +273,6 @@ class WorkflowState:
             "INSERT INTO schema_info(singleton, schema_version, created_at) VALUES (1, ?, ?)",
             (STATE_SCHEMA_VERSION, now),
         )
-        self.connection.commit()
 
     def _create_instance(
         self,
@@ -285,7 +301,6 @@ class WorkflowState:
                 now,
             ),
         )
-        self.connection.commit()
 
     def _bind_instance(
         self,
