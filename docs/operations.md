@@ -37,8 +37,8 @@ commands do not need it.
 | `skipped` | The task was disabled. | Enable it when downstream work requires it. |
 | `stale` | An earlier result became obsolete after upstream repetition. | Let it run again. |
 | `blocked` | A dependency has no valid result. | Correct the upstream task first. |
-| `interrupted` | The previous controller ended and no activity was found. | Inspect and run again. |
-| `unknown` | A process or PBS job may still exist. | Verify it before `reset`. |
+| `interrupted` | A historical/explicit interruption state; recovery does not infer this merely from missing activity evidence. | Inspect the recorded reason before deciding what to do. |
+| `unknown` | Execution was started but no trustworthy terminal result can be proven. The process/job may still exist or may already have completed. | Verify external effects/process/job state before an explicit `reset`. |
 
 `swf explain workflow.yaml` shows reasons, missing files and attempt directories.
 `swf validate workflow.yaml` validates without executing scientific programs.
@@ -110,6 +110,17 @@ different existing YAML is rejected from using the same state directory. If the
 old source no longer exists, the new location can be accepted as a legitimate
 move. The path is not the workflow's database key and is never part of task or
 cycle identity.
+
+## Conservative restart rule
+
+Recovery never treats the absence of a live PID, Job ID, or scheduler response as
+proof that prior work is safe to repeat. If a task was durably marked `running`
+and no trustworthy final metadata proves its outcome, reconciliation records
+`unknown`. This includes a dead local PID, a controller death before runtime
+identity was recorded, malformed/missing runtime records, and a PBS submission
+whose Job ID was never confirmed. A normal `swf run` stops while any selected
+task remains `unknown`; the operator must inspect the external effects and use
+`reset` only after deciding that a repeat is safe.
 
 ## PBS
 
