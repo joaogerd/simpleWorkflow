@@ -23,6 +23,7 @@ from .state import WorkflowState
 INVALID_INPUT_EXIT_CODE = 2
 INVALID_OUTPUT_EXIT_CODE = 3
 BLOCKED_EXIT_CODE = 4
+UNKNOWN_EXIT_CODE = 5
 
 
 def render_template(text: str, context: dict[str, Any]) -> str:
@@ -303,7 +304,7 @@ class WorkflowEngine:
         artifacts: ResolvedArtifacts,
         signature: TaskSignature,
         status: str,
-        return_code: int,
+        return_code: int | None,
         execution: Mapping[str, Any] | None = None,
         process_return_code: int | None = None,
         reason: str | None = None,
@@ -614,8 +615,51 @@ class WorkflowEngine:
             execution_result = self._normalize_execution_result(
                 task_executor.run(task_name, argv, **execution_options)
             )
-            return_code = execution_result.return_code
             execution = execution_result.metadata
+            if execution_result.outcome == "unknown":
+                reason = execution_result.reason or "execution outcome is uncertain"
+                self.reporter.event(
+                    "fail",
+                    task_name,
+                    f"outcome unknown · {reason}",
+                    executor=executor_name,
+                )
+                self._record_attempt(
+                    recorder,
+                    attempt,
+                    argv=argv,
+                    cwd=cwd,
+                    env=env,
+                    artifacts=artifacts,
+                    signature=signature,
+                    status="unknown",
+                    return_code=None,
+                    execution=execution,
+                    reason=reason,
+                )
+                self.state.set_status(
+                    task_name,
+                    "unknown",
+                    None,
+                    signature.value,
+                    reason,
+                    attempt.directory,
+                    cycle_id=self.cycle_id,
+                    signature_schema=SIGNATURE_SCHEMA_VERSION,
+                    signature_payload=signature.payload,
+                )
+                if descendants:
+                    self.state.mark_tasks(
+                        descendants,
+                        "blocked",
+                        reason,
+                        cycle_id=self.cycle_id,
+                    )
+                exit_code = UNKNOWN_EXIT_CODE
+                break
+
+            return_code = execution_result.return_code
+            assert return_code is not None
 
             if return_code == 0:
                 missing_outputs = artifacts.missing_required_outputs()
@@ -727,7 +771,8 @@ class WorkflowEngine:
                 break
 
         if recorder is not None:
-            self.state.finish_run(recorder.run_id, "success" if exit_code == 0 else "failed")
+            run_status = "success" if exit_code == 0 else "unknown" if exit_code == UNKNOWN_EXIT_CODE else "failed"
+            self.state.finish_run(recorder.run_id, run_status)
         return exit_code
 
     def status(self) -> None:
