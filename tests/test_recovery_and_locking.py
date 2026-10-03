@@ -12,6 +12,7 @@ import pytest
 
 from simpleworkflow.engine import WorkflowEngine
 from simpleworkflow.locking import WorkflowLockedError
+from simpleworkflow.runs import RunRecorder
 
 
 def _run_sleeping_workflow(workdir: str, marker: str) -> None:
@@ -289,4 +290,162 @@ def test_removed_unknown_task_does_not_block_current_workflow(tmp_path: Path) ->
     assert engine.run() == 0
     assert engine.state.get_status("current") == "success"
     assert engine.state.get_status("removed-task") == "unknown"
+    engine.state.close()
+
+
+
+def test_recovery_from_terminal_metadata_reconciles_attempt_and_run_history(
+    tmp_path: Path,
+) -> None:
+    workdir = tmp_path / ".simpleworkflow"
+    engine = WorkflowEngine(
+        {"workflow": {"name": "recover-history"}, "tasks": []},
+        workdir=workdir,
+    )
+    recorder = RunRecorder(
+        workdir,
+        "recover-history",
+        instance_id=engine.state.instance_id,
+        run_id="run-recover-history",
+    )
+    engine.state.record_run(recorder.run_id, recorder.directory)
+    attempt = recorder.begin_attempt("task")
+    recorder.write_started(
+        attempt,
+        {"status": "running", "command": {"argv": ["true"], "cwd": None, "env": {}}, "signature": "sig"},
+    )
+    engine.state.record_attempt_started(
+        run_id=attempt.run_id,
+        task="task",
+        attempt=attempt.attempt,
+        attempt_path=attempt.directory,
+        signature="sig",
+    )
+    engine.state.set_status(
+        "task",
+        "running",
+        None,
+        "sig",
+        "tarefa iniciada",
+        attempt.directory,
+    )
+    recorder.write_metadata(
+        attempt,
+        {"status": "success", "return_code": 0, "reason": "completed before controller loss"},
+    )
+
+    engine.state.reconcile_running()
+
+    task = engine.state.get_task_state("task")
+    assert task is not None and task.status == "success"
+    attempt_row = engine.state.connection.execute(
+        """
+        SELECT status, return_code, reason, finished_at
+        FROM attempt_history
+        WHERE run_id = ? AND task = ? AND attempt = ?
+        """,
+        (attempt.run_id, "task", attempt.attempt),
+    ).fetchone()
+    assert attempt_row is not None
+    assert attempt_row[0] == "success"
+    assert attempt_row[1] == 0
+    assert attempt_row[2] == "completed before controller loss"
+    assert attempt_row[3] is not None
+
+    run_row = engine.state.connection.execute(
+        "SELECT status, finished_at FROM run_history WHERE run_id = ?",
+        (attempt.run_id,),
+    ).fetchone()
+    assert run_row is not None
+    assert run_row[0] == "interrupted"
+    assert run_row[1] is not None
+    engine.state.close()
+
+
+def test_finalize_attempt_rolls_back_if_task_state_update_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workdir = tmp_path / ".simpleworkflow"
+    engine = WorkflowEngine(
+        {"workflow": {"name": "atomic-finalize"}, "tasks": []},
+        workdir=workdir,
+    )
+    recorder = RunRecorder(
+        workdir,
+        "atomic-finalize",
+        instance_id=engine.state.instance_id,
+        run_id="run-atomic-finalize",
+    )
+    engine.state.record_run(recorder.run_id, recorder.directory)
+    attempt = recorder.begin_attempt("task")
+    engine.state.record_attempt_started(
+        run_id=attempt.run_id,
+        task="task",
+        attempt=attempt.attempt,
+        attempt_path=attempt.directory,
+        signature="sig",
+    )
+    engine.state.set_status(
+        "task",
+        "running",
+        None,
+        "sig",
+        "tarefa iniciada",
+        attempt.directory,
+    )
+
+    def fail_task_state(*_args: object, **_kwargs: object) -> None:
+        raise sqlite3.OperationalError("injected task-state failure")
+
+    import sqlite3
+
+    monkeypatch.setattr(engine.state, "_write_task_state_event", fail_task_state)
+    with pytest.raises(sqlite3.OperationalError, match="injected"):
+        engine.state.finalize_attempt(
+            run_id=attempt.run_id,
+            task="task",
+            attempt=attempt.attempt,
+            status="success",
+            return_code=0,
+            signature="sig",
+            reason="done",
+            attempt_path=attempt.directory,
+        )
+
+    attempt_status = engine.state.connection.execute(
+        """
+        SELECT status, return_code, finished_at
+        FROM attempt_history
+        WHERE run_id = ? AND task = ? AND attempt = ?
+        """,
+        (attempt.run_id, "task", attempt.attempt),
+    ).fetchone()
+    assert attempt_status == ("running", None, None)
+    current = engine.state.get_task_state("task")
+    assert current is not None and current.status == "running"
+    engine.state.close()
+
+
+def test_unexpected_executor_exception_finishes_run_as_interrupted(tmp_path: Path) -> None:
+    class ExplodingExecutor:
+        def run(self, *_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("controller-side failure")
+
+    config = {
+        "workflow": {"name": "run-finally"},
+        "tasks": [{"name": "task", "argv": [sys.executable, "-c", "print('unused')"]}],
+    }
+    engine = WorkflowEngine(config, workdir=tmp_path / ".simpleworkflow")
+    engine.executor = ExplodingExecutor()  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeError, match="controller-side failure"):
+        engine.run()
+
+    row = engine.state.connection.execute(
+        "SELECT status, finished_at FROM run_history"
+    ).fetchone()
+    assert row is not None
+    assert row[0] == "interrupted"
+    assert row[1] is not None
+    assert engine.state.get_status("task") == "running"
     engine.state.close()
