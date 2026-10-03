@@ -255,27 +255,7 @@ def _has_cycle_override(args: argparse.Namespace) -> bool:
 
 def _reconcile_after_interrupt(engine: WorkflowEngine) -> None:
     """Recover task state conservatively after an interactive interruption."""
-    running_pbs = {
-        task["name"]
-        for task in engine.tasks
-        if task.get("executor", "local") == "pbs"
-        and engine.state.get_status(task["name"], cycle_id=engine.cycle_id) == "running"
-    }
     engine.state.reconcile_running(cycle_id=engine.cycle_id)
-    for task_name in running_pbs:
-        state = engine.state.get_task_state(task_name, cycle_id=engine.cycle_id)
-        if state is not None and state.status == "interrupted":
-            engine.state.set_status(
-                task_name,
-                "unknown",
-                None,
-                state.signature,
-                "submissão PBS interrompida antes de confirmar o job; verifique o escalonador",
-                state.attempt_path,
-                cycle_id=engine.cycle_id,
-                signature_schema=state.signature_schema,
-                signature_payload=state.signature_payload,
-            )
 
 
 def _inspection_lines(inspection: StateInspection) -> list[str]:

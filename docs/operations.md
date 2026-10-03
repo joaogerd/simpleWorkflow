@@ -37,8 +37,8 @@ commands do not need it.
 | `skipped` | The task was disabled. | Enable it when downstream work requires it. |
 | `stale` | An earlier result became obsolete after upstream repetition. | Let it run again. |
 | `blocked` | A dependency has no valid result. | Correct the upstream task first. |
-| `interrupted` | The previous controller ended and no activity was found. | Inspect and run again. |
-| `unknown` | A process or PBS job may still exist. | Verify it before `reset`. |
+| `interrupted` | A historical/explicit interruption state; recovery does not infer this merely from missing activity evidence. | Inspect the recorded reason before deciding what to do. |
+| `unknown` | Execution was started but no trustworthy terminal result can be proven. The process/job may still exist or may already have completed. | Verify external effects/process/job state before an explicit `reset`. |
 
 `swf explain workflow.yaml` shows reasons, missing files and attempt directories.
 `swf validate workflow.yaml` validates without executing scientific programs.
@@ -62,9 +62,21 @@ same case while preserving one workflow identity.
 
 Every attempt has separate start and final records, stdout, stderr and a SHA-256
 checksum for final metadata. Every run stores its effective `workflow.yaml`.
-Final metadata is published before successful task state is committed.
+Final metadata is published before successful task state is committed. Recovery
+verifies `metadata.sha256` when it is present; a mismatch is treated as
+`unknown`, while older attempt records without the checksum remain readable.
+Mutable runtime identity records such as `process.json` and `scheduler.json`
+are atomically replaced and synchronized before they are used for restart
+decisions.
 
 The SQLite database also indexes runs and attempts and records state transitions.
+When an attempt reaches a terminal result, its `attempt_history`, current
+`task_state` and corresponding state event are committed in one transaction.
+If recovery finds trustworthy terminal metadata after a controller loss, those
+indexes are reconciled together and the abandoned run is marked `interrupted`
+rather than being left as a false current run. Controller-side exceptions also
+close their run-history entry in a `finally` path.
+
 `swf reset` clears the current reusable task state for the selected workflow/cycle
 but deliberately keeps historical runs, attempts, state events and migration
 history. A later run executes the cleared task again rather than reusing history
@@ -106,12 +118,27 @@ old source no longer exists, the new location can be accepted as a legitimate
 move. The path is not the workflow's database key and is never part of task or
 cycle identity.
 
+## Conservative restart rule
+
+Recovery never treats the absence of a live PID, Job ID, or scheduler response as
+proof that prior work is safe to repeat. If a task was durably marked `running`
+and no trustworthy final metadata proves its outcome, reconciliation records
+`unknown`. This includes a dead local PID, a controller death before runtime
+identity was recorded, malformed/missing runtime records, and a PBS submission
+whose Job ID was never confirmed. A normal `swf run` stops while any selected
+task remains `unknown`; the operator must inspect the external effects and use
+`reset` only after deciding that a repeat is safe.
+
 ## PBS
 
 PBS submission stores the returned job identifier in `scheduler.json`. The
-foreground controller consults `qstat -xf`. If a restart cannot prove the job's
-situation, it stops at `unknown` instead of submitting a duplicate. Verify
-`qsub`, `qstat -xf`, final `Exit_status` and `qdel` on every PBS installation.
+foreground controller consults `qstat -xf`. A scheduler communication failure
+is not a task failure: simpleWorkflow retries a small bounded number of status
+queries and then records `unknown` if the result is still inconclusive. A
+successful submission whose Job ID cannot be parsed is likewise `unknown`.
+Normal execution will not submit the task again until the uncertainty has been
+resolved explicitly. Verify `qsub`, `qstat -xf`, final `Exit_status` and
+`qdel` on every PBS installation.
 
 Queue-specific modules, placement rules and scientific launch commands belong
 in versioned wrappers. Free-form PBS directives are intentionally absent.

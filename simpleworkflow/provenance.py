@@ -22,7 +22,7 @@ def build_attempt_metadata(
     artifacts: ResolvedArtifacts,
     signature: TaskSignature,
     status: str,
-    return_code: int,
+    return_code: int | None,
     execution: Mapping[str, Any] | None = None,
     process_return_code: int | None = None,
     reason: str | None = None,

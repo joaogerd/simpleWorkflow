@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .runs import metadata_checksum_matches
+
 STATE_SCHEMA_VERSION = 1
 _NO_CYCLE = ""
 
@@ -404,22 +406,20 @@ class WorkflowState:
         state = self.get_task_state(task, cycle_id=cycle_id)
         return state.status if state else None
 
-    def set_status(
+    def _write_task_state_event(
         self,
         task: str,
         status: str,
-        return_code: int | None = None,
-        signature: str | None = None,
-        reason: str | None = None,
-        attempt_path: str | Path | None = None,
+        return_code: int | None,
+        signature: str | None,
+        reason: str | None,
+        attempt_path: str | Path | None,
         *,
-        cycle_id: str | None = None,
-        signature_schema: int | None = None,
-        signature_payload: Mapping[str, Any] | None = None,
-        updated_at: str | None = None,
+        cycle_id: str | None,
+        signature_schema: int | None,
+        signature_payload: Mapping[str, Any] | None,
+        timestamp: str,
     ) -> None:
-        self._require_writable()
-        timestamp = updated_at or _utc_timestamp()
         portable_attempt = self.portable_path(attempt_path) if attempt_path is not None else None
         encoded_payload = (
             json.dumps(dict(signature_payload), sort_keys=True, separators=(",", ":"))
@@ -464,7 +464,161 @@ class WorkflowState:
             """,
             (key, task, status, return_code, reason, portable_attempt, timestamp),
         )
-        self.connection.commit()
+
+    def set_status(
+        self,
+        task: str,
+        status: str,
+        return_code: int | None = None,
+        signature: str | None = None,
+        reason: str | None = None,
+        attempt_path: str | Path | None = None,
+        *,
+        cycle_id: str | None = None,
+        signature_schema: int | None = None,
+        signature_payload: Mapping[str, Any] | None = None,
+        updated_at: str | None = None,
+    ) -> None:
+        self._require_writable()
+        timestamp = updated_at or _utc_timestamp()
+        with self.connection:
+            self._write_task_state_event(
+                task,
+                status,
+                return_code,
+                signature,
+                reason,
+                attempt_path,
+                cycle_id=cycle_id,
+                signature_schema=signature_schema,
+                signature_payload=signature_payload,
+                timestamp=timestamp,
+            )
+
+    def finalize_attempt(
+        self,
+        *,
+        run_id: str,
+        task: str,
+        attempt: int,
+        status: str,
+        return_code: int | None,
+        signature: str | None,
+        reason: str | None,
+        attempt_path: str | Path,
+        cycle_id: str | None = None,
+        signature_schema: int | None = None,
+        signature_payload: Mapping[str, Any] | None = None,
+        finish_run_status: str | None = None,
+        finished_at: str | None = None,
+    ) -> None:
+        """Atomically finalize attempt history and the current operational task state."""
+        self._require_writable()
+        timestamp = finished_at or _utc_timestamp()
+        with self.connection:
+            cursor = self.connection.execute(
+                """
+                UPDATE attempt_history
+                SET status = ?, return_code = ?, reason = ?, finished_at = ?
+                WHERE run_id = ? AND task = ? AND attempt = ?
+                """,
+                (status, return_code, reason, timestamp, run_id, task, attempt),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError(
+                    f"attempt history not found for {run_id}:{task}:attempt-{attempt}"
+                )
+            self._write_task_state_event(
+                task,
+                status,
+                return_code,
+                signature,
+                reason,
+                attempt_path,
+                cycle_id=cycle_id,
+                signature_schema=signature_schema,
+                signature_payload=signature_payload,
+                timestamp=timestamp,
+            )
+            if finish_run_status is not None:
+                self.connection.execute(
+                    """
+                    UPDATE run_history
+                    SET status = ?, finished_at = ?
+                    WHERE run_id = ?
+                    """,
+                    (finish_run_status, timestamp, run_id),
+                )
+
+    def _attempt_history_identity(
+        self,
+        task: str,
+        attempt_path: str | Path | None,
+        *,
+        cycle_id: str | None,
+    ) -> tuple[str, int] | None:
+        if attempt_path is None:
+            return None
+        portable_attempt = self.portable_path(attempt_path)
+        row = self.connection.execute(
+            """
+            SELECT run_id, attempt
+            FROM attempt_history
+            WHERE cycle_id = ? AND task = ? AND attempt_path = ?
+            ORDER BY started_at DESC
+            LIMIT 1
+            """,
+            (_cycle_key(cycle_id), task, portable_attempt),
+        ).fetchone()
+        return (str(row[0]), int(row[1])) if row is not None else None
+
+    def _reconcile_task_state(
+        self,
+        *,
+        task: str,
+        status: str,
+        return_code: int | None,
+        signature: str | None,
+        reason: str,
+        attempt_path: str | Path | None,
+        cycle_id: str | None,
+        signature_schema: int | None,
+        signature_payload: Mapping[str, Any] | None,
+        terminal_metadata: bool,
+    ) -> None:
+        identity = self._attempt_history_identity(
+            task,
+            attempt_path,
+            cycle_id=cycle_id,
+        )
+        if identity is None:
+            self.set_status(
+                task,
+                status,
+                return_code,
+                signature,
+                reason,
+                attempt_path,
+                cycle_id=cycle_id,
+                signature_schema=signature_schema,
+                signature_payload=signature_payload,
+            )
+            return
+        run_id, attempt = identity
+        self.finalize_attempt(
+            run_id=run_id,
+            task=task,
+            attempt=attempt,
+            status=status,
+            return_code=return_code,
+            signature=signature,
+            reason=reason,
+            attempt_path=attempt_path or "",
+            cycle_id=cycle_id,
+            signature_schema=signature_schema,
+            signature_payload=signature_payload,
+            finish_run_status="interrupted" if terminal_metadata else "unknown",
+        )
 
     def mark_tasks(
         self,
@@ -473,21 +627,26 @@ class WorkflowState:
         reason: str,
         *,
         cycle_id: str | None = None,
+        return_code: int | None = None,
     ) -> None:
+        """Update a related set of task states in one transaction."""
         self._require_writable()
-        for task in tasks:
-            previous = self.get_task_state(task, cycle_id=cycle_id)
-            self.set_status(
-                task,
-                status,
-                None,
-                previous.signature if previous else None,
-                reason,
-                previous.attempt_path if previous else None,
-                cycle_id=cycle_id,
-                signature_schema=previous.signature_schema if previous else None,
-                signature_payload=previous.signature_payload if previous else None,
-            )
+        timestamp = _utc_timestamp()
+        with self.connection:
+            for task in tasks:
+                previous = self.get_task_state(task, cycle_id=cycle_id)
+                self._write_task_state_event(
+                    task,
+                    status,
+                    return_code,
+                    previous.signature if previous else None,
+                    reason,
+                    previous.attempt_path if previous else None,
+                    cycle_id=cycle_id,
+                    signature_schema=previous.signature_schema if previous else None,
+                    signature_payload=previous.signature_payload if previous else None,
+                    timestamp=timestamp,
+                )
 
     def portable_path(self, value: str | Path) -> str:
         path = Path(value)
@@ -526,21 +685,37 @@ class WorkflowState:
             attempt = self.resolve_path(attempt_path)
             metadata = attempt / "metadata.json" if attempt else None
             if metadata and metadata.is_file():
+                checksum_matches = metadata_checksum_matches(metadata)
+                if checksum_matches is False:
+                    self._reconcile_task_state(
+                        task=task,
+                        status="unknown",
+                        return_code=None,
+                        signature=signature,
+                        reason="metadata final existe, mas metadata.sha256 não corresponde ao conteúdo",
+                        attempt_path=attempt_path,
+                        cycle_id=cycle_id,
+                        signature_schema=schema,
+                        signature_payload=payload,
+                        terminal_metadata=False,
+                    )
+                    continue
                 try:
                     record = json.loads(metadata.read_text(encoding="utf-8"))
                     status = str(record["status"])
                     return_code = record.get("return_code")
                     reason = record.get("reason") or "resultado recuperado do registro da tentativa"
-                    self.set_status(
-                        task,
-                        status,
-                        return_code,
-                        signature,
-                        reason,
-                        attempt_path,
+                    self._reconcile_task_state(
+                        task=task,
+                        status=status,
+                        return_code=return_code,
+                        signature=signature,
+                        reason=reason,
+                        attempt_path=attempt_path,
                         cycle_id=cycle_id,
                         signature_schema=schema,
                         signature_payload=payload,
+                        terminal_metadata=True,
                     )
                     continue
                 except (OSError, ValueError, KeyError, TypeError):
@@ -552,16 +727,17 @@ class WorkflowState:
                     pid = int(process["pid"])
                     if process.get("host") == socket.gethostname():
                         os.kill(pid, 0)
-                        self.set_status(
-                            task,
-                            "unknown",
-                            None,
-                            signature,
-                            f"processo {pid} ainda pode estar ativo neste computador",
-                            attempt_path,
+                        self._reconcile_task_state(
+                            task=task,
+                            status="unknown",
+                            return_code=None,
+                            signature=signature,
+                            reason=f"processo {pid} ainda pode estar ativo neste computador",
+                            attempt_path=attempt_path,
                             cycle_id=cycle_id,
                             signature_schema=schema,
                             signature_payload=payload,
+                            terminal_metadata=False,
                         )
                         continue
                 except (OSError, ValueError, KeyError, TypeError):
@@ -570,31 +746,48 @@ class WorkflowState:
             if scheduler_record and scheduler_record.is_file():
                 try:
                     scheduler = json.loads(scheduler_record.read_text(encoding="utf-8"))
-                    job_id = str(scheduler["job_id"])
-                    self.set_status(
-                        task,
-                        "unknown",
-                        None,
-                        signature,
-                        f"job PBS {job_id} precisa ser reconciliado com o escalonador",
-                        attempt_path,
+                    if not isinstance(scheduler, Mapping):
+                        raise ValueError("scheduler record must be a JSON object")
+                    raw_job_id = scheduler.get("job_id")
+                    if raw_job_id:
+                        reason = (
+                            f"job PBS {raw_job_id} precisa ser reconciliado com o escalonador"
+                        )
+                    elif scheduler.get("submission_pending") or scheduler.get(
+                        "submission_uncertain"
+                    ):
+                        reason = (
+                            "submissão PBS foi iniciada, mas o job_id ou resultado "
+                            "não pôde ser confirmado"
+                        )
+                    else:
+                        reason = "registro PBS existe, mas não comprova um resultado terminal"
+                    self._reconcile_task_state(
+                        task=task,
+                        status="unknown",
+                        return_code=None,
+                        signature=signature,
+                        reason=reason,
+                        attempt_path=attempt_path,
                         cycle_id=cycle_id,
                         signature_schema=schema,
                         signature_payload=payload,
+                        terminal_metadata=False,
                     )
                     continue
-                except (OSError, ValueError, KeyError, TypeError):
+                except (OSError, ValueError, TypeError):
                     pass
-            self.set_status(
-                task,
-                "interrupted",
-                None,
-                signature,
-                "o controlador anterior terminou antes de registrar o resultado",
-                attempt_path,
+            self._reconcile_task_state(
+                task=task,
+                status="unknown",
+                return_code=None,
+                signature=signature,
+                reason="a execução foi iniciada, mas não há prova persistente de resultado terminal",
+                attempt_path=attempt_path,
                 cycle_id=cycle_id,
                 signature_schema=schema,
                 signature_payload=payload,
+                terminal_metadata=False,
             )
 
     def tasks_with_status(self, status: str, *, cycle_id: str | None = None) -> list[str]:

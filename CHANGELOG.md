@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.6.1
+
+simpleWorkflow 0.6.1 is a reliability release focused on safe PBS recovery and
+consistent persistent state. It preserves the 0.6.0 workflow format, SQLite
+schema and read-only TUI boundary.
+
+- Distinguish a confirmed task failure from an uncertain scheduler outcome.
+  PBS control-plane errors, missing terminal exit information and successful
+  submissions without a reliable Job ID now converge to `unknown` instead of
+  inventing a task failure that could permit duplicate submission.
+- Bound `qsub`, `qstat` and `qdel` control commands and retry transient
+  `qstat` failures only at the scheduler-control layer. Scientific tasks are
+  never retried automatically.
+- Publish local process and PBS scheduler identity records durably and validate
+  `metadata.sha256` during recovery when present, while retaining compatibility
+  with older attempts that have no checksum.
+- Treat every previously started execution without trustworthy terminal evidence
+  as `unknown`, so controller loss cannot silently turn uncertain work into an
+  automatically rerunnable task.
+- Finalize `attempt_history`, current `task_state` and `state_event` in one
+  SQLite transaction, reconcile them together from durable terminal metadata and
+  close abandoned `run_history` records on recovery or controller exceptions.
+- Apply downstream stale/blocked propagation as transactional batches, including
+  invalid input/output, disabled prerequisites, execution failure and uncertain
+  outcomes, so a partial commit cannot leave old successful descendants reusable.
+- Add regression coverage for PBS uncertainty, controller-loss recovery,
+  metadata integrity, transactional rollback and multi-level DAG invalidation
+  across Python 3.10, 3.11 and 3.12.
+
 ## 0.6.0
 
 simpleWorkflow 0.6.0 turns the Textual frontend into a read-only operational

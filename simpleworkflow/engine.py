@@ -23,6 +23,7 @@ from .state import WorkflowState
 INVALID_INPUT_EXIT_CODE = 2
 INVALID_OUTPUT_EXIT_CODE = 3
 BLOCKED_EXIT_CODE = 4
+UNKNOWN_EXIT_CODE = 5
 
 
 def render_template(text: str, context: dict[str, Any]) -> str:
@@ -303,7 +304,7 @@ class WorkflowEngine:
         artifacts: ResolvedArtifacts,
         signature: TaskSignature,
         status: str,
-        return_code: int,
+        return_code: int | None,
         execution: Mapping[str, Any] | None = None,
         process_return_code: int | None = None,
         reason: str | None = None,
@@ -325,13 +326,18 @@ class WorkflowEngine:
                 reason=reason,
             ),
         )
-        self.state.record_attempt_finished(
+        self.state.finalize_attempt(
             run_id=attempt.run_id,
             task=attempt.task_name,
             attempt=attempt.attempt,
             status=status,
             return_code=return_code,
+            signature=signature.value,
             reason=reason,
+            attempt_path=attempt.directory,
+            cycle_id=self.cycle_id,
+            signature_schema=SIGNATURE_SCHEMA_VERSION,
+            signature_payload=signature.payload,
         )
 
     def run(self) -> int:
@@ -340,7 +346,12 @@ class WorkflowEngine:
             return self._run_dry()
         with WorkflowLock(self.workdir, self.workflow_name):
             self.state.reconcile_running(cycle_id=self.cycle_id)
-            uncertain = self.state.tasks_with_status("unknown", cycle_id=self.cycle_id)
+            planned_tasks = set(self.plan())
+            uncertain = [
+                task
+                for task in self.state.tasks_with_status("unknown", cycle_id=self.cycle_id)
+                if task in planned_tasks
+            ]
             if uncertain:
                 raise RuntimeError(
                     "não é seguro continuar; a atividade ainda não pôde ser confirmada para: "
@@ -408,6 +419,19 @@ class WorkflowEngine:
                     pending.append(name)
         return descendants
 
+    def _block_descendants(self, task_name: str, reason: str) -> list[str]:
+        """Persist blocked descendants together so the DAG never exposes a partial cascade."""
+        descendants = self._descendants(task_name)
+        if descendants:
+            self.state.mark_tasks(
+                descendants,
+                "blocked",
+                reason,
+                cycle_id=self.cycle_id,
+                return_code=BLOCKED_EXIT_CODE,
+            )
+        return descendants
+
     def _adopt_legacy_signature(
         self,
         task_name: str,
@@ -442,187 +466,195 @@ class WorkflowEngine:
         executed_tasks: set[str] = set()
         exit_code = 0
 
-        for task_name in self.plan():
-            task = task_map[task_name]
-            executor_name = str(task.get("executor", "local"))
-            dependencies = task.get("depends_on", []) or []
-            if isinstance(dependencies, str):
-                dependencies = [dependencies]
-            unavailable = [
-                dependency
-                for dependency in dependencies
-                if self.state.get_status(dependency, cycle_id=self.cycle_id)
-                in {
-                    "skipped",
-                    "blocked",
-                    "failed",
-                    "invalid-input",
-                    "invalid-output",
-                    "interrupted",
-                    "unknown",
-                }
-            ]
-            if unavailable:
-                reason = "dependência indisponível: " + ", ".join(unavailable)
-                self.reporter.event("fail", task_name, reason, executor=executor_name)
-                self.state.set_status(
-                    task_name,
-                    "blocked",
-                    BLOCKED_EXIT_CODE,
-                    reason=reason,
-                    cycle_id=self.cycle_id,
-                )
-                exit_code = BLOCKED_EXIT_CODE
-                break
-            if task.get("enabled", True) is False:
-                self.reporter.event("skip", task_name, "disabled", executor=executor_name)
-                self.state.set_status(
-                    task_name,
-                    "skipped",
-                    0,
-                    cycle_id=self.cycle_id,
-                )
-                continue
-
-            artifacts = self._task_artifacts(task)
-            dependency_executed = any(
-                dependency in executed_tasks for dependency in dependencies
-            )
-            missing_inputs = artifacts.missing_required_inputs()
-            if missing_inputs:
-                message = f"missing required input(s): {self._format_missing_inputs(artifacts)}"
-                self.reporter.event("fail", task_name, message, executor=executor_name)
-                self.state.set_status(
-                    task_name,
-                    "invalid-input",
-                    INVALID_INPUT_EXIT_CODE,
-                    cycle_id=self.cycle_id,
-                )
-                exit_code = INVALID_INPUT_EXIT_CODE
-                break
-
-            argv = render_argv(task["argv"], self.context)
-            cwd = self._task_cwd(task)
-            env = self._task_env(task)
-            timeout = self._task_timeout(task)
-            rendered = shlex.join(argv)
-            signature = self._task_signature(task_name, task, argv, cwd, env, artifacts)
-            task_executor = self._task_executor(task)
-
-            previous = self.state.get_task_state(task_name, cycle_id=self.cycle_id)
-            if not self.force and previous and previous.status == "success":
-                missing_outputs = artifacts.missing_required_outputs()
-                invalid_outputs = artifacts.invalid_outputs()
-                signature_matches = self._adopt_legacy_signature(
-                    task_name, previous, signature
-                )
-                if (
-                    not dependency_executed
-                    and signature_matches
-                    and not missing_outputs
-                    and not invalid_outputs
-                ):
-                    self.reporter.event(
-                        "skip",
-                        task_name,
-                        "already successful",
-                        executor=executor_name,
-                    )
-                    continue
-                if dependency_executed:
-                    self.reporter.event(
-                        "rerun",
-                        task_name,
-                        "dependency executed again",
-                        executor=executor_name,
-                    )
-                elif missing_outputs or invalid_outputs:
-                    message = self._output_failure_reason(artifacts)
-                    self.reporter.event("rerun", task_name, message, executor=executor_name)
-                else:
-                    self.reporter.event(
-                        "rerun",
-                        task_name,
-                        "task signature changed",
-                        executor=executor_name,
-                    )
-
-            descendants = self._descendants(task_name)
-            if descendants:
-                self.state.mark_tasks(
-                    descendants,
-                    "stale",
-                    f"a dependência '{task_name}' será executada novamente",
-                    cycle_id=self.cycle_id,
-                )
-
-            run_message = rendered
-            if executor_name == "pbs":
-                run_message = f"waiting for scheduler completion · {rendered}"
-            self.reporter.event("run", task_name, run_message, executor=executor_name)
-            if recorder is None:
-                recorder = RunRecorder(
-                    self.workdir,
-                    self.workflow_name,
-                    instance_id=self.state.instance_id,
-                    cycle_id=self.cycle_id,
-                    cycle_time=self.cycle_time,
-                )
-                recorder.write_workflow_snapshot(self.config)
-                self.state.record_run(
-                    recorder.run_id,
-                    recorder.directory,
-                    cycle_id=self.cycle_id,
-                    cycle_time=self.cycle_time,
-                )
-            attempt = recorder.begin_attempt(task_name)
-            recorder.write_started(
-                attempt,
-                {
-                    "status": "running",
-                    "command": {"argv": argv, "cwd": str(cwd) if cwd else None, "env": env},
-                    "signature": signature.value,
-                },
-            )
-            self.state.record_attempt_started(
-                run_id=attempt.run_id,
-                task=task_name,
-                attempt=attempt.attempt,
-                attempt_path=attempt.directory,
-                signature=signature.value,
-                cycle_id=self.cycle_id,
-            )
-            self.state.set_status(
-                task_name,
-                "running",
-                None,
-                signature.value,
-                "tarefa iniciada",
-                attempt.directory,
-                cycle_id=self.cycle_id,
-                signature_schema=SIGNATURE_SCHEMA_VERSION,
-                signature_payload=signature.payload,
-            )
-            execution_options: dict[str, Any] = {
-                "cwd": cwd,
-                "env": env,
-                "stdout_path": attempt.stdout_path,
-                "stderr_path": attempt.stderr_path,
-            }
-            if timeout is not None:
-                execution_options["timeout"] = timeout
-            execution_result = self._normalize_execution_result(
-                task_executor.run(task_name, argv, **execution_options)
-            )
-            return_code = execution_result.return_code
-            execution = execution_result.metadata
-
-            if return_code == 0:
-                missing_outputs = artifacts.missing_required_outputs()
-                invalid_outputs = artifacts.invalid_outputs()
-                if missing_outputs or invalid_outputs:
-                    reason = self._output_failure_reason(artifacts)
+        run_status = "interrupted"
+        try:
+            for task_name in self.plan():
+                task = task_map[task_name]
+                executor_name = str(task.get("executor", "local"))
+                dependencies = task.get("depends_on", []) or []
+                if isinstance(dependencies, str):
+                    dependencies = [dependencies]
+                unavailable = [
+                    dependency
+                    for dependency in dependencies
+                    if self.state.get_status(dependency, cycle_id=self.cycle_id)
+                    in {
+                        "skipped",
+                        "blocked",
+                        "failed",
+                        "invalid-input",
+                        "invalid-output",
+                        "interrupted",
+                        "unknown",
+                    }
+                ]
+                if unavailable:
+                    reason = "dependência indisponível: " + ", ".join(unavailable)
                     self.reporter.event("fail", task_name, reason, executor=executor_name)
+                    affected = [task_name, *self._descendants(task_name)]
+                    self.state.mark_tasks(
+                        affected,
+                        "blocked",
+                        reason,
+                        cycle_id=self.cycle_id,
+                        return_code=BLOCKED_EXIT_CODE,
+                    )
+                    exit_code = BLOCKED_EXIT_CODE
+                    break
+                if task.get("enabled", True) is False:
+                    self.reporter.event("skip", task_name, "disabled", executor=executor_name)
+                    self.state.set_status(
+                        task_name,
+                        "skipped",
+                        0,
+                        cycle_id=self.cycle_id,
+                    )
+                    reason = f"dependência '{task_name}' foi desabilitada"
+                    if self._block_descendants(task_name, reason):
+                        exit_code = BLOCKED_EXIT_CODE
+                        break
+                    continue
+
+                artifacts = self._task_artifacts(task)
+                dependency_executed = any(
+                    dependency in executed_tasks for dependency in dependencies
+                )
+                missing_inputs = artifacts.missing_required_inputs()
+                if missing_inputs:
+                    message = f"missing required input(s): {self._format_missing_inputs(artifacts)}"
+                    self.reporter.event("fail", task_name, message, executor=executor_name)
+                    self.state.set_status(
+                        task_name,
+                        "invalid-input",
+                        INVALID_INPUT_EXIT_CODE,
+                        cycle_id=self.cycle_id,
+                    )
+                    self._block_descendants(task_name, message)
+                    exit_code = INVALID_INPUT_EXIT_CODE
+                    break
+
+                argv = render_argv(task["argv"], self.context)
+                cwd = self._task_cwd(task)
+                env = self._task_env(task)
+                timeout = self._task_timeout(task)
+                rendered = shlex.join(argv)
+                signature = self._task_signature(task_name, task, argv, cwd, env, artifacts)
+                task_executor = self._task_executor(task)
+
+                previous = self.state.get_task_state(task_name, cycle_id=self.cycle_id)
+                if not self.force and previous and previous.status == "success":
+                    missing_outputs = artifacts.missing_required_outputs()
+                    invalid_outputs = artifacts.invalid_outputs()
+                    signature_matches = self._adopt_legacy_signature(
+                        task_name, previous, signature
+                    )
+                    if (
+                        not dependency_executed
+                        and signature_matches
+                        and not missing_outputs
+                        and not invalid_outputs
+                    ):
+                        self.reporter.event(
+                            "skip",
+                            task_name,
+                            "already successful",
+                            executor=executor_name,
+                        )
+                        continue
+                    if dependency_executed:
+                        self.reporter.event(
+                            "rerun",
+                            task_name,
+                            "dependency executed again",
+                            executor=executor_name,
+                        )
+                    elif missing_outputs or invalid_outputs:
+                        message = self._output_failure_reason(artifacts)
+                        self.reporter.event("rerun", task_name, message, executor=executor_name)
+                    else:
+                        self.reporter.event(
+                            "rerun",
+                            task_name,
+                            "task signature changed",
+                            executor=executor_name,
+                        )
+
+                descendants = self._descendants(task_name)
+                if descendants:
+                    self.state.mark_tasks(
+                        descendants,
+                        "stale",
+                        f"a dependência '{task_name}' será executada novamente",
+                        cycle_id=self.cycle_id,
+                    )
+
+                run_message = rendered
+                if executor_name == "pbs":
+                    run_message = f"waiting for scheduler completion · {rendered}"
+                self.reporter.event("run", task_name, run_message, executor=executor_name)
+                if recorder is None:
+                    recorder = RunRecorder(
+                        self.workdir,
+                        self.workflow_name,
+                        instance_id=self.state.instance_id,
+                        cycle_id=self.cycle_id,
+                        cycle_time=self.cycle_time,
+                    )
+                    recorder.write_workflow_snapshot(self.config)
+                    self.state.record_run(
+                        recorder.run_id,
+                        recorder.directory,
+                        cycle_id=self.cycle_id,
+                        cycle_time=self.cycle_time,
+                    )
+                attempt = recorder.begin_attempt(task_name)
+                recorder.write_started(
+                    attempt,
+                    {
+                        "status": "running",
+                        "command": {"argv": argv, "cwd": str(cwd) if cwd else None, "env": env},
+                        "signature": signature.value,
+                    },
+                )
+                self.state.record_attempt_started(
+                    run_id=attempt.run_id,
+                    task=task_name,
+                    attempt=attempt.attempt,
+                    attempt_path=attempt.directory,
+                    signature=signature.value,
+                    cycle_id=self.cycle_id,
+                )
+                self.state.set_status(
+                    task_name,
+                    "running",
+                    None,
+                    signature.value,
+                    "tarefa iniciada",
+                    attempt.directory,
+                    cycle_id=self.cycle_id,
+                    signature_schema=SIGNATURE_SCHEMA_VERSION,
+                    signature_payload=signature.payload,
+                )
+                execution_options: dict[str, Any] = {
+                    "cwd": cwd,
+                    "env": env,
+                    "stdout_path": attempt.stdout_path,
+                    "stderr_path": attempt.stderr_path,
+                }
+                if timeout is not None:
+                    execution_options["timeout"] = timeout
+                execution_result = self._normalize_execution_result(
+                    task_executor.run(task_name, argv, **execution_options)
+                )
+                execution = execution_result.metadata
+                if execution_result.outcome == "unknown":
+                    reason = execution_result.reason or "execution outcome is uncertain"
+                    self.reporter.event(
+                        "fail",
+                        task_name,
+                        f"outcome unknown · {reason}",
+                        executor=executor_name,
+                    )
                     self._record_attempt(
                         recorder,
                         attempt,
@@ -631,104 +663,94 @@ class WorkflowEngine:
                         env=env,
                         artifacts=artifacts,
                         signature=signature,
-                        status="invalid-output",
-                        return_code=INVALID_OUTPUT_EXIT_CODE,
+                        status="unknown",
+                        return_code=None,
+                        execution=execution,
+                        reason=reason,
+                    )
+                    self._block_descendants(task_name, reason)
+                    exit_code = UNKNOWN_EXIT_CODE
+                    break
+
+                return_code = execution_result.return_code
+                assert return_code is not None
+
+                if return_code == 0:
+                    missing_outputs = artifacts.missing_required_outputs()
+                    invalid_outputs = artifacts.invalid_outputs()
+                    if missing_outputs or invalid_outputs:
+                        reason = self._output_failure_reason(artifacts)
+                        self.reporter.event("fail", task_name, reason, executor=executor_name)
+                        self._record_attempt(
+                            recorder,
+                            attempt,
+                            argv=argv,
+                            cwd=cwd,
+                            env=env,
+                            artifacts=artifacts,
+                            signature=signature,
+                            status="invalid-output",
+                            return_code=INVALID_OUTPUT_EXIT_CODE,
+                            execution=execution,
+                            process_return_code=return_code,
+                            reason=reason,
+                        )
+                        self._block_descendants(task_name, reason)
+                        exit_code = INVALID_OUTPUT_EXIT_CODE
+                        break
+                    self.reporter.event("ok", task_name, executor=executor_name)
+                    self._record_attempt(
+                        recorder,
+                        attempt,
+                        argv=argv,
+                        cwd=cwd,
+                        env=env,
+                        artifacts=artifacts,
+                        signature=signature,
+                        status="success",
+                        return_code=return_code,
+                        execution=execution,
+                        process_return_code=return_code,
+                        reason="concluída com sucesso",
+                    )
+                    executed_tasks.add(task_name)
+                else:
+                    reason = self._process_failure_reason(return_code)
+                    self.reporter.event(
+                        "fail",
+                        task_name,
+                        f"return code {return_code}",
+                        executor=executor_name,
+                    )
+                    self._record_attempt(
+                        recorder,
+                        attempt,
+                        argv=argv,
+                        cwd=cwd,
+                        env=env,
+                        artifacts=artifacts,
+                        signature=signature,
+                        status="failed",
+                        return_code=return_code,
                         execution=execution,
                         process_return_code=return_code,
                         reason=reason,
                     )
-                    self.state.set_status(
-                        task_name,
-                        "invalid-output",
-                        INVALID_OUTPUT_EXIT_CODE,
-                        signature.value,
-                        reason,
-                        attempt.directory,
-                        cycle_id=self.cycle_id,
-                        signature_schema=SIGNATURE_SCHEMA_VERSION,
-                        signature_payload=signature.payload,
-                    )
-                    if descendants:
-                        self.state.mark_tasks(
-                            descendants,
-                            "blocked",
-                            reason,
-                            cycle_id=self.cycle_id,
-                        )
-                    exit_code = INVALID_OUTPUT_EXIT_CODE
+                    self._block_descendants(task_name, reason)
+                    exit_code = return_code
                     break
-                self.reporter.event("ok", task_name, executor=executor_name)
-                self._record_attempt(
-                    recorder,
-                    attempt,
-                    argv=argv,
-                    cwd=cwd,
-                    env=env,
-                    artifacts=artifacts,
-                    signature=signature,
-                    status="success",
-                    return_code=return_code,
-                    execution=execution,
-                    process_return_code=return_code,
-                )
-                self.state.set_status(
-                    task_name,
-                    "success",
-                    return_code,
-                    signature.value,
-                    "concluída com sucesso",
-                    attempt.directory,
-                    cycle_id=self.cycle_id,
-                    signature_schema=SIGNATURE_SCHEMA_VERSION,
-                    signature_payload=signature.payload,
-                )
-                executed_tasks.add(task_name)
-            else:
-                reason = self._process_failure_reason(return_code)
-                self.reporter.event(
-                    "fail",
-                    task_name,
-                    f"return code {return_code}",
-                    executor=executor_name,
-                )
-                self._record_attempt(
-                    recorder,
-                    attempt,
-                    argv=argv,
-                    cwd=cwd,
-                    env=env,
-                    artifacts=artifacts,
-                    signature=signature,
-                    status="failed",
-                    return_code=return_code,
-                    execution=execution,
-                    process_return_code=return_code,
-                    reason=reason,
-                )
-                self.state.set_status(
-                    task_name,
-                    "failed",
-                    return_code,
-                    signature.value,
-                    reason,
-                    attempt.directory,
-                    cycle_id=self.cycle_id,
-                    signature_schema=SIGNATURE_SCHEMA_VERSION,
-                    signature_payload=signature.payload,
-                )
-                if descendants:
-                    self.state.mark_tasks(
-                        descendants,
-                        "blocked",
-                        reason,
-                        cycle_id=self.cycle_id,
-                    )
-                exit_code = return_code
-                break
 
-        if recorder is not None:
-            self.state.finish_run(recorder.run_id, "success" if exit_code == 0 else "failed")
-        return exit_code
+            run_status = (
+                "success"
+                if exit_code == 0
+                else "unknown"
+                if exit_code == UNKNOWN_EXIT_CODE
+                else "failed"
+            )
+            return exit_code
+        finally:
+            if recorder is not None:
+                self.state.finish_run(recorder.run_id, run_status)
 
     def status(self) -> None:
         """Render current task states without creating or modifying persistent state."""
