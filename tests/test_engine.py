@@ -239,7 +239,9 @@ def test_omitted_cwd_tracks_effective_launch_directory(
     assert second_state.signature_payload["task"]["cwd"] == "$WORKFLOW/second"
     attempt_dir = second.state.resolve_path(second_state.attempt_path)
     assert attempt_dir is not None
+    started = json.loads((attempt_dir / "started.json").read_text(encoding="utf-8"))
     metadata = json.loads((attempt_dir / "metadata.json").read_text(encoding="utf-8"))
+    assert started["command"]["cwd"] == str(second_cwd.resolve())
     assert metadata["command"]["cwd"] == str(second_cwd.resolve())
     assert marker.read_text(encoding="utf-8") == "xx"
     second.state.close()
