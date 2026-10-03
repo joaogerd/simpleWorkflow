@@ -233,7 +233,7 @@ class MonitorSnapshot:
 
     @property
     def current_run(self) -> RunSnapshot | None:
-        running = next((run for run in self.runs if run.status == "running"), None)
+        running = next((run for run in self.runs if run.status == RUNNING), None)
         return running or (self.runs[0] if self.runs else None)
 
     @property
@@ -251,7 +251,7 @@ class MonitorSnapshot:
 
     @property
     def running_tasks(self) -> int:
-        return sum(task.status == "running" for task in self.all_tasks)
+        return sum(task.status == RUNNING for task in self.all_tasks)
 
     @property
     def failed_tasks(self) -> int:
