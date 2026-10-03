@@ -351,6 +351,7 @@ class WorkflowTui(App[None]):
     .log-button.selected-log { color: #67e8f9; text-style: bold underline; }
     #log-follow.following { color: #65a30d; text-style: bold; }
     #shortcut-line {
+        dock: bottom;
         height: 1; padding: 0 1; border-top: solid #252b35;
         background: #111318; color: #697180;
     }
@@ -562,16 +563,16 @@ class WorkflowTui(App[None]):
         active = views.active or "monitor"
         cycle_hint = "   ←/→ Cycle" if self.cycle_mode else ""
         if active == "logs":
-            text = "↑/↓ Scroll   PgUp/PgDn Page   f Follow   s Save   / Search   ? Help   q Exit"
+            text = "↑/↓ Scroll   PgUp/PgDn Page   f Follow   r Refresh   s Save   / Search   ? Help   q Exit"
         elif active == "monitor" and narrow:
-            text = "↑/↓ Navigate   Enter Open   s Save   Esc Back   ? Help   q Exit"
+            text = "↑/↓ Navigate   Enter Open   r Refresh   s Save   Esc Back   ? Help   q Exit"
         elif active == "monitor":
             text = (
                 f"↑/↓ Navigate{cycle_hint}   Enter Open   Tab View   "
-                "l Logs   s Save   ? Help   q Exit"
+                "l Logs   r Refresh   s Save   ? Help   q Exit"
             )
         else:
-            text = "↑/↓ Navigate   Enter Open   Tab View   s Save   Esc Back   ? Help   q Exit"
+            text = "↑/↓ Navigate   Enter Open   Tab View   r Refresh   s Save   Esc Back   ? Help   q Exit"
         shortcut.update(text)
 
     def _configure_tables(self) -> None:
