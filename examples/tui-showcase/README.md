@@ -215,7 +215,7 @@ independent of the real terminal dimensions.
 
 ## Visual tutorial page
 
-Generate the complete showcase and HTML page:
+Regenerate the complete deterministic screenshot set and Markdown gallery:
 
 ```bash
 python scripts/capture_tui_showcase.py
@@ -234,6 +234,7 @@ http://localhost:8000/
 ```
 
 The documentation root is a landing page. The beginner tutorial is available at
-`/tutorial/` and the generated visual gallery at `/tutorial/showcase.html`.
-On `main`, the GitHub Pages workflow regenerates the screenshots and showcase
-before publishing the `docs/` tree automatically.
+`/tutorial/` and the visual gallery at `/tutorial/showcase.html`. The HTML
+gallery is a stable versioned page; the generator refreshes its deterministic SVG
+images and Markdown companion. On `main`, the GitHub Pages workflow refreshes
+the screenshots before publishing the `docs/` tree automatically.
