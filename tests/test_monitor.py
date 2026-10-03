@@ -421,3 +421,49 @@ def test_native_cycle_snapshot_respects_cycle_scope(tmp_path: Path) -> None:
     assert snapshot.total_tasks == 9
     assert snapshot.completed_tasks == 9
     assert snapshot.failed_tasks == 0
+
+
+def test_native_cycles_keep_initialization_tasks_at_workflow_root(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: initialized-campaign\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    config: dict[str, object] = {
+        "workflow": {"name": "initialized-campaign"},
+        "initialization": {
+            "tasks": [{"name": "bootstrap", "argv": ["true"]}]
+        },
+        "cycle": {
+            "start": "2018-04-15T00:00:00Z",
+            "end": "2018-04-15T06:00:00Z",
+            "step": "PT6H",
+        },
+        "tasks": [{"name": "analysis", "argv": ["true"]}],
+        "__simpleworkflow__": {
+            "source_path": str(workflow),
+            "source_dir": str(workflow.parent),
+        },
+    }
+    state = WorkflowState(
+        workdir / "state.sqlite3",
+        workflow_name="initialized-campaign",
+        source_path=workflow,
+    )
+    state.set_status("bootstrap", "success", 0)
+    state.ensure_cycle("c00", "2018-04-15T00:00:00Z")
+    state.ensure_cycle("c06", "2018-04-15T06:00:00Z")
+    state.set_status("analysis", "success", 0, cycle_id="c00")
+    state.set_status("analysis", "running", None, cycle_id="c06")
+    state.close()
+
+    snapshot = load_monitor_snapshot(config, workflow, workdir)
+
+    assert [(task.name, task.status) for task in snapshot.tasks] == [
+        ("bootstrap", "success")
+    ]
+    assert [[task.name for task in cycle.tasks] for cycle in snapshot.cycles] == [
+        ["analysis"],
+        ["analysis"],
+    ]
+    assert snapshot.total_tasks == 3
+    assert snapshot.completed_tasks == 2
+    assert snapshot.running_tasks == 1
