@@ -233,6 +233,7 @@ Open:
 http://localhost:8000/
 ```
 
-The root documentation page redirects to the visual TUI showcase. On `main`,
-the GitHub Pages workflow regenerates the screenshots and publishes the `docs/`
-tree automatically.
+The documentation root is a landing page. The beginner tutorial is available at
+`/tutorial/` and the generated visual gallery at `/tutorial/showcase.html`.
+On `main`, the GitHub Pages workflow regenerates the screenshots and showcase
+before publishing the `docs/` tree automatically.
