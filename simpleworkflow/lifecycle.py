@@ -17,8 +17,9 @@ BLOCKED = "blocked"
 INTERRUPTED = "interrupted"
 UNKNOWN = "unknown"
 
-PERSISTED_TASK_STATES = frozenset(
+TASK_STATES = frozenset(
     {
+        PENDING,
         RUNNING,
         SUCCESS,
         FAILED,
@@ -31,6 +32,9 @@ PERSISTED_TASK_STATES = frozenset(
         UNKNOWN,
     }
 )
+
+# Pending is represented by the absence of a task_state row.
+PERSISTED_TASK_STATES = TASK_STATES - frozenset({PENDING})
 
 COMPLETE_STATES = frozenset({SUCCESS, SKIPPED})
 ATTENTION_STATES = frozenset(
@@ -45,3 +49,15 @@ ATTENTION_STATES = frozenset(
 )
 UNAVAILABLE_DEPENDENCY_STATES = ATTENTION_STATES | frozenset({SKIPPED})
 REUSABLE_STATES = frozenset({SUCCESS})
+TERMINAL_STATES = frozenset(
+    {
+        SUCCESS,
+        FAILED,
+        INVALID_INPUT,
+        INVALID_OUTPUT,
+        SKIPPED,
+        BLOCKED,
+        INTERRUPTED,
+        UNKNOWN,
+    }
+)
