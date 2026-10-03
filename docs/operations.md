@@ -109,9 +109,13 @@ cycle identity.
 ## PBS
 
 PBS submission stores the returned job identifier in `scheduler.json`. The
-foreground controller consults `qstat -xf`. If a restart cannot prove the job's
-situation, it stops at `unknown` instead of submitting a duplicate. Verify
-`qsub`, `qstat -xf`, final `Exit_status` and `qdel` on every PBS installation.
+foreground controller consults `qstat -xf`. A scheduler communication failure
+is not a task failure: simpleWorkflow retries a small bounded number of status
+queries and then records `unknown` if the result is still inconclusive. A
+successful submission whose Job ID cannot be parsed is likewise `unknown`.
+Normal execution will not submit the task again until the uncertainty has been
+resolved explicitly. Verify `qsub`, `qstat -xf`, final `Exit_status` and
+`qdel` on every PBS installation.
 
 Queue-specific modules, placement rules and scientific launch commands belong
 in versioned wrappers. Free-form PBS directives are intentionally absent.
