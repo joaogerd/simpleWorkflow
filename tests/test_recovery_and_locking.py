@@ -234,3 +234,59 @@ def test_unknown_recovery_blocks_automatic_reexecution(tmp_path: Path) -> None:
     assert run_directories == ["run-block"]
     assert not (attempt / "metadata.json").exists()
     engine.state.close()
+
+
+
+@pytest.mark.parametrize("payload", ["null", "[]", '"not-an-object"'])
+def test_malformed_scheduler_json_falls_back_to_unknown(
+    tmp_path: Path, payload: str
+) -> None:
+    workdir = tmp_path / ".simpleworkflow"
+    attempt = workdir / "runs" / "run-malformed" / "tasks" / "task-a" / "attempt-001"
+    attempt.mkdir(parents=True)
+    (attempt / "scheduler.json").write_text(payload, encoding="utf-8")
+    engine = WorkflowEngine(
+        {"workflow": {"name": "recover-malformed"}, "tasks": []},
+        workdir=workdir,
+    )
+    engine.state.set_status("task", "running", None, "signature", attempt_path=attempt)
+
+    engine.state.reconcile_running()
+
+    recovered = engine.state.get_task_state("task")
+    assert recovered is not None
+    assert recovered.status == "unknown"
+    engine.state.close()
+
+
+def test_unrelated_unknown_task_does_not_block_selected_task(tmp_path: Path) -> None:
+    workdir = tmp_path / ".simpleworkflow"
+    config = {
+        "workflow": {"name": "selected-safe"},
+        "tasks": [
+            {"name": "wanted", "argv": [sys.executable, "-c", "print('wanted')"]},
+            {"name": "other", "argv": [sys.executable, "-c", "print('other')"]},
+        ],
+    }
+    engine = WorkflowEngine(config, workdir=workdir, selected_tasks={"wanted"})
+    engine.state.set_status("other", "unknown", None, reason="unrelated uncertain work")
+
+    assert engine.run() == 0
+    assert engine.state.get_status("wanted") == "success"
+    assert engine.state.get_status("other") == "unknown"
+    engine.state.close()
+
+
+def test_removed_unknown_task_does_not_block_current_workflow(tmp_path: Path) -> None:
+    workdir = tmp_path / ".simpleworkflow"
+    config = {
+        "workflow": {"name": "removed-safe"},
+        "tasks": [{"name": "current", "argv": [sys.executable, "-c", "print('current')"]}],
+    }
+    engine = WorkflowEngine(config, workdir=workdir)
+    engine.state.set_status("removed-task", "unknown", None, reason="old workflow definition")
+
+    assert engine.run() == 0
+    assert engine.state.get_status("current") == "success"
+    assert engine.state.get_status("removed-task") == "unknown"
+    engine.state.close()
