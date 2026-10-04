@@ -67,7 +67,7 @@ jobs:
           import importlib.util
           import simpleworkflow
           import simpleworkflow.cli
-          assert simpleworkflow.__version__ == "0.6.1"
+          assert simpleworkflow.__version__ == "0.6.2"
           assert importlib.util.find_spec("textual") is None
           assert importlib.util.find_spec("rich") is None
           PY
@@ -92,7 +92,7 @@ jobs:
           import simpleworkflow
           import simpleworkflow.tui
           import simpleworkflow.tui_viewer
-          assert simpleworkflow.__version__ == "0.6.1"
+          assert simpleworkflow.__version__ == "0.6.2"
           assert rich is not None
           assert textual is not None
           PY
