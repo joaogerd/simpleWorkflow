@@ -556,9 +556,13 @@ def load_monitor_snapshot(
         if tolerate_initializing and "no such table" in str(error).casefold():
             return pending_snapshot()
         raise
+    connection = state.connection
     try:
+        # Keep every SQLite-derived field in this refresh on one snapshot.
+        # BEGIN is intentionally explicit: read-only autocommit SELECTs would
+        # otherwise be allowed to observe different writer commits.
+        connection.execute("BEGIN")
         instance = state.instance
-        connection = state.connection
         attempts = _attempt_history(state)
 
         cycle_rows = connection.execute(
@@ -730,4 +734,6 @@ def load_monitor_snapshot(
             problems=problems,
         )
     finally:
+        if connection.in_transaction:
+            connection.rollback()
         state.close()

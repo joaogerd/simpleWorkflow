@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
+import simpleworkflow.monitor as monitor_module
 from simpleworkflow.monitor import load_monitor_snapshot
 from simpleworkflow.runs import RunRecorder
 from simpleworkflow.state import WorkflowState
@@ -467,3 +469,82 @@ def test_native_cycles_keep_initialization_tasks_at_workflow_root(tmp_path: Path
     assert snapshot.total_tasks == 3
     assert snapshot.completed_tasks == 2
     assert snapshot.running_tasks == 1
+
+
+
+def test_monitor_reads_database_fields_inside_one_transaction(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: campaign\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    state = WorkflowState(
+        workdir / "state.sqlite3",
+        workflow_name="campaign",
+        source_path=workflow,
+    )
+    state.set_status("prepare", "success", 0)
+    state.close()
+
+    original_attempt_history = monitor_module._attempt_history
+    observed: list[bool] = []
+
+    def checked_attempt_history(state: WorkflowState):
+        observed.append(state.connection.in_transaction)
+        return original_attempt_history(state)
+
+    monkeypatch.setattr(monitor_module, "_attempt_history", checked_attempt_history)
+
+    snapshot = load_monitor_snapshot(_config(workflow), workflow, workdir)
+
+    assert snapshot.tasks[0].status == "success"
+    assert observed == [True]
+
+
+def test_sqlite_read_transaction_keeps_one_snapshot_across_writer_commit(
+    tmp_path: Path,
+) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: campaign\n", encoding="utf-8")
+    state_path = tmp_path / ".simpleworkflow" / "state.sqlite3"
+
+    initial = WorkflowState(
+        state_path,
+        workflow_name="campaign",
+        source_path=workflow,
+    )
+    initial.set_status("prepare", "success", 0)
+    initial.close()
+
+    # WAL is enabled only for this test so a writer can commit while the reader
+    # transaction remains open. The production monitor does not require WAL.
+    setup = sqlite3.connect(state_path)
+    setup.execute("PRAGMA journal_mode = WAL")
+    setup.close()
+
+    reader = WorkflowState(
+        state_path,
+        workflow_name="campaign",
+        source_path=workflow,
+        read_only=True,
+    )
+    writer = WorkflowState(
+        state_path,
+        workflow_name="campaign",
+        source_path=workflow,
+    )
+    try:
+        reader.connection.execute("BEGIN")
+        assert reader.get_status("prepare") == "success"
+
+        writer.set_status("prepare", "failed", 7)
+
+        # The same read transaction must continue to see the old consistent view.
+        assert reader.get_status("prepare") == "success"
+        reader.connection.rollback()
+
+        # A new read after the transaction observes the committed writer state.
+        assert reader.get_status("prepare") == "failed"
+    finally:
+        reader.close()
+        writer.close()
