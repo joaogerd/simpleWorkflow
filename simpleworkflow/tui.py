@@ -26,6 +26,7 @@ from textual.widgets import (
     Tree,
 )
 
+from .lifecycle import ATTENTION_STATES, COMPLETE_STATES
 from .monitor import (
     AttemptSnapshot,
     CycleSnapshot,
@@ -51,15 +52,6 @@ _STATUS = {
     "skipped": ("–", "SKIPPED", "dim"),
     "partial": ("◐", "PARTIAL", "yellow"),
 }
-_ATTENTION = {
-    "failed",
-    "invalid-input",
-    "invalid-output",
-    "blocked",
-    "interrupted",
-    "unknown",
-}
-_COMPLETE = {"success", "skipped"}
 _VIEW_IDS = ("monitor", "cycles", "campaign", "problems", "logs")
 _LOG_ORDER = ("pbs_stdout", "stdout", "pbs_stderr", "stderr")
 _LOG_ERROR_ORDER = ("pbs_stderr", "stderr", "pbs_stdout", "stdout")
@@ -138,14 +130,24 @@ class HelpScreen(ModalScreen[None]):
         self.app.exit()
 
 
+def _task_configs(config: dict[str, Any]) -> list[dict[str, Any]]:
+    tasks: list[dict[str, Any]] = []
+    initialization = config.get("initialization")
+    if isinstance(initialization, dict):
+        raw_initialization = initialization.get("tasks", [])
+        if isinstance(raw_initialization, list):
+            tasks.extend(task for task in raw_initialization if isinstance(task, dict))
+    raw_tasks = config.get("tasks", [])
+    if isinstance(raw_tasks, list):
+        tasks.extend(task for task in raw_tasks if isinstance(task, dict))
+    return tasks
+
+
 def _task_names(config: dict[str, Any]) -> list[str]:
-    tasks = config.get("tasks", [])
-    if not isinstance(tasks, list):
-        return []
     return [
         str(task["name"])
-        for task in tasks
-        if isinstance(task, dict) and isinstance(task.get("name"), str)
+        for task in _task_configs(config)
+        if isinstance(task.get("name"), str)
     ]
 
 
@@ -418,13 +420,10 @@ class WorkflowTui(App[None]):
         self.color_enabled = bool(color) and not bool(os.environ.get("NO_COLOR"))
         self.completion_future = completion_future
         self.task_order = _task_names(config)
-        raw_tasks = config.get("tasks", [])
         self.task_map = {
             str(task["name"]): task
-            for task in raw_tasks
-            if isinstance(raw_tasks, list)
-            and isinstance(task, dict)
-            and isinstance(task.get("name"), str)
+            for task in _task_configs(config)
+            if isinstance(task.get("name"), str)
         }
         self.snapshot = self._load_snapshot()
         self.selected_cycle_id: str | None = None
@@ -590,9 +589,9 @@ class WorkflowTui(App[None]):
             for task in tasks:
                 if status_group == "running" and task.status == "running":
                     return task.name
-                if status_group == "attention" and task.status in _ATTENTION:
+                if status_group == "attention" and task.status in ATTENTION_STATES:
                     return task.name
-                if status_group == "pending" and task.status not in _COMPLETE:
+                if status_group == "pending" and task.status not in COMPLETE_STATES:
                     return task.name
         return tasks[-1].name if tasks else None
 
@@ -674,7 +673,7 @@ class WorkflowTui(App[None]):
         if chosen is None:
             chosen = next((cycle for cycle in cycles if cycle.status == "running"), None)
         if chosen is None:
-            chosen = next((cycle for cycle in cycles if cycle.status in _ATTENTION), None)
+            chosen = next((cycle for cycle in cycles if cycle.status in ATTENTION_STATES), None)
         if chosen is None:
             chosen = next(
                 (cycle for cycle in cycles if cycle.status in {"partial", "pending"}),
@@ -1224,13 +1223,13 @@ class WorkflowTui(App[None]):
     def _aggregate_status(statuses: list[str]) -> str:
         if not statuses:
             return "pending"
-        if any(status in _ATTENTION for status in statuses):
+        if any(status in ATTENTION_STATES for status in statuses):
             return "failed"
         if "running" in statuses:
             return "running"
-        if all(status in _COMPLETE for status in statuses):
+        if all(status in COMPLETE_STATES for status in statuses):
             return "success"
-        if any(status in _COMPLETE for status in statuses):
+        if any(status in COMPLETE_STATES for status in statuses):
             return "partial"
         return "pending"
 
@@ -1309,9 +1308,9 @@ class WorkflowTui(App[None]):
         for current in sorted(groups):
             cycles = groups[current]
             tasks = [task for cycle in cycles for task in cycle.tasks]
-            completed = sum(task.status in _COMPLETE for task in tasks)
+            completed = sum(task.status in COMPLETE_STATES for task in tasks)
             running = sum(task.status == "running" for task in tasks)
-            failed = sum(task.status in _ATTENTION for task in tasks)
+            failed = sum(task.status in ATTENTION_STATES for task in tasks)
             pending = len(tasks) - completed - running - failed
             state = self._aggregate_status([cycle.status for cycle in cycles])
             hours = " ".join(_format_cycle_hour(cycle.cycle_time) for cycle in cycles)

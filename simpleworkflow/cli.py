@@ -12,7 +12,7 @@ from typing import Any
 
 from .config import load_workflow
 from .console import TerminalReporter, WorkflowReporter
-from .cycles import CycleContext, cycle_scope_matches, resolve_cycle_contexts
+from .cycles import CycleContext, active_tasks_for_cycle, resolve_cycle_contexts
 from .engine import WorkflowEngine
 from .migrations import MigrationError, StateInspection, inspect_state, migrate_state
 from .ui import select_ui_mode, tui_available
@@ -218,8 +218,7 @@ def _cycle_engines(
         }
         resolved["tasks"] = [
             deepcopy(task)
-            for task in resolved.get("tasks", [])
-            if cycle_scope_matches(task.get("cycle_scope"), cycle)
+            for task in active_tasks_for_cycle(resolved.get("tasks", []), cycle)
         ]
         resolved.pop("initialization", None)
         yield cycle, WorkflowEngine(

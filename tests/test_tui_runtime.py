@@ -202,3 +202,57 @@ def test_same_process_tui_tolerates_state_database_initialization_window(
 
     assert app.snapshot.instance_id is None
     assert [task.status for task in app.snapshot.tasks] == ["pending"]
+
+
+def test_tui_shows_initialization_in_existing_workflow_group(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: initialized_tui\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    config: dict[str, object] = {
+        "workflow": {"name": "initialized_tui"},
+        "initialization": {
+            "tasks": [
+                {
+                    "name": "bootstrap",
+                    "argv": ["true"],
+                    "executor": "local",
+                }
+            ]
+        },
+        "cycle": {
+            "start": "2018-04-15T06:00:00Z",
+            "end": "2018-04-15T06:00:00Z",
+            "step": "PT6H",
+        },
+        "tasks": [{"name": "analysis", "argv": ["true"]}],
+        "__simpleworkflow__": {
+            "source_path": str(workflow),
+            "source_dir": str(workflow.parent),
+        },
+    }
+    state = WorkflowState(
+        workdir / "state.sqlite3",
+        workflow_name="initialized_tui",
+        source_path=workflow,
+    )
+    state.set_status("bootstrap", "running", None)
+    state.ensure_cycle("c06", "2018-04-15T06:00:00Z")
+    state.close()
+
+    app = WorkflowTui(
+        config=config,
+        workflow_path=workflow,
+        workdir=workdir,
+        refresh_seconds=60,
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(140, 45)) as pilot:
+            await pilot.pause()
+            assert "bootstrap" in app.task_order
+            assert "bootstrap" in app.task_map
+            assert (None, "bootstrap") in app.task_nodes
+            assert ("c06", "analysis") in app.task_nodes
+            assert [task.name for task in app.snapshot.tasks] == ["bootstrap"]
+
+    asyncio.run(scenario())

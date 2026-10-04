@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .lifecycle import INTERRUPTED, RUNNING, UNKNOWN
 from .runs import metadata_checksum_matches
 
 STATE_SCHEMA_VERSION = 1
@@ -132,8 +133,7 @@ class WorkflowState:
         if not self._has_user_tables():
             if self.read_only:
                 raise StateSchemaError(f"state database {self.path} does not contain a schema")
-            self._create_schema()
-            self._create_instance(workflow_name, source_path)
+            self._bootstrap(workflow_name, source_path)
             return
         if not self._table_exists("schema_info"):
             raise StateMigrationRequired(
@@ -158,11 +158,29 @@ class WorkflowState:
             )
         self._bind_instance(workflow_name, source_path)
 
+    def _bootstrap(
+        self,
+        workflow_name: str,
+        source_path: str | Path | None,
+    ) -> None:
+        """Create schema and workflow identity as one SQLite transaction."""
+        self._require_writable()
+        try:
+            self._create_schema()
+            self._create_instance(workflow_name, source_path)
+            self.connection.commit()
+        except Exception:
+            if self.connection.in_transaction:
+                self.connection.rollback()
+            raise
+
     def _create_schema(self) -> None:
         self._require_writable()
         now = _utc_timestamp()
         self.connection.executescript(
             """
+            BEGIN IMMEDIATE;
+
             CREATE TABLE schema_info (
                 singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
                 schema_version INTEGER NOT NULL,
@@ -255,7 +273,6 @@ class WorkflowState:
             "INSERT INTO schema_info(singleton, schema_version, created_at) VALUES (1, ?, ?)",
             (STATE_SCHEMA_VERSION, now),
         )
-        self.connection.commit()
 
     def _create_instance(
         self,
@@ -284,7 +301,6 @@ class WorkflowState:
                 now,
             ),
         )
-        self.connection.commit()
 
     def _bind_instance(
         self,
@@ -617,7 +633,7 @@ class WorkflowState:
             cycle_id=cycle_id,
             signature_schema=signature_schema,
             signature_payload=signature_payload,
-            finish_run_status="interrupted" if terminal_metadata else "unknown",
+            finish_run_status=INTERRUPTED if terminal_metadata else UNKNOWN,
         )
 
     def mark_tasks(
@@ -676,9 +692,9 @@ class WorkflowState:
             """
             SELECT task, signature, signature_schema, signature_payload, attempt_path
             FROM task_state
-            WHERE cycle_id = ? AND status = 'running'
+            WHERE cycle_id = ? AND status = ?
             """,
-            (_cycle_key(cycle_id),),
+            (_cycle_key(cycle_id), RUNNING),
         ).fetchall()
         for task, signature, schema, payload_json, attempt_path in rows:
             payload = _decode_payload(payload_json)
@@ -689,7 +705,7 @@ class WorkflowState:
                 if checksum_matches is False:
                     self._reconcile_task_state(
                         task=task,
-                        status="unknown",
+                        status=UNKNOWN,
                         return_code=None,
                         signature=signature,
                         reason="metadata final existe, mas metadata.sha256 não corresponde ao conteúdo",

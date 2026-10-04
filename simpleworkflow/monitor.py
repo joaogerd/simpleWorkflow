@@ -26,19 +26,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .state import StateSchemaError, WorkflowState
-
-_COMPLETE_STATES = frozenset({"success", "skipped"})
-_ATTENTION_STATES = frozenset(
-    {
-        "failed",
-        "invalid-input",
-        "invalid-output",
-        "blocked",
-        "interrupted",
-        "unknown",
-    }
+from .cycles import CycleContext, active_tasks_for_cycle, resolve_cycle_contexts
+from .lifecycle import (
+    ATTENTION_STATES,
+    COMPLETE_STATES,
+    FAILED,
+    PENDING,
+    RUNNING,
+    SUCCESS,
 )
+from .state import StateSchemaError, WorkflowState
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -180,15 +177,15 @@ class CycleSnapshot:
 
     @property
     def completed_tasks(self) -> int:
-        return sum(task.status in _COMPLETE_STATES for task in self.tasks)
+        return sum(task.status in COMPLETE_STATES for task in self.tasks)
 
     @property
     def running_tasks(self) -> int:
-        return sum(task.status == "running" for task in self.tasks)
+        return sum(task.status == RUNNING for task in self.tasks)
 
     @property
     def failed_tasks(self) -> int:
-        return sum(task.status in _ATTENTION_STATES for task in self.tasks)
+        return sum(task.status in ATTENTION_STATES for task in self.tasks)
 
     @property
     def pending_tasks(self) -> int:
@@ -236,7 +233,7 @@ class MonitorSnapshot:
 
     @property
     def current_run(self) -> RunSnapshot | None:
-        running = next((run for run in self.runs if run.status == "running"), None)
+        running = next((run for run in self.runs if run.status == RUNNING), None)
         return running or (self.runs[0] if self.runs else None)
 
     @property
@@ -250,15 +247,15 @@ class MonitorSnapshot:
 
     @property
     def completed_tasks(self) -> int:
-        return sum(task.status in _COMPLETE_STATES for task in self.all_tasks)
+        return sum(task.status in COMPLETE_STATES for task in self.all_tasks)
 
     @property
     def running_tasks(self) -> int:
-        return sum(task.status == "running" for task in self.all_tasks)
+        return sum(task.status == RUNNING for task in self.all_tasks)
 
     @property
     def failed_tasks(self) -> int:
-        return sum(task.status in _ATTENTION_STATES for task in self.all_tasks)
+        return sum(task.status in ATTENTION_STATES for task in self.all_tasks)
 
 
 @dataclass(frozen=True)
@@ -273,6 +270,24 @@ def _config_tasks(config: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     if not isinstance(raw_tasks, list):
         return ()
     return tuple(task for task in raw_tasks if isinstance(task, dict))
+
+
+def _initialization_tasks(config: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    initialization = config.get("initialization")
+    if not isinstance(initialization, dict):
+        return ()
+    raw_tasks = initialization.get("tasks", [])
+    if not isinstance(raw_tasks, list):
+        return ()
+    return tuple(task for task in raw_tasks if isinstance(task, dict))
+
+
+def _initialization_task_names(config: dict[str, Any]) -> tuple[str, ...]:
+    return tuple(
+        str(task["name"])
+        for task in _initialization_tasks(config)
+        if isinstance(task.get("name"), str)
+    )
 
 
 def _task_names(config: dict[str, Any]) -> tuple[str, ...]:
@@ -365,6 +380,24 @@ def _presentation_cycles(
     return assignment, groups
 
 
+def _native_cycle_contexts(
+    config: dict[str, Any], cycle_rows: list[tuple[Any, ...]]
+) -> dict[str, CycleContext]:
+    """Resolve persisted native cycles with the same campaign positions as execution."""
+    raw_cycle = config.get("cycle")
+    declared = resolve_cycle_contexts(raw_cycle if isinstance(raw_cycle, dict) else None)
+    declared_by_time = {cycle.cycle_time: cycle for cycle in declared}
+
+    persisted_times = [str(row[1]) for row in cycle_rows]
+    inferred = resolve_cycle_contexts(None, cycle_times=persisted_times)
+    inferred_by_time = {cycle.cycle_time: cycle for cycle in inferred}
+
+    return {
+        str(row[0]): declared_by_time.get(str(row[1]), inferred_by_time[str(row[1])])
+        for row in cycle_rows
+    }
+
+
 def _task_snapshot(
     name: str,
     row: tuple[Any, ...] | None,
@@ -373,7 +406,7 @@ def _task_snapshot(
     attempts: tuple[AttemptSnapshot, ...] = (),
 ) -> TaskSnapshot:
     if row is None:
-        return TaskSnapshot(name=name, status="pending", cycle_id=cycle_id, attempts=attempts)
+        return TaskSnapshot(name=name, status=PENDING, cycle_id=cycle_id, attempts=attempts)
     return TaskSnapshot(
         name=name,
         status=str(row[0]),
@@ -387,15 +420,15 @@ def _task_snapshot(
 
 
 def _cycle_status(tasks: tuple[TaskSnapshot, ...]) -> str:
-    if any(task.status in _ATTENTION_STATES for task in tasks):
-        return "failed"
+    if any(task.status in ATTENTION_STATES for task in tasks):
+        return FAILED
     if any(task.status == "running" for task in tasks):
-        return "running"
-    if tasks and all(task.status in _COMPLETE_STATES for task in tasks):
-        return "success"
-    if any(task.status in _COMPLETE_STATES for task in tasks):
+        return RUNNING
+    if tasks and all(task.status in COMPLETE_STATES for task in tasks):
+        return SUCCESS
+    if any(task.status in COMPLETE_STATES for task in tasks):
         return "partial"
-    return "pending"
+    return PENDING
 
 
 def _max_timestamp(*values: str | None) -> str | None:
@@ -454,6 +487,7 @@ def load_monitor_snapshot(
     state_dir = Path(workdir).resolve(strict=False)
     workflow_name = str(config.get("workflow", {}).get("name", "workflow"))
     names = _task_names(config)
+    initialization_names = _initialization_task_names(config)
     config_assignment, config_groups = _presentation_cycles(config)
     config_cycles = {
         cycle.cycle_id: cycle for cycle in config_assignment.values()
@@ -478,13 +512,14 @@ def load_monitor_snapshot(
             grouped_names = set(config_assignment)
             pending_root_tasks = tuple(
                 _task_snapshot(name, None, cycle_id=None)
-                for name in names
-                if name not in grouped_names
+                for name in (*initialization_names, *names)
+                if name in initialization_names or name not in grouped_names
             )
         else:
             pending_cycles = ()
             pending_root_tasks = tuple(
-                _task_snapshot(name, None, cycle_id=None) for name in names
+                _task_snapshot(name, None, cycle_id=None)
+                for name in (*initialization_names, *names)
             )
         return MonitorSnapshot(
             workflow_name=workflow_name,
@@ -521,9 +556,13 @@ def load_monitor_snapshot(
         if tolerate_initializing and "no such table" in str(error).casefold():
             return pending_snapshot()
         raise
+    connection = state.connection
     try:
+        # Keep every SQLite-derived field in this refresh on one snapshot.
+        # BEGIN is intentionally explicit: read-only autocommit SELECTs would
+        # otherwise be allowed to observe different writer commits.
+        connection.execute("BEGIN")
         instance = state.instance
-        connection = state.connection
         attempts = _attempt_history(state)
 
         cycle_rows = connection.execute(
@@ -553,9 +592,18 @@ def load_monitor_snapshot(
         root_tasks: tuple[TaskSnapshot, ...]
 
         if cycle_rows:
+            native_contexts = _native_cycle_contexts(config, cycle_rows)
+            configured_tasks = _config_tasks(config)
             for cycle_id, cycle_time, cycle_updated_at in cycle_rows:
                 cycle_key = str(cycle_id)
                 task_rows = rows_for_cycle(cycle_key)
+                active_names = tuple(
+                    str(task["name"])
+                    for task in active_tasks_for_cycle(
+                        configured_tasks, native_contexts[cycle_key]
+                    )
+                    if isinstance(task.get("name"), str)
+                )
                 cycle_tasks = tuple(
                     _task_snapshot(
                         name,
@@ -563,7 +611,7 @@ def load_monitor_snapshot(
                         cycle_id=cycle_key,
                         attempts=attempts.get((cycle_key, name), ()),
                     )
-                    for name in names
+                    for name in active_names
                 )
                 cycles.append(
                     CycleSnapshot(
@@ -578,9 +626,17 @@ def load_monitor_snapshot(
                         persisted=True,
                     )
                 )
-            # Native cycle execution stores these task names per cycle. Root rows
-            # from an older/no-cycle invocation must not be counted a second time.
-            root_tasks = ()
+            # Native cycle tasks live in cycle namespaces. Initialization tasks
+            # remain in the root namespace and stay visible as workflow history.
+            root_tasks = tuple(
+                _task_snapshot(
+                    name,
+                    root_rows.get(name),
+                    cycle_id=None,
+                    attempts=attempts.get(("", name), ()),
+                )
+                for name in initialization_names
+            )
         elif config_groups:
             for cycle_id, task_names in config_groups.items():
                 cycle_tasks = tuple(
@@ -612,8 +668,8 @@ def load_monitor_snapshot(
                     cycle_id=None,
                     attempts=attempts.get(("", name), ()),
                 )
-                for name in names
-                if name not in grouped_names
+                for name in (*initialization_names, *names)
+                if name in initialization_names or name not in grouped_names
             )
         else:
             root_tasks = tuple(
@@ -623,7 +679,7 @@ def load_monitor_snapshot(
                     cycle_id=None,
                     attempts=attempts.get(("", name), ()),
                 )
-                for name in names
+                for name in (*initialization_names, *names)
             )
 
         run_rows = connection.execute(
@@ -657,7 +713,7 @@ def load_monitor_snapshot(
                 updated_at=task.updated_at,
             )
             for task in visible_tasks
-            if task.status in _ATTENTION_STATES
+            if task.status in ATTENTION_STATES
         )
 
         updated_at = _max_timestamp(
@@ -678,4 +734,6 @@ def load_monitor_snapshot(
             problems=problems,
         )
     finally:
+        if connection.in_transaction:
+            connection.rollback()
         state.close()

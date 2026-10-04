@@ -8,6 +8,18 @@ from typing import Any
 from .artifacts import ResolvedArtifacts, resolve_task_artifacts
 from .console import TerminalReporter, WorkflowReporter
 from .executor import ExecutionResult, LocalExecutor, TaskExecutor
+from .lifecycle import (
+    BLOCKED,
+    FAILED,
+    INVALID_INPUT,
+    INVALID_OUTPUT,
+    RUNNING,
+    SKIPPED,
+    STALE,
+    SUCCESS,
+    UNAVAILABLE_DEPENDENCY_STATES,
+    UNKNOWN,
+)
 from .locking import WorkflowLock
 from .pbs import PbsExecutor
 from .provenance import build_attempt_metadata
@@ -186,12 +198,13 @@ class WorkflowEngine:
                     pending.append(dependency)
         return [name for name in ordered if name in required]
 
-    def _task_cwd(self, task: dict[str, Any]) -> Path | None:
+    def _task_cwd(self, task: dict[str, Any]) -> Path:
         raw_cwd = task.get("cwd")
         if raw_cwd is None:
-            return None
+            return Path.cwd().resolve(strict=False)
         path = Path(render_template(raw_cwd, self.context))
-        return path if path.is_absolute() else self.source_dir / path
+        resolved = path if path.is_absolute() else self.source_dir / path
+        return resolved.resolve(strict=False)
 
     def _task_env(self, task: dict[str, Any]) -> dict[str, str]:
         return {
@@ -246,7 +259,7 @@ class WorkflowEngine:
         task_name: str,
         task: dict[str, Any],
         argv: list[str],
-        cwd: Path | None,
+        cwd: Path,
         env: dict[str, str],
         artifacts: ResolvedArtifacts,
     ) -> TaskSignature:
@@ -349,7 +362,7 @@ class WorkflowEngine:
             planned_tasks = set(self.plan())
             uncertain = [
                 task
-                for task in self.state.tasks_with_status("unknown", cycle_id=self.cycle_id)
+                for task in self.state.tasks_with_status(UNKNOWN, cycle_id=self.cycle_id)
                 if task in planned_tasks
             ]
             if uncertain:
@@ -425,7 +438,7 @@ class WorkflowEngine:
         if descendants:
             self.state.mark_tasks(
                 descendants,
-                "blocked",
+                BLOCKED,
                 reason,
                 cycle_id=self.cycle_id,
                 return_code=BLOCKED_EXIT_CODE,
@@ -448,7 +461,7 @@ class WorkflowEngine:
             return False
         self.state.set_status(
             task_name,
-            "success",
+            SUCCESS,
             previous.return_code,
             current.value,
             previous.reason or "assinatura legada validada e atualizada",
@@ -478,15 +491,7 @@ class WorkflowEngine:
                     dependency
                     for dependency in dependencies
                     if self.state.get_status(dependency, cycle_id=self.cycle_id)
-                    in {
-                        "skipped",
-                        "blocked",
-                        "failed",
-                        "invalid-input",
-                        "invalid-output",
-                        "interrupted",
-                        "unknown",
-                    }
+                    in UNAVAILABLE_DEPENDENCY_STATES
                 ]
                 if unavailable:
                     reason = "dependência indisponível: " + ", ".join(unavailable)
@@ -494,7 +499,7 @@ class WorkflowEngine:
                     affected = [task_name, *self._descendants(task_name)]
                     self.state.mark_tasks(
                         affected,
-                        "blocked",
+                        BLOCKED,
                         reason,
                         cycle_id=self.cycle_id,
                         return_code=BLOCKED_EXIT_CODE,
@@ -505,7 +510,7 @@ class WorkflowEngine:
                     self.reporter.event("skip", task_name, "disabled", executor=executor_name)
                     self.state.set_status(
                         task_name,
-                        "skipped",
+                        SKIPPED,
                         0,
                         cycle_id=self.cycle_id,
                     )
@@ -525,7 +530,7 @@ class WorkflowEngine:
                     self.reporter.event("fail", task_name, message, executor=executor_name)
                     self.state.set_status(
                         task_name,
-                        "invalid-input",
+                        INVALID_INPUT,
                         INVALID_INPUT_EXIT_CODE,
                         cycle_id=self.cycle_id,
                     )
@@ -542,7 +547,7 @@ class WorkflowEngine:
                 task_executor = self._task_executor(task)
 
                 previous = self.state.get_task_state(task_name, cycle_id=self.cycle_id)
-                if not self.force and previous and previous.status == "success":
+                if not self.force and previous and previous.status == SUCCESS:
                     missing_outputs = artifacts.missing_required_outputs()
                     invalid_outputs = artifacts.invalid_outputs()
                     signature_matches = self._adopt_legacy_signature(
@@ -583,7 +588,7 @@ class WorkflowEngine:
                 if descendants:
                     self.state.mark_tasks(
                         descendants,
-                        "stale",
+                        STALE,
                         f"a dependência '{task_name}' será executada novamente",
                         cycle_id=self.cycle_id,
                     )
@@ -611,7 +616,7 @@ class WorkflowEngine:
                 recorder.write_started(
                     attempt,
                     {
-                        "status": "running",
+                        "status": RUNNING,
                         "command": {"argv": argv, "cwd": str(cwd) if cwd else None, "env": env},
                         "signature": signature.value,
                     },
@@ -626,7 +631,7 @@ class WorkflowEngine:
                 )
                 self.state.set_status(
                     task_name,
-                    "running",
+                    RUNNING,
                     None,
                     signature.value,
                     "tarefa iniciada",
@@ -663,7 +668,7 @@ class WorkflowEngine:
                         env=env,
                         artifacts=artifacts,
                         signature=signature,
-                        status="unknown",
+                        status=UNKNOWN,
                         return_code=None,
                         execution=execution,
                         reason=reason,
@@ -689,7 +694,7 @@ class WorkflowEngine:
                             env=env,
                             artifacts=artifacts,
                             signature=signature,
-                            status="invalid-output",
+                            status=INVALID_OUTPUT,
                             return_code=INVALID_OUTPUT_EXIT_CODE,
                             execution=execution,
                             process_return_code=return_code,
@@ -707,7 +712,7 @@ class WorkflowEngine:
                         env=env,
                         artifacts=artifacts,
                         signature=signature,
-                        status="success",
+                        status=SUCCESS,
                         return_code=return_code,
                         execution=execution,
                         process_return_code=return_code,
@@ -730,7 +735,7 @@ class WorkflowEngine:
                         env=env,
                         artifacts=artifacts,
                         signature=signature,
-                        status="failed",
+                        status=FAILED,
                         return_code=return_code,
                         execution=execution,
                         process_return_code=return_code,
@@ -787,7 +792,12 @@ class WorkflowEngine:
         for task_name in self.plan():
             task = task_map[task_name]
             render_argv(task["argv"], self.context)
-            self._task_cwd(task)
+            cwd = self._task_cwd(task)
+            if task.get("cwd") is not None:
+                if not cwd.exists():
+                    problems.append(f"{task_name}: diretório de trabalho ausente: {cwd}")
+                elif not cwd.is_dir():
+                    problems.append(f"{task_name}: cwd não é um diretório: {cwd}")
             self._task_env(task)
             self._task_timeout(task)
             self._task_executor(task)

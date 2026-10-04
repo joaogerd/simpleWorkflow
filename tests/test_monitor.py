@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
+import simpleworkflow.monitor as monitor_module
 from simpleworkflow.monitor import load_monitor_snapshot
 from simpleworkflow.runs import RunRecorder
 from simpleworkflow.state import WorkflowState
@@ -362,3 +364,187 @@ def test_snapshot_exposes_all_attempts_newest_first(tmp_path: Path) -> None:
     assert [attempt.attempt for attempt in task.attempts] == [2, 1]
     assert [attempt.status for attempt in task.attempts] == ["running", "failed"]
     assert task.attempt is task.attempts[0]
+
+
+def test_native_cycle_snapshot_respects_cycle_scope(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: scoped-campaign\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    config: dict[str, object] = {
+        "workflow": {"name": "scoped-campaign"},
+        "cycle": {
+            "start": "2018-04-15T00:00:00Z",
+            "end": "2018-04-15T12:00:00Z",
+            "step": "PT6H",
+        },
+        "tasks": [
+            {"name": "all", "argv": ["true"]},
+            {"name": "first", "argv": ["true"], "cycle_scope": "first"},
+            {"name": "not_first", "argv": ["true"], "cycle_scope": "not_first"},
+            {"name": "last", "argv": ["true"], "cycle_scope": "last"},
+            {"name": "not_last", "argv": ["true"], "cycle_scope": "not_last"},
+        ],
+        "__simpleworkflow__": {
+            "source_path": str(workflow),
+            "source_dir": str(workflow.parent),
+        },
+    }
+    state = WorkflowState(
+        workdir / "state.sqlite3",
+        workflow_name="scoped-campaign",
+        source_path=workflow,
+    )
+    cycles = [
+        ("c00", "2018-04-15T00:00:00Z", ("all", "first", "not_last")),
+        ("c06", "2018-04-15T06:00:00Z", ("all", "not_first", "not_last")),
+        ("c12", "2018-04-15T12:00:00Z", ("all", "not_first", "last")),
+    ]
+    for cycle_id, cycle_time, active in cycles:
+        state.ensure_cycle(cycle_id, cycle_time)
+        for name in active:
+            state.set_status(name, "success", 0, cycle_id=cycle_id)
+
+    # A stale row for an out-of-scope task must not contaminate the cycle view.
+    state.set_status("last", "failed", 7, cycle_id="c00")
+    state.close()
+
+    snapshot = load_monitor_snapshot(config, workflow, workdir)
+
+    assert [cycle.status for cycle in snapshot.cycles] == [
+        "success",
+        "success",
+        "success",
+    ]
+    assert [[task.name for task in cycle.tasks] for cycle in snapshot.cycles] == [
+        ["all", "first", "not_last"],
+        ["all", "not_first", "not_last"],
+        ["all", "not_first", "last"],
+    ]
+    assert snapshot.total_tasks == 9
+    assert snapshot.completed_tasks == 9
+    assert snapshot.failed_tasks == 0
+
+
+def test_native_cycles_keep_initialization_tasks_at_workflow_root(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: initialized-campaign\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    config: dict[str, object] = {
+        "workflow": {"name": "initialized-campaign"},
+        "initialization": {
+            "tasks": [{"name": "bootstrap", "argv": ["true"]}]
+        },
+        "cycle": {
+            "start": "2018-04-15T00:00:00Z",
+            "end": "2018-04-15T06:00:00Z",
+            "step": "PT6H",
+        },
+        "tasks": [{"name": "analysis", "argv": ["true"]}],
+        "__simpleworkflow__": {
+            "source_path": str(workflow),
+            "source_dir": str(workflow.parent),
+        },
+    }
+    state = WorkflowState(
+        workdir / "state.sqlite3",
+        workflow_name="initialized-campaign",
+        source_path=workflow,
+    )
+    state.set_status("bootstrap", "success", 0)
+    state.ensure_cycle("c00", "2018-04-15T00:00:00Z")
+    state.ensure_cycle("c06", "2018-04-15T06:00:00Z")
+    state.set_status("analysis", "success", 0, cycle_id="c00")
+    state.set_status("analysis", "running", None, cycle_id="c06")
+    state.close()
+
+    snapshot = load_monitor_snapshot(config, workflow, workdir)
+
+    assert [(task.name, task.status) for task in snapshot.tasks] == [
+        ("bootstrap", "success")
+    ]
+    assert [[task.name for task in cycle.tasks] for cycle in snapshot.cycles] == [
+        ["analysis"],
+        ["analysis"],
+    ]
+    assert snapshot.total_tasks == 3
+    assert snapshot.completed_tasks == 2
+    assert snapshot.running_tasks == 1
+
+
+
+def test_monitor_reads_database_fields_inside_one_transaction(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: campaign\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    state = WorkflowState(
+        workdir / "state.sqlite3",
+        workflow_name="campaign",
+        source_path=workflow,
+    )
+    state.set_status("prepare", "success", 0)
+    state.close()
+
+    original_attempt_history = monitor_module._attempt_history
+    observed: list[bool] = []
+
+    def checked_attempt_history(state: WorkflowState):
+        observed.append(state.connection.in_transaction)
+        return original_attempt_history(state)
+
+    monkeypatch.setattr(monitor_module, "_attempt_history", checked_attempt_history)
+
+    snapshot = load_monitor_snapshot(_config(workflow), workflow, workdir)
+
+    assert snapshot.tasks[0].status == "success"
+    assert observed == [True]
+
+
+def test_sqlite_read_transaction_keeps_one_snapshot_across_writer_commit(
+    tmp_path: Path,
+) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: campaign\n", encoding="utf-8")
+    state_path = tmp_path / ".simpleworkflow" / "state.sqlite3"
+
+    initial = WorkflowState(
+        state_path,
+        workflow_name="campaign",
+        source_path=workflow,
+    )
+    initial.set_status("prepare", "success", 0)
+    initial.close()
+
+    # WAL is enabled only for this test so a writer can commit while the reader
+    # transaction remains open. The production monitor does not require WAL.
+    setup = sqlite3.connect(state_path)
+    setup.execute("PRAGMA journal_mode = WAL")
+    setup.close()
+
+    reader = WorkflowState(
+        state_path,
+        workflow_name="campaign",
+        source_path=workflow,
+        read_only=True,
+    )
+    writer = WorkflowState(
+        state_path,
+        workflow_name="campaign",
+        source_path=workflow,
+    )
+    try:
+        reader.connection.execute("BEGIN")
+        assert reader.get_status("prepare") == "success"
+
+        writer.set_status("prepare", "failed", 7)
+
+        # The same read transaction must continue to see the old consistent view.
+        assert reader.get_status("prepare") == "success"
+        reader.connection.rollback()
+
+        # A new read after the transaction observes the committed writer state.
+        assert reader.get_status("prepare") == "failed"
+    finally:
+        reader.close()
+        writer.close()
