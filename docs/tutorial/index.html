@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Tutorial — simpleWorkflow</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<nav class="site-nav"><div class="inner">
+  <a class="brand" href="../">simple<span>Workflow</span></a>
+  <div class="nav-links">
+    <a class="active" href="./">Tutorial</a>
+    <a href="workflows.html">Workflows</a>
+    <a href="cycles.html">Ciclos</a>
+    <a href="../reference/yaml.html">Referência</a>
+    <a class="optional" href="showcase.html">Galeria</a>
+  </div>
+</div></nav>
+<header class="hero"><div class="inner">
+  <div class="eyebrow">Tutorial do zero ao diagnóstico</div>
+  <h1>Seu primeiro workflow,<br>sem mistério.</h1>
+  <p>Este guia parte do princípio de que você nunca usou o simpleWorkflow. Ao final, você saberá criar um workflow, executá-lo, navegar pela TUI, ler logs e entender uma falha.</p>
+  <div class="actions"><a class="button primary" href="#primeiros-passos">Começar agora</a><a class="button" href="showcase.html">Ver screenshots</a></div>
+</div></header>
+<main><div class="layout">
+<aside class="toc">
+  <strong>Neste tutorial</strong>
+  <a href="#conceito">O que é</a>
+  <a href="#instalacao">Instalação</a>
+  <a href="#primeiros-passos">Primeiro workflow</a>
+  <a href="#tui">Entendendo a TUI</a>
+  <a href="#teclado">Teclado</a>
+  <a href="#abas">Abas</a>
+  <a href="#estados">Estados</a>
+  <a href="#diagnostico">Diagnóstico</a>
+  <a href="#ciclos">Ciclos</a>
+  <a href="#estado">Estado persistente</a>
+  <a href="#comandos">Comandos úteis</a>
+  <a href="#problemas-comuns">Problemas comuns</a>
+</aside>
+<article>
+<section id="conceito">
+<h2>O que é o simpleWorkflow?</h2>
+<p>É um executor de workflows definidos em YAML. Você descreve tarefas, dependências, entradas e saídas; o simpleWorkflow decide a ordem correta, executa cada tarefa e registra o que aconteceu.</p>
+<div class="callout good"><strong>Ideia principal:</strong> você não precisa manter um servidor ou serviço de workflow. O estado fica junto do próprio caso, em <code>.simpleworkflow/</code>.</div>
+<div class="cards">
+  <div class="card"><h3>Workflow</h3><p>O conjunto completo de tarefas que você quer executar.</p></div>
+  <div class="card"><h3>Task</h3><p>Uma unidade de trabalho: um programa e seus argumentos.</p></div>
+  <div class="card"><h3>Attempt</h3><p>Uma tentativa concreta de executar uma tarefa, com logs próprios.</p></div>
+</div>
+</section>
+
+<section id="instalacao">
+<h2>1. Instalação</h2>
+<p>No estado atual do projeto, a instalação documentada parte do repositório GitHub. Não assuma que o pacote já está publicado em um índice Python.</p>
+<pre><code>python3 -m venv ~/.venvs/simpleworkflow
+source ~/.venvs/simpleworkflow/bin/activate
+git clone https://github.com/joaogerd/simpleWorkflow.git
+cd simpleWorkflow
+python -m pip install ".[tui]"
+swf --help</code></pre>
+<p>Se algum desses passos for novidade para você, use o <a href="install.html">guia de instalação detalhado</a>, que explica ambiente virtual, atualização e instalação para desenvolvimento.</p>
+</section>
+
+<section id="primeiros-passos">
+<h2>2. Seu primeiro workflow</h2>
+<div class="step"><div class="step-num">1</div><div><h3>Crie uma pasta</h3><pre><code>mkdir meu-workflow
+cd meu-workflow</code></pre></div></div>
+<div class="step"><div class="step-num">2</div><div><h3>Crie <code>workflow.yaml</code></h3>
+<pre><code>format_version: 1
+
+workflow:
+  name: meu_primeiro_workflow
+
+tasks:
+  - name: hello
+    argv:
+      - python
+      - -c
+      - "print('Olá do simpleWorkflow')"</code></pre>
+<div class="callout"><strong>Por que <code>argv</code>?</strong> Cada item é um argumento real do processo. O simpleWorkflow não interpreta uma string de shell escondida, o que deixa a execução mais previsível.</div>
+<h3>O que significam essas palavras?</h3>
+<table><thead><tr><th>Palavra</th><th>Neste primeiro exemplo</th></tr></thead><tbody>
+<tr><td><code>format_version</code></td><td>Diz qual versão do formato YAML estamos usando.</td></tr>
+<tr><td><code>workflow</code></td><td>Abre a seção que descreve o workflow.</td></tr>
+<tr><td><code>name</code></td><td>Dá um nome ao workflow ou à tarefa.</td></tr>
+<tr><td><code>tasks</code></td><td>Lista as tarefas que serão executadas.</td></tr>
+<tr><td><code>argv</code></td><td>Define o programa e cada argumento que será passado a ele.</td></tr>
+</tbody></table>
+<p>O tutorial inicial usa apenas o mínimo. Depois dele, siga para <a href="workflows.html">Construindo workflows</a> e consulte a <a href="../reference/yaml.html">referência completa de palavras-chave</a>.</p>
+</div></div>
+<div class="step"><div class="step-num">3</div><div><h3>Valide antes de executar</h3><pre><code>swf validate workflow.yaml
+swf plan workflow.yaml</code></pre><p><code>validate</code> procura erros de configuração. <code>plan</code> mostra o que será executado e em qual ordem.</p></div></div>
+<div class="step"><div class="step-num">4</div><div><h3>Execute</h3><pre><code>swf run workflow.yaml</code></pre><p>Em um terminal interativo com o extra TUI instalado, a interface em tela cheia é escolhida automaticamente. Para exigir a TUI:</p><pre><code>swf run workflow.yaml --ui tui</code></pre></div></div>
+</section>
+
+<section id="tui">
+<h2>3. Entendendo a tela</h2>
+<p>A aba <strong>Monitor</strong> é o ponto de partida. Ela mostra o workflow à esquerda e os detalhes do item selecionado à direita.</p>
+<figure class="figure"><img src="tui-showcase/01-minimal-monitor.svg" alt="Monitor do workflow mínimo"><figcaption>Monitor: Workflow à esquerda, Inspector à direita e atalhos contextuais no rodapé.</figcaption></figure>
+<div class="grid-2">
+  <div class="card"><h3>Workflow</h3><p>Árvore de tarefas e dependências. A seleção acompanha o teclado.</p></div>
+  <div class="card"><h3>Inspector</h3><p>Status, tentativa, duração, comando, recursos e arquivos disponíveis da tarefa selecionada.</p></div>
+</div>
+<p>O painel que contém o foco recebe destaque visual. Assim você sabe onde <kbd>↑</kbd>, <kbd>↓</kbd> e <kbd>Enter</kbd> vão atuar.</p>
+</section>
+
+<section id="teclado">
+<h2>4. Navegação pelo teclado</h2>
+<p>Você não precisa usar o mouse. O conteúdo principal recebe foco automaticamente ao abrir uma aba.</p>
+<table>
+<thead><tr><th>Tecla</th><th>Ação</th></tr></thead>
+<tbody>
+<tr><td><kbd>↑</kbd> / <kbd>↓</kbd></td><td>Navega no conteúdo do painel ativo.</td></tr>
+<tr><td><kbd>p</kbd></td><td>No Monitor, alterna entre os painéis <strong>Workflow</strong> e <strong>Inspector</strong>.</td></tr>
+<tr><td><kbd>Enter</kbd></td><td>Abre ou seleciona o item atual quando a tela oferece uma ação.</td></tr>
+<tr><td><kbd>/</kbd></td><td>Abre filtro/busca quando disponível.</td></tr>
+<tr><td><kbd>l</kbd></td><td>Abre Logs da tarefa selecionada.</td></tr>
+<tr><td><kbd>r</kbd></td><td>Atualiza o estado agora.</td></tr>
+<tr><td><kbd>s</kbd></td><td>Salva screenshot SVG da tela atual.</td></tr>
+<tr><td><kbd>?</kbd> / <kbd>F1</kbd></td><td>Abre a ajuda completa.</td></tr>
+<tr><td><kbd>q</kbd></td><td>Fecha o monitor. Não cancela o workflow.</td></tr>
+</tbody></table>
+<h3>Atalhos numéricos para abas</h3>
+<p>Os números ficam na ajuda para não poluir o rodapé. Em workflows simples: <kbd>1</kbd> Monitor, <kbd>2</kbd> Problemas, <kbd>3</kbd> Logs. Em workflows com ciclos: <kbd>1</kbd> Monitor, <kbd>2</kbd> Ciclos, <kbd>3</kbd> Campanha, <kbd>4</kbd> Problemas, <kbd>5</kbd> Logs.</p>
+</section>
+
+<section id="abas">
+<h2>5. O que cada aba responde?</h2>
+<div class="cards">
+<div class="card"><h3>Monitor</h3><p><strong>“O que está acontecendo agora?”</strong><br>Árvore do workflow + detalhes da tarefa.</p></div>
+<div class="card"><h3>Problemas</h3><p><strong>“O que exige minha atenção?”</strong><br>Falhas, entradas/saídas inválidas, bloqueios e outros estados problemáticos.</p></div>
+<div class="card"><h3>Logs</h3><p><strong>“O que o processo escreveu?”</strong><br>stdout/stderr da tentativa selecionada e acompanhamento de arquivo em execução.</p></div>
+<div class="card"><h3>Ciclos</h3><p><strong>“Como os processos estão distribuídos entre os ciclos?”</strong><br>Aparece somente quando o workflow possui ciclos.</p></div>
+<div class="card"><h3>Campanha</h3><p><strong>“Como está o conjunto de ciclos ao longo dos dias?”</strong><br>Resumo operacional da campanha.</p></div>
+</div>
+<div class="callout"><strong>Regra de interface:</strong> workflows sem ciclos não mostram Ciclos nem Campanha. A TUI apresenta apenas conceitos que realmente existem naquele workflow.</div>
+</section>
+
+<section id="estados">
+<h2>6. Entendendo os estados</h2>
+<table><thead><tr><th>Estado</th><th>Significado prático</th><th>O que fazer</th></tr></thead><tbody>
+<tr><td><span class="status">pending</span></td><td>A tarefa ainda aguarda execução.</td><td>Normal enquanto dependências não terminaram.</td></tr>
+<tr><td><span class="status warning">running</span></td><td>Há uma tentativa em andamento.</td><td>Veja Inspector ou Logs se precisar acompanhar.</td></tr>
+<tr><td><span class="status success">success</span></td><td>A tarefa terminou e seus contratos foram aceitos.</td><td>Nenhuma ação.</td></tr>
+<tr><td><span class="status">skipped</span></td><td>A tarefa foi deliberadamente pulada/desabilitada.</td><td>Verifique se era esperado.</td></tr>
+<tr><td><span class="status failure">failed</span></td><td>O processo falhou ou terminou com erro.</td><td>Abra Problemas e stderr.</td></tr>
+<tr><td><span class="status failure">invalid-input</span></td><td>Uma entrada obrigatória não satisfaz o contrato.</td><td>Corrija/forneça a entrada.</td></tr>
+<tr><td><span class="status failure">invalid-output</span></td><td>O processo terminou, mas a saída esperada não passou na validação.</td><td>Examine stdout/stderr e a regra de saída.</td></tr>
+<tr><td><span class="status failure">blocked</span></td><td>Uma dependência impede a execução desta tarefa.</td><td>Resolva primeiro a tarefa antecedente.</td></tr>
+</tbody></table>
+</section>
+
+<section id="diagnostico">
+<h2>7. Quando algo falhar</h2>
+<p>Use sempre a mesma sequência. Ela evita procurar arquivos manualmente sem necessidade.</p>
+<div class="step"><div class="step-num">1</div><div><h3>Abra Problemas</h3><p>A aba concentra somente o que precisa de atenção. Use <kbd>/</kbd> para filtrar por tarefa, estado, ciclo ou motivo.</p></div></div>
+<div class="step"><div class="step-num">2</div><div><h3>Selecione o problema</h3><p>O simpleWorkflow preserva tarefa/ciclo e procura a evidência mais útil disponível.</p></div></div>
+<div class="step"><div class="step-num">3</div><div><h3>Leia stderr/stdout</h3><p>No Inspector, selecionar <code>stdout</code> ou <code>stderr</code> leva diretamente à aba Logs. Para uma tarefa em execução, o viewer pode acompanhar o arquivo enquanto ele cresce.</p></div></div>
+<figure class="figure"><img src="tui-showcase/05-problems-problems.svg" alt="Aba Problemas"><figcaption>Problemas: diagnóstico concentrado sem misturar tarefas saudáveis.</figcaption></figure>
+<div class="callout warn"><strong>Importante:</strong> fechar a TUI com <kbd>q</kbd> fecha o monitor, mas não é um comando de cancelamento do workflow.</div>
+</section>
+
+<section id="ciclos">
+<h2>8. Workflows com ciclos</h2>
+<p>Quando o workflow possui ciclos, a interface acrescenta recursos específicos sem mudar o modelo básico.</p>
+<figure class="figure"><img src="tui-showcase/04-campaign-monitor.svg" alt="Monitor de workflow com ciclos"><figcaption>Monitor de campanha: seletor de ciclos dentro do próprio contexto do Monitor.</figcaption></figure>
+<p><strong>Ciclos</strong> compara processos entre tempos de ciclo. <strong>Campanha</strong> resume vários ciclos por dia. O bloco de período/ciclagem no Inspector só aparece quando possui informação suficiente para justificar o espaço.</p>
+</section>
+
+<section id="estado">
+<h2>9. Onde ficam estado e logs?</h2>
+<p>Por padrão, o diretório é criado ao lado do YAML:</p>
+<pre><code>meu-workflow/
+├── workflow.yaml
+└── .simpleworkflow/
+    ├── state.sqlite3
+    ├── lock
+    └── runs/
+        └── .../attempt-001/
+            ├── stdout.log
+            ├── stderr.log
+            └── metadata.json</code></pre>
+<p>Uma pasta <code>.simpleworkflow</code> representa <strong>um único workflow lógico</strong>. Não use a mesma pasta de estado para YAMLs independentes.</p>
+<p>Para observar um workflow já executado ou em execução a partir de outro terminal:</p>
+<pre><code>swf monitor workflow.yaml</code></pre>
+</section>
+
+<section id="comandos">
+<h2>10. Comandos que você vai usar</h2>
+<table><thead><tr><th>Comando</th><th>Quando usar</th></tr></thead><tbody>
+<tr><td><code>swf validate workflow.yaml</code></td><td>Antes de executar; verifica a configuração.</td></tr>
+<tr><td><code>swf plan workflow.yaml</code></td><td>Para entender ordem e dependências.</td></tr>
+<tr><td><code>swf run workflow.yaml</code></td><td>Executa o workflow.</td></tr>
+<tr><td><code>swf run workflow.yaml --ui tui</code></td><td>Exige a interface interativa.</td></tr>
+<tr><td><code>swf run workflow.yaml --ui plain</code></td><td>Força saída simples, útil em logs, batch e CI.</td></tr>
+<tr><td><code>swf status workflow.yaml</code></td><td>Mostra o estado persistido sem executar.</td></tr>
+<tr><td><code>swf explain workflow.yaml</code></td><td>Ajuda a entender decisões/estado do workflow.</td></tr>
+<tr><td><code>swf monitor workflow.yaml</code></td><td>Abre a TUI somente para observar o estado existente.</td></tr>
+<tr><td><code>swf run workflow.yaml --force</code></td><td>Executa novamente tarefas que poderiam ser reutilizadas.</td></tr>
+<tr><td><code>swf reset workflow.yaml</code></td><td>Limpa o estado reutilizável atual preservando histórico.</td></tr>
+</tbody></table>
+</section>
+
+<section id="problemas-comuns">
+<h2>11. Problemas comuns</h2>
+<h3>“A TUI não abre.”</h3>
+<p>Confirme que instalou <code>simpleworkflow[tui]</code>. Em batch, pipes, CI ou terminais não interativos, <code>auto</code> usa propositalmente a saída plain.</p>
+<h3>“Quero ver a TUI mesmo assim.”</h3>
+<pre><code>swf run workflow.yaml --ui tui</code></pre>
+<h3>“Não consigo navegar.”</h3>
+<p>Ao abrir uma aba, o conteúdo principal deve receber foco automaticamente. Use <kbd>↑</kbd>/<kbd>↓</kbd>. No Monitor, <kbd>p</kbd> alterna Workflow e Inspector. <kbd>?</kbd> mostra todos os atalhos disponíveis.</p>
+<h3>“Executei de novo e a tarefa não rodou.”</h3>
+<p>Uma tarefa concluída pode ser reutilizada quando sua assinatura e seus contratos ainda são válidos. Use <code>--force</code> quando a intenção for realmente criar uma nova execução.</p>
+<h3>“Tenho dois arquivos YAML na mesma pasta.”</h3>
+<p>Por padrão eles tentariam usar a mesma <code>.simpleworkflow/</code>. Como uma pasta de estado pertence a um único workflow lógico, coloque workflows independentes em diretórios próprios ou use <code>--workdir</code> deliberadamente.</p>
+<div class="callout good"><strong>Próximo passo:</strong> abra a <a href="showcase.html">galeria visual</a> e percorra os nove exemplos, do workflow mínimo até timeout e validação de contratos.</div>
+</section>
+</article>
+</div></main>
+<footer><div class="inner">Tutorial do simpleWorkflow · para detalhes de formato, PBS e modelo de estado, consulte a documentação técnica no repositório.</div></footer>
+</body></html>

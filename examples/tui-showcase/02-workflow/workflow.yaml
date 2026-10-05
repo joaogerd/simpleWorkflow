@@ -1,0 +1,44 @@
+format_version: 1
+
+workflow:
+  name: tui_standard_workflow
+
+context:
+  python: python
+  greeting: Hello
+  audience: simpleWorkflow
+
+tasks:
+  - name: prepare
+    argv:
+      - "{python}"
+      - -c
+      - "print('Preparing the workflow')"
+
+  - name: greet
+    depends_on: [prepare]
+    argv:
+      - "{python}"
+      - -c
+      - "print('{greeting}, {audience}!')"
+
+  - name: stderr_demo
+    depends_on: [prepare]
+    argv:
+      - "{python}"
+      - -c
+      - "import sys; print('This is stdout'); print('This is stderr', file=sys.stderr)"
+
+  - name: optional_step
+    enabled: false
+    argv:
+      - "{python}"
+      - -c
+      - "print('This task is intentionally disabled')"
+
+  - name: finish
+    depends_on: [greet, stderr_demo]
+    argv:
+      - "{python}"
+      - -c
+      - "print('Workflow completed successfully')"

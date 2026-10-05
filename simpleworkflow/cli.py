@@ -119,6 +119,36 @@ def build_parser() -> argparse.ArgumentParser:
         "--debug", action="store_true", help="Show technical traceback details."
     )
 
+
+    capture_parser = subparsers.add_parser(
+        "capture-tui",
+        help="Render one deterministic SVG screenshot of the read-only TUI.",
+    )
+    capture_parser.add_argument("workflow")
+    _add_workdir_option(capture_parser)
+    _add_display_options(capture_parser)
+    capture_parser.add_argument(
+        "--view",
+        choices=("monitor", "cycles", "campaign", "problems", "logs"),
+        default="monitor",
+        help="TUI view to capture (default: monitor).",
+    )
+    capture_parser.add_argument(
+        "--size",
+        default="120x35",
+        metavar="COLSxROWS",
+        help="Virtual terminal size used for rendering (default: 120x35).",
+    )
+    capture_parser.add_argument(
+        "--output",
+        required=True,
+        metavar="PATH",
+        help="Destination SVG path.",
+    )
+    capture_parser.add_argument(
+        "--debug", action="store_true", help="Show technical traceback details."
+    )
+
     migrate_parser = subparsers.add_parser(
         "migrate",
         help="Inspect or migrate a pre-0.4 state database.",
@@ -386,39 +416,47 @@ def _run_plain(
 
 
 def _run_interactive(config: dict[str, Any], args: argparse.Namespace) -> int:
-    """Keep task execution on the main thread while Textual observes in a worker."""
+    """Run Textual on the main thread while workflow execution uses a worker."""
     workflow_path = Path(
         config.get("__simpleworkflow__", {}).get("source_path", args.workflow)
     ).resolve(strict=False)
     workdir = _resolve_workdir(config, args.workdir)
     completion: Future[int] = Future()
 
-    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="simpleworkflow-monitor") as pool:
-        monitor_future = pool.submit(
-            _launch_monitor,
-            config,
-            workflow_path,
-            workdir,
-            refresh_seconds=1.0,
-            color=_tui_color_enabled(args.color),
-            completion_future=completion,
-        )
+    def run_workflow() -> int:
         try:
             result = _run_plain(config, args, _QuietTerminalReporter())
         except BaseException as error:
             if not completion.done():
                 completion.set_exception(error)
-            # The TUI checks completion every 0.2 s and exits without consuming
-            # the result. Waiting here prevents an orphan terminal thread.
-            monitor_future.result()
             raise
         else:
             if not completion.done():
                 completion.set_result(result)
-            # q may have closed the monitor earlier; either way execution owns
-            # the command lifetime and completes on the signal-capable main thread.
-            monitor_future.result()
             return result
+
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="simpleworkflow-engine") as pool:
+        engine_future = pool.submit(run_workflow)
+        try:
+            # Textual's Linux driver installs signal handlers and therefore must
+            # run in the main thread of the main interpreter.
+            _launch_monitor(
+                config,
+                workflow_path,
+                workdir,
+                refresh_seconds=1.0,
+                color=_tui_color_enabled(args.color),
+                completion_future=completion,
+            )
+        except BaseException:
+            # Do not leave a state-changing workflow thread orphaned if the
+            # frontend itself fails. The executor context waits for completion.
+            engine_future.result()
+            raise
+
+        # q closes only the monitor. The workflow remains authoritative and the
+        # command does not return until execution has completed.
+        return engine_future.result()
 
 
 def _main(argv: list[str] | None = None) -> int:
@@ -438,6 +476,28 @@ def _main(argv: list[str] | None = None) -> int:
             refresh_seconds=float(args.refresh_seconds),
             color=_tui_color_enabled(args.color),
         )
+        return 0
+
+    if args.command == "capture-tui":
+        if not tui_available():
+            raise RuntimeError(
+                'TUI capture requires pip install "simpleworkflow[tui]"'
+            )
+        from .tui_capture import capture_tui
+
+        workflow_path = Path(
+            config.get("__simpleworkflow__", {}).get("source_path", args.workflow)
+        ).resolve(strict=False)
+        output = capture_tui(
+            config=config,
+            workflow_path=workflow_path,
+            workdir=_resolve_workdir(config, args.workdir),
+            view=args.view,
+            size=args.size,
+            output=args.output,
+            color=_tui_color_enabled(args.color),
+        )
+        print(output)
         return 0
 
     reporter = TerminalReporter(color=args.color)

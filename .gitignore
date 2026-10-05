@@ -17,3 +17,14 @@ build/
 dist/
 simpleworkflow.egg-info/
 simpleworkflow-python-task-contract-followup*.patch
+
+# Generated TUI documentation
+docs/tutorial/tui-showcase.md
+docs/tutorial/tui-showcase/
+
+# Generated showcase work directories
+demo-work/
+examples/tui-showcase/03-artifacts/demo-work/
+examples/tui-showcase/04-campaign/campaign-work/
+examples/tui-showcase/05-problems/problem-work/
+examples/tui-showcase/07-invalid-output/invalid-output-work/

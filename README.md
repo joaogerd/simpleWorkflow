@@ -39,25 +39,26 @@ not a registry or manager for many workflows.
 
 ## Installation
 
-Install the lightweight runner with:
+The project is currently documented for installation from its GitHub source
+checkout. Do not assume a package-index release unless one is explicitly
+published and documented.
 
-```bash
-pip install simpleworkflow
-```
-
-This does not install Textual or Rich. For the interactive terminal monitor:
-
-```bash
-pip install "simpleworkflow[tui]"
-```
-
-For a development checkout:
+For normal use with the interactive TUI:
 
 ```bash
 git clone https://github.com/joaogerd/simpleWorkflow.git
 cd simpleWorkflow
+python -m pip install ".[tui]"
+```
+
+For development:
+
+```bash
 python -m pip install -e ".[dev]"
 ```
+
+A Python virtual environment is recommended. The complete beginner installation
+guide is available in `docs/tutorial/install.html`.
 
 ## Quick start
 

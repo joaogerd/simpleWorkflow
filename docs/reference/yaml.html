@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="pt-BR"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark"><title>Referência YAML — simpleWorkflow</title>
+<link rel="stylesheet" href="../assets/site.css"></head><body>
+<nav class="site-nav"><div class="inner"><a class="brand" href="../">simple<span>Workflow</span></a>
+<div class="nav-links"><a href="../tutorial/">Tutorial</a><a href="../tutorial/workflows.html">Workflows</a><a href="../tutorial/cycles.html">Ciclos</a><a class="active" href="yaml.html">YAML</a><a href="cli.html">CLI</a><a class="optional" href="../tutorial/showcase.html">Galeria</a></div></div></nav>
+<header class="hero"><div class="inner"><div class="eyebrow">Referência completa</div><h1>Palavras-chave YAML.</h1><p>Contrato aceito pelo simpleWorkflow. Campos desconhecidos são rejeitados de propósito para evitar erros silenciosos.</p></div></header>
+<main><div class="layout"><aside class="toc"><strong>Referência</strong><a href="#top">Top-level</a><a href="#task">Task</a><a href="#artifacts">Artifacts</a><a href="#checks">Checks</a><a href="#cycle">Cycle</a><a href="#cycle-context">Contexto de ciclo</a><a href="#init">Initialization</a><a href="#pbs">PBS</a><a href="#templates">Templates</a></aside>
+<article>
+<section id="top"><h2>1. Campos de nível superior</h2>
+<table><thead><tr><th>Campo</th><th>Tipo</th><th>Obrigatório</th><th>Significado</th></tr></thead><tbody>
+<tr><td><code>format_version</code></td><td>inteiro</td><td>recomendado</td><td>Versão do formato; atualmente <code>1</code>.</td></tr>
+<tr><td><code>workflow</code></td><td>mapping</td><td>sim</td><td>Metadados do workflow.</td></tr>
+<tr><td><code>workflow.name</code></td><td>string</td><td>sim</td><td>Nome não vazio do workflow.</td></tr>
+<tr><td><code>context</code></td><td>mapping</td><td>não</td><td>Valores disponíveis como placeholders.</td></tr>
+<tr><td><code>initialization</code></td><td>mapping</td><td>não</td><td>Tarefas executadas uma vez antes dos ciclos.</td></tr>
+<tr><td><code>cycle</code></td><td>mapping</td><td>não</td><td>Intervalo temporal de ciclos.</td></tr>
+<tr><td><code>tasks</code></td><td>lista</td><td>sim*</td><td>Tarefas normais; pode ser vazia, mas o campo existe logicamente.</td></tr>
+</tbody></table>
+<p>Somente esses campos são aceitos no topo.</p></section>
+
+<section id="task"><h2>2. Campos de uma tarefa</h2>
+<table><thead><tr><th>Campo</th><th>Tipo/default</th><th>Descrição</th></tr></thead><tbody>
+<tr><td><code>name</code></td><td>string, obrigatório</td><td>Identificador único da tarefa em todo o workflow, incluindo initialization.</td></tr>
+<tr><td><code>argv</code></td><td>lista de strings, obrigatória</td><td>Programa e argumentos exatos. Não é shell.</td></tr>
+<tr><td><code>depends_on</code></td><td>string ou lista</td><td>Tarefa(s) que devem terminar antes.</td></tr>
+<tr><td><code>enabled</code></td><td>bool, default <code>true</code></td><td>Quando false, a tarefa é registrada como <code>skipped</code>.</td></tr>
+<tr><td><code>cycle_scope</code></td><td><code>all</code></td><td><code>all</code>, <code>first</code>, <code>not_first</code>, <code>last</code>, <code>not_last</code>.</td></tr>
+<tr><td><code>cwd</code></td><td>string</td><td>Diretório de trabalho; relativo ao diretório do YAML quando não absoluto.</td></tr>
+<tr><td><code>env</code></td><td>mapping string→string</td><td>Variáveis de ambiente específicas da tarefa.</td></tr>
+<tr><td><code>executor</code></td><td><code>local</code></td><td><code>local</code> ou <code>pbs</code>.</td></tr>
+<tr><td><code>pbs</code></td><td>mapping</td><td>Obrigatório quando <code>executor: pbs</code>.</td></tr>
+<tr><td><code>inputs</code></td><td>mapping</td><td>Contrato de entradas.</td></tr>
+<tr><td><code>outputs</code></td><td>mapping</td><td>Contrato de saídas.</td></tr>
+<tr><td><code>input_fingerprint</code></td><td><code>metadata</code></td><td><code>metadata</code> ou <code>sha256</code>.</td></tr>
+<tr><td><code>timeout</code></td><td>número positivo</td><td>Limite em segundos; somente para executor local.</td></tr>
+</tbody></table>
+<div class="callout warn"><code>run</code> é deliberadamente não suportado. Use <code>argv</code>.</div></section>
+
+<section id="artifacts"><h2>3. <code>inputs</code> e <code>outputs</code></h2>
+<h3>inputs</h3><table><thead><tr><th>Campo</th><th>Regra</th></tr></thead><tbody>
+<tr><td><code>required</code></td><td>Lista de caminhos explícitos. Glob não é permitido. Devem existir.</td></tr>
+<tr><td><code>optional</code></td><td>Lista de caminhos ou globs. Pode não encontrar arquivos.</td></tr>
+</tbody></table>
+<h3>outputs</h3><table><thead><tr><th>Campo</th><th>Regra</th></tr></thead><tbody>
+<tr><td><code>required</code></td><td>Lista de caminhos explícitos que devem existir após sucesso do processo.</td></tr>
+<tr><td><code>checks</code></td><td>Lista de checks genéricos adicionais.</td></tr>
+</tbody></table>
+<p>Caminhos relativos de artifacts são resolvidos em relação ao diretório do YAML.</p></section>
+
+<section id="checks"><h2>4. <code>outputs.checks</code></h2>
+<table><thead><tr><th>Campo</th><th>Valores</th><th>Significado</th></tr></thead><tbody>
+<tr><td><code>path</code></td><td>string obrigatória</td><td>Produto a verificar.</td></tr>
+<tr><td><code>kind</code></td><td><code>any</code>, <code>file</code>, <code>directory</code></td><td>Tipo esperado. Default: <code>any</code>.</td></tr>
+<tr><td><code>nonempty</code></td><td>bool</td><td>Exige conteúdo não vazio.</td></tr>
+<tr><td><code>min_size</code></td><td>inteiro ≥ 0</td><td>Tamanho mínimo em bytes.</td></tr>
+</tbody></table></section>
+
+<section id="cycle"><h2>5. <code>cycle</code></h2>
+<table><thead><tr><th>Campo</th><th>Regra</th></tr></thead><tbody>
+<tr><td><code>start</code></td><td>Obrigatório; timestamp ISO-8601 com timezone/Z.</td></tr>
+<tr><td><code>end</code></td><td>Fim inclusivo. Use este ou <code>duration</code>.</td></tr>
+<tr><td><code>duration</code></td><td>Duração ISO-8601 positiva, por exemplo <code>PT18H</code>. Use esta ou <code>end</code>.</td></tr>
+<tr><td><code>step</code></td><td>Intervalo ISO-8601 positivo. Use este ou <code>interval</code>.</td></tr>
+<tr><td><code>interval</code></td><td>Alias estrutural de <code>step</code>.</td></tr>
+</tbody></table>
+<pre><code>cycle:
+  start: "2026-10-03T00:00:00Z"
+  end: "2026-10-03T18:00:00Z"
+  step: PT6H</code></pre></section>
+
+<section id="cycle-context"><h2>6. Placeholders automáticos de ciclo</h2>
+<table><thead><tr><th>Nome</th><th>Conteúdo</th></tr></thead><tbody>
+<tr><td><code>{cycle_time}</code></td><td>Timestamp ISO-8601 UTC.</td></tr>
+<tr><td><code>{cycle_id}</code></td><td><code>YYYYMMDDTHHMMSSZ</code>.</td></tr>
+<tr><td><code>{cycle_yyyymmddhh}</code></td><td><code>YYYYMMDDHH</code>.</td></tr>
+<tr><td><code>{cycle_year}</code>, <code>{cycle_month}</code>, <code>{cycle_day}</code>, <code>{cycle_hour}</code></td><td>Partes do ciclo.</td></tr>
+<tr><td><code>{cycle_index}</code></td><td>Índice zero-based.</td></tr>
+<tr><td><code>{cycle_count}</code></td><td>Total de ciclos na campanha declarada.</td></tr>
+<tr><td><code>{is_first}</code>, <code>{is_last}</code></td><td><code>true</code>/<code>false</code>.</td></tr>
+<tr><td><code>{cycle_is_first}</code>, <code>{cycle_is_last}</code></td><td>Aliases de compatibilidade.</td></tr>
+<tr><td><code>{previous_cycle_*}</code></td><td>Mesmo conjunto temporal para o ciclo anterior; vazio no primeiro.</td></tr>
+<tr><td><code>{next_cycle_*}</code></td><td>Mesmo conjunto temporal para o próximo; vazio no último.</td></tr>
+</tbody></table></section>
+
+<section id="init"><h2>7. <code>initialization</code></h2>
+<pre><code>initialization:
+  tasks:
+    - name: initialize
+      argv: [python, initialize.py]</code></pre>
+<p>O mapping aceita somente <code>tasks</code>. As tarefas usam o schema normal. Em initialization, <code>cycle_scope</code> pode ser omitido ou ser somente <code>all</code>.</p></section>
+
+<section id="pbs"><h2>8. Campos <code>pbs</code></h2>
+<table><thead><tr><th>Campo</th><th>Default/regra</th><th>Descrição</th></tr></thead><tbody>
+<tr><td><code>queue</code></td><td>PBS default</td><td>Fila (<code>#PBS -q</code>).</td></tr>
+<tr><td><code>project</code></td><td>PBS default</td><td>Projeto/conta (<code>#PBS -A</code>).</td></tr>
+<tr><td><code>walltime</code></td><td><code>HHH:MM:SS</code></td><td>Tempo de parede.</td></tr>
+<tr><td><code>select</code></td><td>1 quando recursos CPU são definidos</td><td>Chunks PBS.</td></tr>
+<tr><td><code>ncpus</code></td><td>PBS default</td><td>CPUs por chunk.</td></tr>
+<tr><td><code>mpiprocs</code></td><td>PBS default</td><td>Ranks MPI por chunk.</td></tr>
+<tr><td><code>omp_threads</code></td><td>unset</td><td>Exporta <code>OMP_NUM_THREADS</code> salvo se <code>env</code> já define.</td></tr>
+<tr><td><code>job_name</code></td><td>task name</td><td>Nome do job.</td></tr>
+<tr><td><code>qsub</code></td><td><code>qsub</code></td><td>Comando de submissão.</td></tr>
+<tr><td><code>qstat</code></td><td><code>qstat</code></td><td>Consulta de estado.</td></tr>
+<tr><td><code>qdel</code></td><td><code>qdel</code></td><td>Cancelamento usado após interrupção interativa.</td></tr>
+<tr><td><code>poll_interval</code></td><td>5</td><td>Segundos entre consultas.</td></tr>
+<tr><td><code>inherit_environment</code></td><td>true</td><td>Usa <code>-V</code>.</td></tr>
+<tr><td><code>block</code></td><td>true, obrigatório</td><td>Execução PBS não bloqueante é rejeitada.</td></tr>
+</tbody></table></section>
+
+<section id="templates"><h2>9. Templates e regras úteis</h2>
+<p>Strings em <code>argv</code>, <code>cwd</code>, <code>env</code>, PBS, inputs e outputs podem usar <code>{nome}</code>. Para escrever chaves literais, use <code>{{</code> e <code>}}</code>.</p>
+<div class="callout"><strong>Validação estrita:</strong> typo em nome de campo não é ignorado. O YAML falha cedo, que é exatamente o comportamento desejado em pipelines científicos.</div>
+<p>Para aprender por exemplos, volte ao <a href="../tutorial/workflows.html">tutorial de workflows</a> ou ao <a href="../tutorial/cycles.html">tutorial de ciclos</a>.</p></section>
+</article></div></main><footer><div class="inner">Referência YAML derivada do schema validado pelo código do simpleWorkflow.</div></footer></body></html>
