@@ -302,3 +302,139 @@ def test_running_attempt_discovers_nested_pbs_resources_from_declared_json(
     assert details["submission state"] == "submitted"
     assert details["PBS script"] == str(script)
     assert details["run directory"] == str(run_dir)
+
+
+
+def test_structured_manifest_prefers_explicit_streams_over_script_fallback(
+    tmp_path: Path,
+) -> None:
+    attempt_dir = tmp_path / "attempt-001"
+    attempt_dir.mkdir()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    script = run_dir / "job.pbs"
+    script.write_text(
+        "app > inferred.out 2> inferred.err\n",
+        encoding="utf-8",
+    )
+    explicit_out = run_dir / "explicit.out"
+    explicit_err = run_dir / "explicit.err"
+    explicit_out.write_text("out\n", encoding="utf-8")
+    explicit_err.write_text("err\n", encoding="utf-8")
+    manifest = run_dir / "submission.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "run_dir": str(run_dir),
+                "pbs_file": str(script),
+                "job_id": "1.cluster",
+                "stdout": str(explicit_out),
+                "stderr": str(explicit_err),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (attempt_dir / "started.json").write_text(
+        json.dumps(
+            {
+                "command": {"argv": ["driver"], "cwd": str(tmp_path), "env": {}},
+                "artifacts": {
+                    "inputs": {"required": [], "optional": []},
+                    "outputs": {"required": [str(manifest)], "checks": []},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    attempt = AttemptSnapshot(
+        run_id="run-1",
+        task_name="wait",
+        cycle_id=None,
+        attempt=1,
+        status="running",
+        return_code=None,
+        reason=None,
+        directory=attempt_dir,
+        started_at=None,
+        finished_at=None,
+    )
+    resources = discover_attempt_resources(
+        TaskSnapshot(name="wait", status="running", attempts=(attempt,)),
+        attempt,
+        {},
+    )
+
+    stdout_rows = [r for r in resources if r.key == "pbs_stdout"]
+    stderr_rows = [r for r in resources if r.key == "pbs_stderr"]
+    assert [r.path for r in stdout_rows] == [explicit_out]
+    assert [r.path for r in stderr_rows] == [explicit_err]
+
+
+def test_pbs_redirect_discovery_accepts_compact_and_append_forms(
+    tmp_path: Path,
+) -> None:
+    attempt_dir = tmp_path / "attempt-001"
+    attempt_dir.mkdir()
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    script = run_dir / "job.pbs"
+    script.write_text(
+        "app 1>>stdout.log 2>stderr.log\n",
+        encoding="utf-8",
+    )
+    stdout = run_dir / "stdout.log"
+    stderr = run_dir / "stderr.log"
+    stdout.write_text("out\n", encoding="utf-8")
+    stderr.write_text("err\n", encoding="utf-8")
+    manifest = run_dir / "submission.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "run_dir": str(run_dir),
+                "pbs_file": str(script),
+                "job_id": "2.cluster",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (attempt_dir / "started.json").write_text(
+        json.dumps(
+            {
+                "command": {"argv": ["driver"], "cwd": str(tmp_path), "env": {}},
+                "artifacts": {
+                    "inputs": {"required": [], "optional": []},
+                    "outputs": {"required": [str(manifest)], "checks": []},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    attempt = AttemptSnapshot(
+        run_id="run-1",
+        task_name="wait",
+        cycle_id=None,
+        attempt=1,
+        status="running",
+        return_code=None,
+        reason=None,
+        directory=attempt_dir,
+        started_at=None,
+        finished_at=None,
+    )
+    resources = discover_attempt_resources(
+        TaskSnapshot(name="wait", status="running", attempts=(attempt,)),
+        attempt,
+        {},
+    )
+    by_key = {resource.key: resource for resource in resources}
+
+    assert by_key["pbs_stdout"].path == stdout
+    assert by_key["pbs_stderr"].path == stderr
