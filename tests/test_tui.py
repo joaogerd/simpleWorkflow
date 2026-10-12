@@ -122,6 +122,98 @@ def test_status_refresh_preserves_workflow_tree_nodes_and_position(tmp_path: Pat
 
     asyncio.run(scenario())
 
+
+def test_running_handoff_follows_next_cycle_automatically(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: MONAN-JEDI M3\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    _persist_campaign(workflow, workdir)
+
+    app = WorkflowTui(
+        config=_config(workflow),
+        workflow_path=workflow,
+        workdir=workdir,
+        refresh_seconds=60.0,
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 35)) as pilot:
+            await pilot.pause()
+
+            assert app.selected_cycle_id == "2018041506"
+            assert app.selected_task == "analysis"
+            assert app._selected_task_snapshot() is not None
+            assert app._selected_task_snapshot().status == "running"
+
+            state = WorkflowState(
+                workdir / "state.sqlite3",
+                workflow_name="MONAN-JEDI M3",
+                source_path=workflow,
+            )
+            state.set_status("analysis", "success", 0, cycle_id="2018041506")
+            state.set_status("forecast", "success", 0, cycle_id="2018041506")
+            state.set_status("prepare", "running", None, cycle_id="2018041512")
+            state.close()
+
+            app.refresh_runtime()
+            await pilot.pause()
+
+            assert app.selected_cycle_id == "2018041512"
+            assert app.selected_task == "prepare"
+            selected = app._selected_task_snapshot()
+            assert selected is not None
+            assert selected.status == "running"
+            assert ("2018041512", "prepare") in app.task_nodes
+
+    asyncio.run(scenario())
+
+
+def test_manual_completed_selection_does_not_auto_follow_running_task(
+    tmp_path: Path,
+) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: MONAN-JEDI M3\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    _persist_campaign(workflow, workdir)
+
+    app = WorkflowTui(
+        config=_config(workflow),
+        workflow_path=workflow,
+        workdir=workdir,
+        refresh_seconds=60.0,
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 35)) as pilot:
+            await pilot.pause()
+
+            app.selected_cycle_id = "2018041500"
+            app.selected_task = "forecast"
+            app._tree_signature = None
+            app._rebuild_tree(force=True)
+
+            selected = app._selected_task_snapshot()
+            assert selected is not None
+            assert selected.status == "success"
+
+            state = WorkflowState(
+                workdir / "state.sqlite3",
+                workflow_name="MONAN-JEDI M3",
+                source_path=workflow,
+            )
+            state.set_status("analysis", "success", 0, cycle_id="2018041506")
+            state.set_status("forecast", "success", 0, cycle_id="2018041506")
+            state.set_status("prepare", "running", None, cycle_id="2018041512")
+            state.close()
+
+            app.refresh_runtime()
+            await pilot.pause()
+
+            assert app.selected_cycle_id == "2018041500"
+            assert app.selected_task == "forecast"
+
+    asyncio.run(scenario())
+
 def test_number_keys_select_exactly_five_operational_tabs(tmp_path: Path) -> None:
     workflow = tmp_path / "workflow.yaml"
     workflow.write_text("workflow:\n  name: MONAN-JEDI M3\n", encoding="utf-8")
