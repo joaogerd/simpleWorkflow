@@ -693,6 +693,9 @@ class WorkflowTui(App[None]):
             if running is not None:
                 return cycle.cycle_id, running.name
 
+        if self.snapshot.cycles:
+            return None
+
         running = next(
             (task for task in self.snapshot.tasks if task.status == "running"),
             None,
@@ -751,6 +754,7 @@ class WorkflowTui(App[None]):
         self.selected_cycle_id = cycle.cycle_id
         self.selected_task = self._preferred_task(cycle.tasks)
         self.selected_log_key = None
+        self._auto_follow_running = False
         self._tree_signature = None
         if switch_to_monitor:
             self.query_one("#views", TabbedContent).active = "monitor"
@@ -1215,6 +1219,17 @@ class WorkflowTui(App[None]):
             return
         self._select_cycle(ids[target])
 
+    def _sync_tree_selection(self) -> None:
+        """Align the Tree cursor with the current logical selection."""
+        if self.selected_task is None:
+            return
+        tree = self.query_one("#task-tree", Tree)
+        node = self.task_nodes.get((self.selected_cycle_id, self.selected_task))
+        if node is None:
+            node = self.task_nodes.get((None, self.selected_task))
+        if node is not None and tree.cursor_node is not node:
+            tree.select_node(node)
+
     def _focus_active_view(self) -> None:
         views = self.query_one("#views", TabbedContent)
         active = views.active or "monitor"
@@ -1438,6 +1453,7 @@ class WorkflowTui(App[None]):
         else:
             self._follow_running_handoff()
         self._rebuild_tree(force=force)
+        self._sync_tree_selection()
         self._refresh_header()
         if self.cycle_mode:
             self._refresh_date_nav()
