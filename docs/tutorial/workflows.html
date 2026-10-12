@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="pt-BR"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark"><title>Construindo workflows — simpleWorkflow</title>
+<link rel="stylesheet" href="../assets/site.css"></head><body>
+<nav class="site-nav"><div class="inner"><a class="brand" href="../">simple<span>Workflow</span></a>
+<div class="nav-links"><a href="./">Tutorial</a><a href="install.html">Instalação</a><a class="active" href="workflows.html">Workflows</a><a href="cycles.html">Ciclos</a><a href="../reference/yaml.html">Referência</a><a class="optional" href="showcase.html">Galeria</a></div></div></nav>
+<header class="hero"><div class="inner"><div class="eyebrow">Tutorial intermediário</div><h1>De uma tarefa<br>a um workflow real.</h1><p>Aprenda o significado das palavras-chave mais usadas e monte um workflow com dependências, contexto, ambiente, entradas, saídas e validação.</p></div></header>
+<main><div class="layout"><aside class="toc"><strong>Neste tutorial</strong><a href="#estrutura">Estrutura</a><a href="#tasks">Tasks e argv</a><a href="#depends">Dependências</a><a href="#context">Context</a><a href="#cwd-env">cwd e env</a><a href="#artifacts">Inputs/outputs</a><a href="#checks">Checks</a><a href="#reuse">Reuso</a><a href="#exemplo">Exemplo completo</a></aside>
+<article>
+<section id="estrutura"><h2>1. Estrutura de um arquivo</h2><pre><code>format_version: 1
+
+workflow:
+  name: exemplo
+
+context:
+  python: python
+
+tasks:
+  - name: prepare
+    argv: ["{python}", "-c", "print('prepare')"]</code></pre>
+<table><thead><tr><th>Palavra-chave</th><th>O que significa</th></tr></thead><tbody>
+<tr><td><code>format_version</code></td><td>Versão do formato YAML. Atualmente deve ser <code>1</code>.</td></tr>
+<tr><td><code>workflow.name</code></td><td>Nome humano e persistente deste workflow.</td></tr>
+<tr><td><code>context</code></td><td>Valores reutilizáveis que podem aparecer como <code>{placeholder}</code>.</td></tr>
+<tr><td><code>tasks</code></td><td>Lista das tarefas normais do workflow.</td></tr>
+</tbody></table></section>
+
+<section id="tasks"><h2>2. <code>name</code> e <code>argv</code></h2><p>Cada tarefa precisa de um nome único e de uma lista <code>argv</code>.</p>
+<pre><code>- name: convert
+  argv:
+    - python
+    - convert.py
+    - --input
+    - data/raw.csv
+    - --output
+    - data/clean.csv</code></pre>
+<p>Cada item de <code>argv</code> é <strong>um argumento exato</strong>. Não é uma linha de shell. Isso evita ambiguidades com aspas, pipes e redirecionamento.</p>
+<div class="callout warn"><code>run: "python convert.py ..."</code> não é suportado. Se precisar de shell, chame explicitamente um script versionado em <code>argv</code>.</div></section>
+
+<section id="depends"><h2>3. Dependências com <code>depends_on</code></h2>
+<pre><code>tasks:
+  - name: prepare
+    argv: [python, prepare.py]
+
+  - name: process
+    depends_on: [prepare]
+    argv: [python, process.py]
+
+  - name: report
+    depends_on: [process]
+    argv: [python, report.py]</code></pre>
+<p>O simpleWorkflow executa a cadeia na ordem válida. Uma dependência falha bloqueia o downstream em vez de executá-lo silenciosamente.</p></section>
+
+<section id="context"><h2>4. Reutilizando valores com <code>context</code></h2>
+<pre><code>context:
+  python: /usr/bin/python3
+  case_dir: work/case01
+
+tasks:
+  - name: prepare
+    argv: ["{python}", prepare.py, "{case_dir}"]</code></pre>
+<p>Placeholders podem ser usados em <code>argv</code>, <code>cwd</code>, <code>env</code>, PBS, inputs e outputs. Placeholder desconhecido causa erro antes da execução.</p></section>
+
+<section id="cwd-env"><h2>5. Diretório e ambiente: <code>cwd</code> e <code>env</code></h2>
+<pre><code>- name: model
+  cwd: work
+  env:
+    OMP_NUM_THREADS: "4"
+    CASE_NAME: "{case_name}"
+  argv: [python, ../scripts/model.py]</code></pre>
+<p><code>cwd</code> relativo é interpretado a partir do diretório do YAML. <code>env</code> adiciona variáveis específicas daquela tarefa; nomes e valores devem ser strings válidas.</p></section>
+
+<section id="artifacts"><h2>6. Contratos de entrada e saída</h2>
+<pre><code>- name: process
+  argv: [python, process.py]
+  inputs:
+    required:
+      - data/input.nc
+    optional:
+      - data/obs/*.nc4
+  outputs:
+    required:
+      - data/output.nc</code></pre>
+<p><code>inputs.required</code> precisa existir antes da execução. <code>inputs.optional</code> pode usar glob e pode não encontrar nada. <code>outputs.required</code> precisa existir depois que o processo terminar com sucesso.</p>
+<p>Falhas nesses contratos produzem <code>invalid-input</code> ou <code>invalid-output</code>, que aparecem claramente na TUI.</p></section>
+
+<section id="checks"><h2>7. Validando melhor uma saída</h2>
+<pre><code>outputs:
+  required:
+    - data/output.nc
+  checks:
+    - path: data/output.nc
+      kind: file
+      nonempty: true
+      min_size: 1024</code></pre>
+<p>Os checks genéricos verificam tipo, conteúdo vazio e tamanho mínimo. Validação científica específica deve permanecer em um programa ou tarefa versionada, não embutida no orquestrador.</p></section>
+
+<section id="reuse"><h2>8. Reuso, fingerprint e <code>--force</code></h2>
+<p>Por padrão, entradas declaradas usam fingerprint <code>metadata</code> (caminho, tamanho e modificação). Para dados críticos menores:</p>
+<pre><code>input_fingerprint: sha256</code></pre>
+<p>Uma tarefa bem-sucedida pode ser reutilizada quando assinatura e contratos continuam válidos. Para executar novamente deliberadamente:</p>
+<pre><code>swf run workflow.yaml --force</code></pre></section>
+
+<section id="exemplo"><h2>9. Exemplo completo</h2>
+<pre><code>format_version: 1
+
+workflow:
+  name: processamento_exemplo
+
+context:
+  python: python
+  work: work
+
+tasks:
+  - name: prepare
+    argv:
+      - "{python}"
+      - -c
+      - "from pathlib import Path; Path('{work}').mkdir(exist_ok=True); Path('{work}/input.txt').write_text('dados')"
+    outputs:
+      required: ["{work}/input.txt"]
+
+  - name: process
+    depends_on: [prepare]
+    argv:
+      - "{python}"
+      - -c
+      - "from pathlib import Path; p=Path('{work}/input.txt'); Path('{work}/output.txt').write_text(p.read_text().upper())"
+    inputs:
+      required: ["{work}/input.txt"]
+    outputs:
+      required: ["{work}/output.txt"]
+      checks:
+        - path: "{work}/output.txt"
+          kind: file
+          nonempty: true
+
+  - name: report
+    depends_on: [process]
+    argv: ["{python}", "-c", "print(open('{work}/output.txt').read())"]</code></pre>
+<pre><code>swf validate workflow.yaml
+swf plan workflow.yaml
+swf run workflow.yaml --ui tui</code></pre>
+<div class="callout good"><strong>Próximo:</strong> <a href="cycles.html">transforme este modelo em uma campanha com initialization e ciclos</a>.</div></section>
+</article></div></main><footer><div class="inner">Tutorial de construção de workflows · consulte a <a href="../reference/yaml.html">referência YAML</a> para todos os campos.</div></footer></body></html>

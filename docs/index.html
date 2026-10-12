@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>simpleWorkflow — Documentação</title>
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+<nav class="site-nav"><div class="inner">
+  <a class="brand" href="./">simple<span>Workflow</span></a>
+  <div class="nav-links">
+    <a href="tutorial/">Tutorial</a>
+    <a href="tutorial/workflows.html">Workflows</a>
+    <a href="tutorial/cycles.html">Ciclos</a>
+    <a href="reference/yaml.html">Referência</a>
+    <a class="optional" href="tutorial/showcase.html">Galeria</a>
+  </div>
+</div></nav>
+<header class="hero"><div class="inner">
+  <div class="eyebrow">Workflow simples, estado persistente, diagnóstico claro</div>
+  <h1>Comece simples.<br>Entenda tudo.</h1>
+  <p>simpleWorkflow executa workflows YAML locais ou PBS com dependências, estado persistente, logs por tentativa e uma TUI de monitoramento — sem servidor, daemon ou plataforma central.</p>
+  <div class="actions">
+    <a class="button primary" href="tutorial/">Começar pelo tutorial</a>
+    <a class="button" href="tutorial/showcase.html">Ver a TUI em ação</a>
+  </div>
+</div></header>
+<main>
+  <div class="cards">
+    <div class="card"><h3>Começar do zero</h3><p>Instalação correta, primeiro <code>workflow.yaml</code>, validação, planejamento e execução.</p><p style="margin-top:14px"><a href="tutorial/">Tutorial básico →</a></p></div>
+    <div class="card"><h3>Construir workflows</h3><p>Dependências, contexto, ambiente, inputs, outputs, checks e reuso.</p><p style="margin-top:14px"><a href="tutorial/workflows.html">Tutorial de workflows →</a></p></div>
+    <div class="card"><h3>Ciclos e campanhas</h3><p>Initialization, intervalos temporais, contexto automático e <code>cycle_scope</code>.</p><p style="margin-top:14px"><a href="tutorial/cycles.html">Tutorial de campanhas →</a></p></div>
+    <div class="card"><h3>Referência completa</h3><p>Todas as palavras-chave YAML, comandos e opções da CLI.</p><p style="margin-top:14px"><a href="reference/yaml.html">Abrir referência →</a></p></div>
+  </div>
+  <section style="margin-top:46px">
+    <h2>O fluxo mental é pequeno</h2>
+    <div class="grid-2">
+      <div class="card"><h3>1. Descreva</h3><p>Liste tarefas e dependências em YAML usando argumentos explícitos em <code>argv</code>.</p></div>
+      <div class="card"><h3>2. Valide</h3><p>Use <code>swf validate</code> e <code>swf plan</code> antes de executar.</p></div>
+      <div class="card"><h3>3. Execute</h3><p><code>swf run</code> usa TUI no terminal interativo ou saída compacta em batch/CI.</p></div>
+      <div class="card"><h3>4. Diagnostique</h3><p>Estado, tentativas, stdout/stderr e problemas permanecem em <code>.simpleworkflow/</code>.</p></div>
+    </div>
+  </section>
+</main>
+<footer><div class="inner">simpleWorkflow — documentação de usuário e referência visual.</div></footer>
+</body></html>

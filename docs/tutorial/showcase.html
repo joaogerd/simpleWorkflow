@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Galeria TUI — simpleWorkflow</title>
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<nav class="site-nav"><div class="inner">
+  <a class="brand" href="../">simple<span>Workflow</span></a>
+  <div class="nav-links">
+    <a href="./">Tutorial</a>
+    <a href="workflows.html">Workflows</a>
+    <a href="cycles.html">Ciclos</a>
+    <a href="../reference/yaml.html">Referência</a>
+    <a class="active optional" href="showcase.html">Galeria</a>
+  </div>
+</div></nav>
+<header class="hero"><div class="inner">
+  <div class="eyebrow">Capturas reproduzíveis da interface</div>
+  <h1>TUI Showcase</h1>
+  <p>Do workflow mínimo a ciclos, contratos e diagnóstico de falhas. As capturas são geradas a partir de exemplos executáveis do próprio repositório.</p>
+  <div class="actions"><a class="button primary" href="./">Ler o tutorial</a><a class="button" href="#01-minimal">Ver as telas</a></div>
+</div></header>
+<main>
+<div class="callout"><strong>Nota:</strong> esta página e os SVGs são reconstruídos por <code>python scripts/capture_tui_showcase.py</code>. No GitHub Pages, o workflow de publicação executa esse passo automaticamente.</div>
+
+<section id="01-minimal" class="case"><div class="case-heading"><span class="case-number">01</span><div><h2>Minimal</h2><p class="muted">O menor exemplo útil: um workflow, uma tarefa e o Monitor.</p></div></div><div class="shots"><figure class="shot"><a href="tui-showcase/01-minimal-monitor.svg"><img src="tui-showcase/01-minimal-monitor.svg" alt="Minimal — monitor"></a><figcaption><strong>Monitor</strong><span>Workflow + Inspector</span></figcaption></figure></div></section>
+
+<section id="02-workflow" class="case"><div class="case-heading"><span class="case-number">02</span><div><h2>Standard workflow</h2><p class="muted">Dependências, várias tarefas, stdout/stderr e uma tarefa opcional.</p></div></div><div class="shots"><figure class="shot"><a href="tui-showcase/02-workflow-monitor.svg"><img src="tui-showcase/02-workflow-monitor.svg" alt="Standard workflow — monitor"></a><figcaption><strong>Monitor</strong><span>Dependências</span></figcaption></figure><figure class="shot"><a href="tui-showcase/02-workflow-logs.svg"><img src="tui-showcase/02-workflow-logs.svg" alt="Standard workflow — logs"></a><figcaption><strong>Logs</strong><span>stdout/stderr</span></figcaption></figure></div></section>
+
+<section id="03-artifacts" class="case"><div class="case-heading"><span class="case-number">03</span><div><h2>Artifacts and contracts</h2><p class="muted">Entradas, saídas, checks, ambiente, cwd e estado reutilizável.</p></div></div><div class="shots"><figure class="shot"><a href="tui-showcase/03-artifacts-monitor.svg"><img src="tui-showcase/03-artifacts-monitor.svg" alt="Artifacts — monitor"></a><figcaption><strong>Monitor</strong><span>Contratos</span></figcaption></figure><figure class="shot"><a href="tui-showcase/03-artifacts-logs.svg"><img src="tui-showcase/03-artifacts-logs.svg" alt="Artifacts — logs"></a><figcaption><strong>Logs</strong><span>Execução</span></figcaption></figure></div></section>
+
+<section id="04-campaign" class="case"><div class="case-heading"><span class="case-number">04</span><div><h2>Generic campaign</h2><p class="muted">Inicialização, quatro ciclos, navegação e visão de campanha.</p></div></div><div class="shots"><figure class="shot"><a href="tui-showcase/04-campaign-monitor.svg"><img src="tui-showcase/04-campaign-monitor.svg" alt="Campaign — monitor"></a><figcaption><strong>Monitor</strong><span>Ciclo selecionado</span></figcaption></figure><figure class="shot"><a href="tui-showcase/04-campaign-cycles.svg"><img src="tui-showcase/04-campaign-cycles.svg" alt="Campaign — ciclos"></a><figcaption><strong>Ciclos</strong><span>Matriz operacional</span></figcaption></figure><figure class="shot"><a href="tui-showcase/04-campaign-campaign.svg"><img src="tui-showcase/04-campaign-campaign.svg" alt="Campaign — campanha"></a><figcaption><strong>Campanha</strong><span>Resumo por dia</span></figcaption></figure><figure class="shot"><a href="tui-showcase/04-campaign-logs.svg"><img src="tui-showcase/04-campaign-logs.svg" alt="Campaign — logs"></a><figcaption><strong>Logs</strong><span>Saída por tentativa</span></figcaption></figure></div></section>
+
+<section id="05-problems" class="case"><div class="case-heading"><span class="case-number">05</span><div><h2>Failure diagnosis</h2><p class="muted">Falha deliberada, Problems e evidência em log.</p></div></div><div class="shots"><figure class="shot"><a href="tui-showcase/05-problems-monitor.svg"><img src="tui-showcase/05-problems-monitor.svg" alt="Problems — monitor"></a><figcaption><strong>Monitor</strong><span>Falha</span></figcaption></figure><figure class="shot"><a href="tui-showcase/05-problems-problems.svg"><img src="tui-showcase/05-problems-problems.svg" alt="Problems — problemas"></a><figcaption><strong>Problemas</strong><span>Diagnóstico</span></figcaption></figure><figure class="shot"><a href="tui-showcase/05-problems-logs.svg"><img src="tui-showcase/05-problems-logs.svg" alt="Problems — logs"></a><figcaption><strong>Logs</strong><span>Evidência</span></figcaption></figure></div></section>
+
+<section id="06-invalid-input" class="case"><div class="case-heading"><span class="case-number">06</span><div><h2>Invalid input</h2><p class="muted">Entrada obrigatória ausente antes do processo iniciar.</p></div></div><div class="shots"><figure class="shot"><a href="tui-showcase/06-invalid-input-monitor.svg"><img src="tui-showcase/06-invalid-input-monitor.svg" alt="Invalid input — monitor"></a><figcaption><strong>Monitor</strong><span>Contrato de entrada</span></figcaption></figure><figure class="shot"><a href="tui-showcase/06-invalid-input-problems.svg"><img src="tui-showcase/06-invalid-input-problems.svg" alt="Invalid input — problemas"></a><figcaption><strong>Problemas</strong><span>invalid-input</span></figcaption></figure></div></section>
+
+<section id="07-invalid-output" class="case"><div class="case-heading"><span class="case-number">07</span><div><h2>Invalid output</h2><p class="muted">Processo termina, mas viola o contrato de saída.</p></div></div><div class="shots"><figure class="shot"><a href="tui-showcase/07-invalid-output-monitor.svg"><img src="tui-showcase/07-invalid-output-monitor.svg" alt="Invalid output — monitor"></a><figcaption><strong>Monitor</strong><span>Contrato de saída</span></figcaption></figure><figure class="shot"><a href="tui-showcase/07-invalid-output-problems.svg"><img src="tui-showcase/07-invalid-output-problems.svg" alt="Invalid output — problemas"></a><figcaption><strong>Problemas</strong><span>invalid-output</span></figcaption></figure></div></section>
+
+<section id="08-blocked" class="case"><div class="case-heading"><span class="case-number">08</span><div><h2>Blocked dependency</h2><p class="muted">Uma dependência indisponível deixa a tarefa seguinte bloqueada.</p></div></div><div class="shots"><figure class="shot"><a href="tui-showcase/08-blocked-monitor.svg"><img src="tui-showcase/08-blocked-monitor.svg" alt="Blocked — monitor"></a><figcaption><strong>Monitor</strong><span>Dependência</span></figcaption></figure><figure class="shot"><a href="tui-showcase/08-blocked-problems.svg"><img src="tui-showcase/08-blocked-problems.svg" alt="Blocked — problemas"></a><figcaption><strong>Problemas</strong><span>blocked</span></figcaption></figure></div></section>
+
+<section id="09-timeout" class="case"><div class="case-heading"><span class="case-number">09</span><div><h2>Timeout</h2><p class="muted">Uma tarefa local excede seu limite de tempo.</p></div></div><div class="shots"><figure class="shot"><a href="tui-showcase/09-timeout-monitor.svg"><img src="tui-showcase/09-timeout-monitor.svg" alt="Timeout — monitor"></a><figcaption><strong>Monitor</strong><span>Timeout</span></figcaption></figure><figure class="shot"><a href="tui-showcase/09-timeout-problems.svg"><img src="tui-showcase/09-timeout-problems.svg" alt="Timeout — problemas"></a><figcaption><strong>Problemas</strong><span>Motivo persistido</span></figcaption></figure><figure class="shot"><a href="tui-showcase/09-timeout-logs.svg"><img src="tui-showcase/09-timeout-logs.svg" alt="Timeout — logs"></a><figcaption><strong>Logs</strong><span>Evidência</span></figcaption></figure></div></section>
+</main>
+<footer><div class="inner">Galeria reproduzível da TUI do simpleWorkflow. Clique em qualquer captura para abrir o SVG original.</div></footer>
+</body></html>

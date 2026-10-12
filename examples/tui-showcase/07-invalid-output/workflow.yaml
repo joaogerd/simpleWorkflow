@@ -1,0 +1,18 @@
+format_version: 1
+
+workflow:
+  name: tui_invalid_output_demo
+
+context:
+  python: python
+  work: invalid-output-work
+
+tasks:
+  - name: claims_output_but_does_not_create_it
+    argv:
+      - "{python}"
+      - -c
+      - "from pathlib import Path; Path('{work}').mkdir(exist_ok=True); print('process returned 0 but required output will be absent')"
+    outputs:
+      required:
+        - "{work}/expected.txt"

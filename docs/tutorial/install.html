@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="pt-BR"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark"><title>Instalação — simpleWorkflow</title>
+<link rel="stylesheet" href="../assets/site.css"></head><body>
+<nav class="site-nav"><div class="inner"><a class="brand" href="../">simple<span>Workflow</span></a>
+<div class="nav-links"><a href="./">Tutorial</a><a class="active" href="install.html">Instalação</a><a href="workflows.html">Workflows</a><a href="cycles.html">Ciclos</a><a href="../reference/yaml.html">Referência</a><a class="optional" href="showcase.html">Galeria</a></div></div></nav>
+<header class="hero"><div class="inner"><div class="eyebrow">Primeiro passo</div><h1>Instalação correta,<br>do zero.</h1>
+<p>O simpleWorkflow é desenvolvido no GitHub. Enquanto a distribuição via índice de pacotes não for a fonte oficial de instalação, o caminho documentado deve partir do repositório.</p></div></header>
+<main><div class="layout"><aside class="toc"><strong>Nesta página</strong><a href="#requisitos">Requisitos</a><a href="#ambiente">Ambiente virtual</a><a href="#clone">Baixar</a><a href="#instalar">Instalar</a><a href="#verificar">Verificar</a><a href="#atualizar">Atualizar</a><a href="#desenvolvimento">Desenvolvimento</a></aside>
+<article>
+<section id="requisitos"><h2>1. Requisitos</h2><p>Você precisa de <strong>Python 3.10 ou superior</strong>, <strong>Git</strong> e acesso ao terminal.</p>
+<pre><code>python3 --version
+git --version</code></pre>
+<div class="callout warn"><strong>Não comece por</strong> <code>pip install simpleworkflow[tui]</code> a menos que uma distribuição oficial em índice de pacotes esteja publicada e documentada. Para o estado atual do projeto, use o repositório GitHub.</div></section>
+
+<section id="ambiente"><h2>2. Crie um ambiente Python isolado</h2><p>É recomendado instalar a ferramenta em um ambiente virtual para não misturar dependências com o Python do sistema.</p>
+<pre><code>python3 -m venv ~/.venvs/simpleworkflow
+source ~/.venvs/simpleworkflow/bin/activate
+python -m pip install --upgrade pip</code></pre>
+<p>Quando o ambiente estiver ativo, o prompt normalmente mostra algo como <code>(simpleworkflow)</code>.</p></section>
+
+<section id="clone"><h2>3. Baixe o repositório</h2>
+<pre><code>git clone https://github.com/joaogerd/simpleWorkflow.git
+cd simpleWorkflow</code></pre>
+<p>Se você já possui o repositório, entre nele e atualize:</p>
+<pre><code>git pull</code></pre></section>
+
+<section id="instalar"><h2>4. Instale o simpleWorkflow</h2>
+<p>Para uso normal com a interface TUI:</p>
+<pre><code>python -m pip install ".[tui]"</code></pre>
+<p>Isso instala o pacote a partir do diretório que você acabou de clonar, incluindo Textual e Rich para a interface de terminal.</p>
+<div class="callout good"><strong>Resultado esperado:</strong> os comandos <code>swf</code> e <code>simpleworkflow</code> passam a existir dentro do ambiente Python ativo.</div></section>
+
+<section id="verificar"><h2>5. Verifique antes de continuar</h2>
+<pre><code>swf --help
+swf validate examples/hello.yaml
+swf plan examples/hello.yaml</code></pre>
+<p>Se esses comandos funcionarem, a instalação está pronta. Você pode seguir para o <a href="./">tutorial básico</a>.</p></section>
+
+<section id="atualizar"><h2>6. Como atualizar</h2><p>Como a instalação veio do checkout local, atualize o código e reinstale quando necessário:</p>
+<pre><code>cd /caminho/para/simpleWorkflow
+git pull
+python -m pip install ".[tui]"</code></pre></section>
+
+<section id="desenvolvimento"><h2>7. Instalação para desenvolvimento</h2><p>Quem vai modificar o código deve usar instalação editável com as dependências de desenvolvimento:</p>
+<pre><code>python -m pip install -e ".[dev]"</code></pre>
+<p>Nesse modo, mudanças no código-fonte são usadas imediatamente, sem reinstalar o pacote a cada edição.</p>
+<div class="callout"><strong>Próximo:</strong> <a href="workflows.html">aprenda como um workflow é construído</a> e o significado das principais palavras-chave YAML.</div></section>
+</article></div></main>
+<footer><div class="inner">Instalação oficial documentada a partir do repositório GitHub.</div></footer>
+</body></html>

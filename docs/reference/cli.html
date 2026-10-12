@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="pt-BR"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark"><title>Referência CLI — simpleWorkflow</title>
+<link rel="stylesheet" href="../assets/site.css"></head><body>
+<nav class="site-nav"><div class="inner"><a class="brand" href="../">simple<span>Workflow</span></a>
+<div class="nav-links"><a href="../tutorial/">Tutorial</a><a href="../tutorial/workflows.html">Workflows</a><a href="../tutorial/cycles.html">Ciclos</a><a href="yaml.html">YAML</a><a class="active" href="cli.html">CLI</a><a class="optional" href="../tutorial/showcase.html">Galeria</a></div></div></nav>
+<header class="hero"><div class="inner"><div class="eyebrow">Referência completa</div><h1>Comandos e opções CLI.</h1><p>O que cada subcomando faz, quando altera estado e quais opções aceita.</p></div></header>
+<main><div class="layout"><aside class="toc"><strong>Comandos</strong><a href="#overview">Visão geral</a><a href="#run">run</a><a href="#plan">plan</a><a href="#validate">validate</a><a href="#status">status</a><a href="#explain">explain</a><a href="#reset">reset</a><a href="#monitor">monitor</a><a href="#capture">capture-tui</a><a href="#migrate">migrate</a><a href="#common">Opções comuns</a></aside>
+<article>
+<section id="overview"><h2>1. Visão geral</h2>
+<table><thead><tr><th>Comando</th><th>Objetivo</th><th>Cria/altera estado?</th></tr></thead><tbody>
+<tr><td><code>run</code></td><td>Executar tarefas.</td><td>Sim, exceto <code>--dry-run</code>.</td></tr>
+<tr><td><code>plan</code></td><td>Mostrar o plano e ordem de execução.</td><td>Não.</td></tr>
+<tr><td><code>validate</code></td><td>Validar YAML e seleção.</td><td>Não.</td></tr>
+<tr><td><code>status</code></td><td>Ler estado persistido.</td><td>Não.</td></tr>
+<tr><td><code>explain</code></td><td>Explicar estado/decisões de execução.</td><td>Não.</td></tr>
+<tr><td><code>reset</code></td><td>Limpar estado reutilizável atual.</td><td>Sim.</td></tr>
+<tr><td><code>monitor</code></td><td>Abrir TUI read-only sobre estado existente/configurado.</td><td>Não.</td></tr>
+<tr><td><code>capture-tui</code></td><td>Gerar screenshot SVG determinístico.</td><td>Não.</td></tr>
+<tr><td><code>migrate</code></td><td>Inspecionar/migrar banco de estado legado.</td><td>Somente sem <code>--check</code>.</td></tr>
+</tbody></table></section>
+
+<section id="run"><h2>2. <code>swf run</code></h2>
+<pre><code>swf run WORKFLOW [opções]</code></pre>
+<table><thead><tr><th>Opção</th><th>Significado</th></tr></thead><tbody>
+<tr><td><code>--force</code></td><td>Executa novamente tarefas que seriam reutilizadas.</td></tr>
+<tr><td><code>--dry-run</code></td><td>Renderiza/valida invocações sem criar estado de execução.</td></tr>
+<tr><td><code>--ui auto|tui|plain</code></td><td>Modo de apresentação. Default: <code>auto</code>.</td></tr>
+<tr><td><code>--task NAME</code></td><td>Seleciona uma tarefa e inclui suas dependências; repetível.</td></tr>
+</tbody></table></section>
+
+<section id="plan"><h2>3. <code>swf plan</code></h2><pre><code>swf plan workflow.yaml</code></pre><p>Mostra o que seria executado e a ordem de dependências. Aceita <code>--task</code> e opções de ciclo.</p></section>
+
+<section id="validate"><h2>4. <code>swf validate</code></h2><pre><code>swf validate workflow.yaml</code></pre><p>Valida schema, dependências, templates e seleção. Deve ser o primeiro comando usado após editar o YAML.</p></section>
+
+<section id="status"><h2>5. <code>swf status</code></h2><pre><code>swf status workflow.yaml</code></pre><p>Lê o estado persistido, se existir, sem executar nada.</p></section>
+
+<section id="explain"><h2>6. <code>swf explain</code></h2><pre><code>swf explain workflow.yaml</code></pre><p>Fornece explicação operacional sobre tarefas/estado e também aceita seleção de tarefas.</p></section>
+
+<section id="reset"><h2>7. <code>swf reset</code></h2><pre><code>swf reset workflow.yaml</code></pre><p>Limpa estado reutilizável atual para permitir nova execução. Histórico de runs/attempts é preservado.</p>
+<div class="callout warn">Use reset com intenção clara. Para apenas executar novamente sem redefinir o estado atual, <code>run --force</code> costuma ser mais explícito.</div></section>
+
+<section id="monitor"><h2>8. <code>swf monitor</code></h2>
+<pre><code>swf monitor workflow.yaml
+swf monitor workflow.yaml --refresh-seconds 2</code></pre>
+<p>Abre o monitor read-only. <code>--refresh-seconds</code> controla o intervalo de atualização, default 1 segundo.</p></section>
+
+<section id="capture"><h2>9. <code>swf capture-tui</code></h2>
+<pre><code>swf capture-tui workflow.yaml \
+  --view monitor \
+  --size 140x45 \
+  --output monitor.svg</code></pre>
+<table><thead><tr><th>Opção</th><th>Valores</th></tr></thead><tbody>
+<tr><td><code>--view</code></td><td><code>monitor</code>, <code>cycles</code>, <code>campaign</code>, <code>problems</code>, <code>logs</code>.</td></tr>
+<tr><td><code>--size</code></td><td><code>COLSxROWS</code>; default <code>120x35</code>.</td></tr>
+<tr><td><code>--output PATH</code></td><td>Arquivo SVG de destino; obrigatório.</td></tr>
+</tbody></table></section>
+
+<section id="migrate"><h2>10. <code>swf migrate</code></h2>
+<pre><code>swf migrate workflow.yaml --check
+swf migrate workflow.yaml</code></pre>
+<table><thead><tr><th>Opção</th><th>Significado</th></tr></thead><tbody>
+<tr><td><code>--check</code></td><td>Inspeciona formato sem modificar o banco.</td></tr>
+<tr><td><code>--legacy-workflow INSTANCE</code></td><td>Seleciona uma instância legada quando o banco antigo é ambíguo.</td></tr>
+</tbody></table></section>
+
+<section id="common"><h2>11. Opções comuns</h2>
+<h3>Estado</h3><table><thead><tr><th>Opção</th><th>Significado</th></tr></thead><tbody>
+<tr><td><code>--workdir PATH</code></td><td>Diretório de estado. Default: <code>.simpleworkflow</code> ao lado do YAML. Caminho relativo explícito é resolvido do diretório corrente.</td></tr>
+<tr><td><code>--debug</code></td><td>Mostra traceback técnico.</td></tr>
+<tr><td><code>--color auto|always|never</code></td><td>Controle de cor do terminal.</td></tr>
+</tbody></table>
+
+<h3>Seleção de ciclos</h3><table><thead><tr><th>Opção</th><th>Significado</th></tr></thead><tbody>
+<tr><td><code>--cycle-time TIME</code></td><td>Seleciona um ciclo ISO-8601 explícito; repetível.</td></tr>
+<tr><td><code>--from TIME</code></td><td>Sobrescreve <code>cycle.start</code>.</td></tr>
+<tr><td><code>--to TIME</code></td><td>Sobrescreve <code>cycle.end</code>.</td></tr>
+<tr><td><code>--step DURATION</code></td><td>Sobrescreve o passo, ex. <code>PT6H</code>.</td></tr>
+</tbody></table>
+
+<h3>Exemplos práticos</h3>
+<pre><code># validar e planejar
+swf validate workflow.yaml
+swf plan workflow.yaml
+
+# rodar somente uma tarefa e suas dependências
+swf run workflow.yaml --task forecast
+
+# rodar um ciclo específico
+swf run workflow.yaml --cycle-time 2026-10-03T12:00:00Z
+
+# saída adequada para batch
+swf run workflow.yaml --ui plain --color never
+
+# observar de outro terminal
+swf monitor workflow.yaml</code></pre>
+<div class="callout">Para a sintaxe do arquivo, consulte a <a href="yaml.html">referência YAML</a>.</div></section>
+</article></div></main><footer><div class="inner">Referência CLI baseada no parser atual do simpleWorkflow.</div></footer></body></html>

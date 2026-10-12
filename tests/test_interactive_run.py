@@ -146,7 +146,7 @@ def test_tui_dry_run_is_rejected_without_creating_state(
     assert not (tmp_path / ".simpleworkflow").exists()
 
 
-def test_tui_run_keeps_engine_execution_on_main_thread(
+def test_tui_run_keeps_textual_on_main_thread_and_engine_in_worker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workflow = tmp_path / "workflow.yaml"
@@ -157,19 +157,23 @@ def test_tui_run_keeps_engine_execution_on_main_thread(
         "    argv: ['python', '-c', 'print(123)']\n",
         encoding="utf-8",
     )
-    observed_threads: list[threading.Thread] = []
+    engine_threads: list[threading.Thread] = []
+    monitor_threads: list[threading.Thread] = []
     original_run_plain = cli._run_plain
 
     def observed_run_plain(*args: object, **kwargs: object) -> int:
-        observed_threads.append(threading.current_thread())
+        engine_threads.append(threading.current_thread())
         return original_run_plain(*args, **kwargs)
 
-    def close_monitor(*args: object, **kwargs: object) -> None:
-        return None
+    def observed_monitor(*args: object, **kwargs: object) -> None:
+        monitor_threads.append(threading.current_thread())
 
     monkeypatch.setattr(cli, "tui_available", lambda: True)
     monkeypatch.setattr(cli, "_run_plain", observed_run_plain)
-    monkeypatch.setattr(cli, "_launch_monitor", close_monitor)
+    monkeypatch.setattr(cli, "_launch_monitor", observed_monitor)
 
     assert cli.main(["run", str(workflow), "--ui", "tui", "--color", "never"]) == 0
-    assert observed_threads == [threading.main_thread()]
+    assert monitor_threads == [threading.main_thread()]
+    assert len(engine_threads) == 1
+    assert engine_threads[0] is not threading.main_thread()
+    assert engine_threads[0].name.startswith("simpleworkflow-engine")

@@ -1,0 +1,95 @@
+format_version: 1
+
+workflow:
+  name: tui_generic_campaign
+
+context:
+  python: python
+  work: campaign-work
+
+initialization:
+  tasks:
+    - name: initialize_workspace
+      cwd: .
+      argv:
+        - "{python}"
+        - -c
+        - >-
+          from pathlib import Path; p=Path('{work}'); p.mkdir(exist_ok=True);
+          (p/'initialized.txt').write_text('ready\\n')
+      outputs:
+        required:
+          - "{work}/initialized.txt"
+
+cycle:
+  start: "2026-10-03T00:00:00Z"
+  end: "2026-10-03T18:00:00Z"
+  step: PT6H
+
+tasks:
+  - name: campaign_start
+    cwd: .
+    cycle_scope: first
+    argv:
+      - "{python}"
+      - -c
+      - "print('First cycle of the campaign:', '{cycle_time}')"
+
+  - name: ingest
+    cwd: .
+    argv:
+      - "{python}"
+      - -c
+      - >-
+        from pathlib import Path; p=Path('{work}/input_{cycle_yyyymmddhh}.txt');
+        p.write_text('cycle={cycle_time}\\nindex={cycle_index}\\n'); print('created', p)
+    inputs:
+      required:
+        - "{work}/initialized.txt"
+    outputs:
+      required:
+        - "{work}/input_{cycle_yyyymmddhh}.txt"
+
+  - name: process
+    cwd: .
+    depends_on: [ingest]
+    argv:
+      - "{python}"
+      - -c
+      - >-
+        from pathlib import Path; src=Path('{work}/input_{cycle_yyyymmddhh}.txt');
+        dst=Path('{work}/result_{cycle_yyyymmddhh}.txt');
+        dst.write_text(src.read_text()+'processed=true\\n'); print('processed {cycle_time}')
+    inputs:
+      required:
+        - "{work}/input_{cycle_yyyymmddhh}.txt"
+    outputs:
+      required:
+        - "{work}/result_{cycle_yyyymmddhh}.txt"
+
+  - name: compare_with_previous
+    cwd: .
+    cycle_scope: not_first
+    depends_on: [process]
+    argv:
+      - "{python}"
+      - -c
+      - "print('Previous cycle:', '{previous_cycle_time}', 'Current:', '{cycle_time}')"
+
+  - name: prepare_next
+    cwd: .
+    cycle_scope: not_last
+    depends_on: [process]
+    argv:
+      - "{python}"
+      - -c
+      - "print('Current:', '{cycle_time}', 'Next:', '{next_cycle_time}')"
+
+  - name: campaign_summary
+    cwd: .
+    cycle_scope: last
+    depends_on: [process]
+    argv:
+      - "{python}"
+      - -c
+      - "from pathlib import Path; files=sorted(Path('{work}').glob('result_*.txt')); print('Final campaign summary'); print('results:', len(files)); [print(' -', f.name) for f in files]"
