@@ -116,6 +116,7 @@ def test_status_refresh_preserves_workflow_tree_nodes_and_position(tmp_path: Pat
             assert app.task_group_nodes[("workflow", None, "Workflow")] is workflow_group
             assert str(selected_node.label) == "✓ analysis"
             assert app.selected_task == "forecast"
+            assert tree.cursor_node is app.task_nodes[("2018041506", "forecast")]
             selected = app._selected_task_snapshot()
             assert selected is not None
             assert selected.status == "running"
@@ -242,14 +243,16 @@ def test_manual_completed_selection_does_not_auto_follow_running_task(
         async with app.run_test(size=(120, 35)) as pilot:
             await pilot.pause()
 
-            app.selected_cycle_id = "2018041500"
-            app.selected_task = "forecast"
-            app._tree_signature = None
-            app._rebuild_tree(force=True)
+            app._select_cycle("2018041500")
+            await pilot.pause()
+            tree = app.query_one("#task-tree")
+            tree.select_node(app.task_nodes[("2018041500", "forecast")])
+            await pilot.pause()
 
             selected = app._selected_task_snapshot()
             assert selected is not None
             assert selected.status == "success"
+            assert not app._auto_follow_running
 
             state = WorkflowState(
                 workdir / "state.sqlite3",
