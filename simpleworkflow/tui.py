@@ -769,6 +769,7 @@ class WorkflowTui(App[None]):
             tuple(
                 (
                     cycle.cycle_id,
+                    cycle.cycle_time,
                     tuple(task_signature(task) for task in cycle.tasks),
                 )
                 for cycle in self.snapshot.cycles
