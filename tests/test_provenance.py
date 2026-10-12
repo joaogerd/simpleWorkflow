@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from simpleworkflow.artifacts import ResolvedArtifacts
-from simpleworkflow.provenance import build_attempt_metadata
+from simpleworkflow.provenance import build_artifact_metadata, build_attempt_metadata
 from simpleworkflow.signature import TaskSignature
 
 
@@ -60,3 +60,14 @@ def test_attempt_metadata_records_framework_failure_separately(tmp_path) -> None
     assert metadata["return_code"] == 3
     assert metadata["process_return_code"] == 0
     assert metadata["reason"] == "missing required output"
+
+
+
+def test_build_artifact_metadata_is_safe_for_running_attempts(tmp_path) -> None:
+    output = tmp_path / "submission.json"
+    payload = build_artifact_metadata(
+        ResolvedArtifacts(required_outputs=(output,))
+    )
+
+    assert payload["inputs"] == {"required": [], "optional": []}
+    assert payload["outputs"]["required"] == [str(output.resolve())]
