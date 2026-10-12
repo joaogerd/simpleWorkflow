@@ -668,6 +668,56 @@ class WorkflowTui(App[None]):
             None,
         )
 
+    def _running_selection(self) -> tuple[str | None, str] | None:
+        """Return the most relevant currently running task.
+
+        Prefer the selected cycle so task-to-task handoffs inside one cycle stay
+        local. If that cycle has finished, search the campaign in cycle order,
+        then fall back to workflow-scoped tasks.
+        """
+        selected_cycle = self._selected_cycle()
+        if selected_cycle is not None:
+            running = next(
+                (task for task in selected_cycle.tasks if task.status == "running"),
+                None,
+            )
+            if running is not None:
+                return selected_cycle.cycle_id, running.name
+
+        for cycle in self.snapshot.cycles:
+            running = next(
+                (task for task in cycle.tasks if task.status == "running"),
+                None,
+            )
+            if running is not None:
+                return cycle.cycle_id, running.name
+
+        running = next(
+            (task for task in self.snapshot.tasks if task.status == "running"),
+            None,
+        )
+        if running is not None:
+            return None, running.name
+        return None
+
+    def _follow_running_handoff(self, *, was_running: bool) -> None:
+        """Follow a new running task only when we were already following execution.
+
+        This keeps the monitor live during normal execution while respecting a
+        user's deliberate selection of a completed/pending task for inspection.
+        """
+        if not was_running:
+            return
+        target = self._running_selection()
+        if target is None:
+            return
+        cycle_id, task_name = target
+        if cycle_id == self.selected_cycle_id and task_name == self.selected_task:
+            return
+        self.selected_cycle_id = cycle_id
+        self.selected_task = task_name
+        self.selected_log_key = None
+
     def _available_dates(self) -> list[date]:
         values = {
             parsed
@@ -1361,11 +1411,16 @@ class WorkflowTui(App[None]):
         self.query_one("#monitor-main").remove_class("inspecting")
 
     def refresh_runtime(self, *, force: bool = False) -> None:
+        previous = self._selected_task_snapshot()
+        was_running = previous is not None and previous.status == "running"
+
         self.snapshot = self._load_snapshot()
         if self.selected_cycle_id and not any(
             cycle.cycle_id == self.selected_cycle_id for cycle in self.snapshot.cycles
         ):
             self._choose_initial_selection()
+        else:
+            self._follow_running_handoff(was_running=was_running)
         self._rebuild_tree(force=force)
         self._refresh_header()
         if self.cycle_mode:
