@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.6.2
+
+simpleWorkflow 0.6.2 aligns execution, restart semantics and monitoring for
+native cyclic workflows while preserving the lightweight sequential YAML/local/PBS
+architecture and SQLite schema.
+
+- Use one cycle-activation rule for execution and monitoring so `cycle_scope`
+  tasks appear only in the native cycles where they actually exist.
+- Keep initialization tasks visible in the existing read-only Workflow monitor
+  area while excluding them from scientific-cycle task counts.
+- Materialize the effective task working directory when `cwd` is omitted and
+  use the same value for execution, signatures and provenance; validation now
+  rejects an explicit working directory that is missing or is not a directory.
+- Execute repeated `--cycle-time` selections chronologically while preserving
+  their declared campaign positions, and reject cycle ranges whose inclusive end
+  does not align exactly with the configured interval.
+- Centralize lifecycle state names and semantic groups used by the engine,
+  persistence layer, monitor and TUI without coupling presentation labels,
+  symbols or colors to the core.
+- Make first-time SQLite bootstrap atomic so schema metadata and
+  `workflow_instance` are created together or rolled back together.
+- Build each monitor refresh from one short consistent SQLite read transaction,
+  preventing one snapshot from mixing task, attempt, cycle and run rows from
+  different writer commits.
+- Expand regression coverage for cycle scopes, initialization visibility,
+  effective cwd/signature behavior, cycle ordering/alignment, lifecycle
+  classifications, atomic bootstrap and concurrent monitor reads.
+- Refresh project presentation assets with theme-aware logos while keeping the
+  core dependency-free outside PyYAML and the TUI optional.
+
 ## 0.6.1
 
 simpleWorkflow 0.6.1 is a reliability release focused on safe PBS recovery and
