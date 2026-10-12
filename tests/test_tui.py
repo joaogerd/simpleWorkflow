@@ -115,7 +115,10 @@ def test_status_refresh_preserves_workflow_tree_nodes_and_position(tmp_path: Pat
             assert app.task_nodes[key] is selected_node
             assert app.task_group_nodes[("workflow", None, "Workflow")] is workflow_group
             assert app.selected_task == "analysis"
-            assert "SUCCESS" in str(selected_node.label)
+            assert str(selected_node.label) == "✓ analysis"
+            selected = app._selected_task_snapshot()
+            assert selected is not None
+            assert selected.status == "success"
 
     asyncio.run(scenario())
 
