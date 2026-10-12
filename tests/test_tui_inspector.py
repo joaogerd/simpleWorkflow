@@ -235,3 +235,90 @@ def test_inspector_secondary_details_are_copyable_without_cluttering_primary(
             assert app.copied[-1] == "/case/work"
 
     asyncio.run(scenario())
+
+
+
+def test_inspector_promotes_operational_manifest_details_for_local_wrapper(
+    tmp_path: Path,
+) -> None:
+    attempt = _attempt(
+        tmp_path / "attempt-001",
+        number=1,
+        status="running",
+        executor="local",
+        job_id=None,
+        command=("driver", "wait"),
+        cwd=str(tmp_path),
+    )
+    (attempt.directory / "metadata.json").unlink()
+
+    run_dir = tmp_path / "scientific-run"
+    run_dir.mkdir()
+    script = run_dir / "job.pbs"
+    stdout = run_dir / "science.stdout.log"
+    stderr = run_dir / "science.stderr.log"
+    script.write_text(
+        "#!/bin/bash\napp > science.stdout.log 2> science.stderr.log\n",
+        encoding="utf-8",
+    )
+    stdout.write_text("running\n", encoding="utf-8")
+    stderr.write_text("", encoding="utf-8")
+    manifest = run_dir / "submission.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "run_dir": str(run_dir),
+                "pbs_file": str(script),
+                "job_id": "98765.cluster",
+                "state": "submitted",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (attempt.directory / "started.json").write_text(
+        json.dumps(
+            {
+                "status": "running",
+                "command": {
+                    "argv": ["driver", "wait"],
+                    "cwd": str(tmp_path),
+                    "env": {},
+                },
+                "artifacts": {
+                    "inputs": {"required": [], "optional": []},
+                    "outputs": {"required": [str(manifest)], "checks": []},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    app = InspectorTestApp(
+        _task(attempt),
+        {
+            "name": "analysis",
+            "executor": "local",
+            "outputs": {"required": [str(manifest)]},
+        },
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(90, 32)) as pilot:
+            await pilot.pause()
+            inspector = app.query_one(TaskInspector)
+
+            assert inspector.detail_values["job id"] == "98765.cluster"
+            assert inspector.detail_values["submission state"] == "submitted"
+            assert inspector.detail_values["PBS script"] == str(script)
+
+            by_key = {resource.key: resource for resource in inspector.resources}
+            assert by_key["pbs_stdout"].path == stdout
+            assert by_key["pbs_stderr"].path == stderr
+            assert by_key["pbs_script"].path == script
+
+            details = app.query_one("#inspector-details")
+            assert "Details (" in str(details.title)
+
+    asyncio.run(scenario())
