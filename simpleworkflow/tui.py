@@ -456,6 +456,7 @@ class WorkflowTui(App[None]):
         self.task_nodes: dict[tuple[str | None, str], Any] = {}
         self.task_group_nodes: dict[tuple[str, str | None, str], Any] = {}
         self._tree_signature: tuple[Any, ...] | None = None
+        self._auto_follow_running = True
         self._choose_initial_selection()
 
     def _load_snapshot(self) -> MonitorSnapshot:
@@ -668,6 +669,60 @@ class WorkflowTui(App[None]):
             None,
         )
 
+    def _running_selection(self) -> tuple[str | None, str] | None:
+        """Return the most relevant currently running task.
+
+        Prefer the selected cycle so task-to-task handoffs inside one cycle stay
+        local. If that cycle has finished, search the campaign in cycle order,
+        then fall back to workflow-scoped tasks.
+        """
+        selected_cycle = self._selected_cycle()
+        if selected_cycle is not None:
+            running = next(
+                (task for task in selected_cycle.tasks if task.status == "running"),
+                None,
+            )
+            if running is not None:
+                return selected_cycle.cycle_id, running.name
+
+        for cycle in self.snapshot.cycles:
+            running = next(
+                (task for task in cycle.tasks if task.status == "running"),
+                None,
+            )
+            if running is not None:
+                return cycle.cycle_id, running.name
+
+        if self.snapshot.cycles:
+            return None
+
+        running = next(
+            (task for task in self.snapshot.tasks if task.status == "running"),
+            None,
+        )
+        if running is not None:
+            return None, running.name
+        return None
+
+    def _follow_running_handoff(self) -> None:
+        """Follow execution while auto-follow mode is active.
+
+        Auto-follow remains active across idle refreshes between one task
+        finishing and its successor becoming RUNNING. A manual selection of a
+        non-running task disables it until the user selects a running task again.
+        """
+        if not self._auto_follow_running:
+            return
+        target = self._running_selection()
+        if target is None:
+            return
+        cycle_id, task_name = target
+        if cycle_id == self.selected_cycle_id and task_name == self.selected_task:
+            return
+        self.selected_cycle_id = cycle_id
+        self.selected_task = task_name
+        self.selected_log_key = None
+
     def _available_dates(self) -> list[date]:
         values = {
             parsed
@@ -699,6 +754,7 @@ class WorkflowTui(App[None]):
         self.selected_cycle_id = cycle.cycle_id
         self.selected_task = self._preferred_task(cycle.tasks)
         self.selected_log_key = None
+        self._auto_follow_running = False
         self._tree_signature = None
         if switch_to_monitor:
             self.query_one("#views", TabbedContent).active = "monitor"
@@ -998,10 +1054,27 @@ class WorkflowTui(App[None]):
         cycle_id, task_name = data
         if task_name not in self.task_order:
             return
+
+        new_cycle_id = str(cycle_id) if cycle_id is not None else None
+        changed_selection = (
+            str(task_name) != self.selected_task
+            or (
+                new_cycle_id is not None
+                and new_cycle_id != self.selected_cycle_id
+            )
+        )
+
         if cycle_id is not None:
-            self.selected_cycle_id = str(cycle_id)
+            self.selected_cycle_id = new_cycle_id
         self.selected_task = str(task_name)
         self.selected_log_key = None
+
+        if changed_selection:
+            selected = self._selected_task_snapshot()
+            self._auto_follow_running = (
+                selected is not None and selected.status == "running"
+            )
+
         self._refresh_header()
         if self.cycle_mode:
             self._refresh_date_nav()
@@ -1145,6 +1218,17 @@ class WorkflowTui(App[None]):
         if target == current:
             return
         self._select_cycle(ids[target])
+
+    def _sync_tree_selection(self) -> None:
+        """Align the Tree cursor with the current logical selection."""
+        if self.selected_task is None:
+            return
+        tree = self.query_one("#task-tree", Tree)
+        node = self.task_nodes.get((self.selected_cycle_id, self.selected_task))
+        if node is None:
+            node = self.task_nodes.get((None, self.selected_task))
+        if node is not None and tree.cursor_node is not node:
+            tree.select_node(node)
 
     def _focus_active_view(self) -> None:
         views = self.query_one("#views", TabbedContent)
@@ -1366,7 +1450,10 @@ class WorkflowTui(App[None]):
             cycle.cycle_id == self.selected_cycle_id for cycle in self.snapshot.cycles
         ):
             self._choose_initial_selection()
+        else:
+            self._follow_running_handoff()
         self._rebuild_tree(force=force)
+        self._sync_tree_selection()
         self._refresh_header()
         if self.cycle_mode:
             self._refresh_date_nav()
