@@ -7,7 +7,9 @@ being inspected.
 
 from __future__ import annotations
 
+import json
 import re
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -35,6 +37,22 @@ class InspectableResource:
 
 
 def _mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _attempt_provenance(attempt: AttemptSnapshot) -> dict[str, Any]:
+    """Prefer final metadata, falling back to running-attempt provenance."""
+    return _mapping(attempt.metadata) or _mapping(attempt.started_record)
+
+
+def _read_json_mapping(path: Path, *, max_bytes: int = 1024 * 1024) -> dict[str, Any]:
+    """Read one small JSON object without making the monitor fragile."""
+    try:
+        if not path.is_file() or path.stat().st_size > max_bytes:
+            return {}
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
     return value if isinstance(value, dict) else {}
 
 
@@ -115,6 +133,164 @@ def _artifact_paths(metadata: dict[str, Any]) -> Iterable[tuple[str, str, Path]]
                 yield ("output", "checked output", _normalized(value))
 
 
+
+_OPERATIONAL_DETAIL_FIELDS = (
+    ("job_id", "job id"),
+    ("state", "submission state"),
+    ("scheduler_last_state", "scheduler state"),
+    ("submitted_at", "submitted"),
+    ("scheduler_finished_at", "scheduler finished"),
+    ("pbs_file", "PBS script"),
+    ("run_dir", "run directory"),
+)
+
+
+def _looks_operational_manifest(value: dict[str, Any]) -> bool:
+    return any(
+        key in value
+        for key in ("job_id", "pbs_file", "scheduler_last_state")
+    )
+
+
+def _resolved_manifest_path(value: Any, *, base: Path) -> Path | None:
+    if not isinstance(value, str) or not value:
+        return None
+    candidate = Path(value).expanduser()
+    if not candidate.is_absolute():
+        candidate = base / candidate
+    return candidate.resolve(strict=False)
+
+
+def _pbs_redirect_paths(script: Path, *, run_dir: Path) -> tuple[Path | None, Path | None]:
+    """Conservatively extract simple stdout/stderr redirections from a PBS script."""
+    try:
+        lines = script.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return None, None
+
+    stdout: Path | None = None
+    stderr: Path | None = None
+    for line in lines:
+        try:
+            tokens = shlex.split(line, posix=True)
+        except ValueError:
+            continue
+        for marker, target_name in ((">", "stdout"), ("2>", "stderr")):
+            try:
+                index = tokens.index(marker)
+            except ValueError:
+                continue
+            if index + 1 >= len(tokens):
+                continue
+            path = _resolved_manifest_path(tokens[index + 1], base=run_dir)
+            if target_name == "stdout":
+                stdout = path
+            else:
+                stderr = path
+    return stdout, stderr
+
+
+def _structured_output_resources(
+    output: Path,
+) -> tuple[InspectableResource, ...]:
+    """Discover resources described by one declared operational JSON output."""
+    if output.suffix.casefold() != ".json":
+        return ()
+    manifest = _read_json_mapping(output)
+    if not _looks_operational_manifest(manifest):
+        return ()
+
+    run_dir = _resolved_manifest_path(manifest.get("run_dir"), base=output.parent)
+    base = run_dir or output.parent
+    resources: list[InspectableResource] = []
+    seen: set[Path] = set()
+
+    pbs_file = _resolved_manifest_path(manifest.get("pbs_file"), base=base)
+    if pbs_file is not None:
+        _append_unique(
+            resources,
+            seen,
+            _resource(
+                "pbs_script",
+                "PBS script",
+                pbs_file,
+                "pbs-script",
+                origin="artifact",
+            ),
+        )
+
+    for key, label, resource_key in (
+        ("job_stdout", "PBS stdout", "pbs_stdout"),
+        ("stdout", "PBS stdout", "pbs_stdout"),
+        ("job_stderr", "PBS stderr", "pbs_stderr"),
+        ("stderr", "PBS stderr", "pbs_stderr"),
+    ):
+        path = _resolved_manifest_path(manifest.get(key), base=base)
+        if path is not None:
+            _append_unique(
+                resources,
+                seen,
+                _resource(
+                    resource_key,
+                    label,
+                    path,
+                    "log",
+                    origin="artifact",
+                    follow=True,
+                ),
+            )
+
+    if pbs_file is not None:
+        stdout, stderr = _pbs_redirect_paths(pbs_file, run_dir=base)
+        if stdout is not None:
+            _append_unique(
+                resources,
+                seen,
+                _resource(
+                    "pbs_stdout",
+                    "PBS stdout",
+                    stdout,
+                    "log",
+                    origin="artifact",
+                    follow=True,
+                ),
+            )
+        if stderr is not None:
+            _append_unique(
+                resources,
+                seen,
+                _resource(
+                    "pbs_stderr",
+                    "PBS stderr",
+                    stderr,
+                    "log",
+                    origin="artifact",
+                    follow=True,
+                ),
+            )
+
+    return tuple(resources)
+
+
+def discover_structured_artifact_details(
+    attempt: AttemptSnapshot,
+) -> dict[str, str]:
+    """Promote small scheduler/submission facts from declared JSON outputs."""
+    provenance = _attempt_provenance(attempt)
+    details: dict[str, str] = {}
+    for kind, _label, output in _artifact_paths(provenance):
+        if kind != "output" or output.suffix.casefold() != ".json":
+            continue
+        manifest = _read_json_mapping(output)
+        if not _looks_operational_manifest(manifest):
+            continue
+        for key, label in _OPERATIONAL_DETAIL_FIELDS:
+            value = manifest.get(key)
+            if value is not None and label not in details:
+                details[label] = str(value)
+    return details
+
+
 def discover_attempt_resources(
     task: TaskSnapshot,
     attempt: AttemptSnapshot,
@@ -187,9 +363,10 @@ def discover_attempt_resources(
             _resource("pbs_script", "job.pbs", script_path, "pbs-script"),
         )
 
-    metadata = _mapping(attempt.metadata)
+    provenance = _attempt_provenance(attempt)
     artifact_index = {"input": 0, "output": 0}
-    for kind, label, path in _artifact_paths(metadata):
+    output_paths: list[Path] = []
+    for kind, label, path in _artifact_paths(provenance):
         index = artifact_index[kind]
         artifact_index[kind] += 1
         _append_unique(
@@ -202,6 +379,12 @@ def discover_attempt_resources(
                 kind,
             ),
         )
+        if kind == "output":
+            output_paths.append(path)
+
+    for output in output_paths:
+        for resource in _structured_output_resources(output):
+            _append_unique(resources, seen, resource)
 
     return tuple(resources)
 
