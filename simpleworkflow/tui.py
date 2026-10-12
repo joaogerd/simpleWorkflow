@@ -456,6 +456,7 @@ class WorkflowTui(App[None]):
         self.task_nodes: dict[tuple[str | None, str], Any] = {}
         self.task_group_nodes: dict[tuple[str, str | None, str], Any] = {}
         self._tree_signature: tuple[Any, ...] | None = None
+        self._auto_follow_running = True
         self._choose_initial_selection()
 
     def _load_snapshot(self) -> MonitorSnapshot:
@@ -700,13 +701,14 @@ class WorkflowTui(App[None]):
             return None, running.name
         return None
 
-    def _follow_running_handoff(self, *, was_running: bool) -> None:
-        """Follow a new running task only when we were already following execution.
+    def _follow_running_handoff(self) -> None:
+        """Follow execution while auto-follow mode is active.
 
-        This keeps the monitor live during normal execution while respecting a
-        user's deliberate selection of a completed/pending task for inspection.
+        Auto-follow remains active across idle refreshes between one task
+        finishing and its successor becoming RUNNING. A manual selection of a
+        non-running task disables it until the user selects a running task again.
         """
-        if not was_running:
+        if not self._auto_follow_running:
             return
         target = self._running_selection()
         if target is None:
@@ -1048,10 +1050,27 @@ class WorkflowTui(App[None]):
         cycle_id, task_name = data
         if task_name not in self.task_order:
             return
+
+        new_cycle_id = str(cycle_id) if cycle_id is not None else None
+        changed_selection = (
+            str(task_name) != self.selected_task
+            or (
+                new_cycle_id is not None
+                and new_cycle_id != self.selected_cycle_id
+            )
+        )
+
         if cycle_id is not None:
-            self.selected_cycle_id = str(cycle_id)
+            self.selected_cycle_id = new_cycle_id
         self.selected_task = str(task_name)
         self.selected_log_key = None
+
+        if changed_selection:
+            selected = self._selected_task_snapshot()
+            self._auto_follow_running = (
+                selected is not None and selected.status == "running"
+            )
+
         self._refresh_header()
         if self.cycle_mode:
             self._refresh_date_nav()
@@ -1411,16 +1430,13 @@ class WorkflowTui(App[None]):
         self.query_one("#monitor-main").remove_class("inspecting")
 
     def refresh_runtime(self, *, force: bool = False) -> None:
-        previous = self._selected_task_snapshot()
-        was_running = previous is not None and previous.status == "running"
-
         self.snapshot = self._load_snapshot()
         if self.selected_cycle_id and not any(
             cycle.cycle_id == self.selected_cycle_id for cycle in self.snapshot.cycles
         ):
             self._choose_initial_selection()
         else:
-            self._follow_running_handoff(was_running=was_running)
+            self._follow_running_handoff()
         self._rebuild_tree(force=force)
         self._refresh_header()
         if self.cycle_mode:
