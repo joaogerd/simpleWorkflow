@@ -161,6 +161,11 @@ def _resolved_manifest_path(value: Any, *, base: Path) -> Path | None:
     return candidate.resolve(strict=False)
 
 
+_REDIRECT = re.compile(
+    r"""(?P<fd>[12]?)(?P<op>>{1,2})\s*(?P<target>"[^"]+"|'[^']+'|[^\s;&|]+)"""
+)
+
+
 def _pbs_redirect_paths(script: Path, *, run_dir: Path) -> tuple[Path | None, Path | None]:
     """Conservatively extract simple stdout/stderr redirections from a PBS script."""
     try:
@@ -171,22 +176,19 @@ def _pbs_redirect_paths(script: Path, *, run_dir: Path) -> tuple[Path | None, Pa
     stdout: Path | None = None
     stderr: Path | None = None
     for line in lines:
-        try:
-            tokens = shlex.split(line, posix=True)
-        except ValueError:
-            continue
-        for marker, target_name in ((">", "stdout"), ("2>", "stderr")):
+        for match in _REDIRECT.finditer(line):
+            raw_target = match.group("target")
             try:
-                index = tokens.index(marker)
+                target = shlex.split(raw_target, posix=True)
             except ValueError:
                 continue
-            if index + 1 >= len(tokens):
+            if len(target) != 1:
                 continue
-            path = _resolved_manifest_path(tokens[index + 1], base=run_dir)
-            if target_name == "stdout":
-                stdout = path
-            else:
+            path = _resolved_manifest_path(target[0], base=run_dir)
+            if match.group("fd") == "2":
                 stderr = path
+            else:
+                stdout = path
     return stdout, stderr
 
 
@@ -219,6 +221,8 @@ def _structured_output_resources(
             ),
         )
 
+    explicit_stdout = False
+    explicit_stderr = False
     for key, label, resource_key in (
         ("job_stdout", "PBS stdout", "pbs_stdout"),
         ("stdout", "PBS stdout", "pbs_stdout"),
@@ -239,10 +243,14 @@ def _structured_output_resources(
                     follow=True,
                 ),
             )
+            if resource_key == "pbs_stdout":
+                explicit_stdout = True
+            else:
+                explicit_stderr = True
 
     if pbs_file is not None:
         stdout, stderr = _pbs_redirect_paths(pbs_file, run_dir=base)
-        if stdout is not None:
+        if stdout is not None and not explicit_stdout:
             _append_unique(
                 resources,
                 seen,
@@ -255,7 +263,7 @@ def _structured_output_resources(
                     follow=True,
                 ),
             )
-        if stderr is not None:
+        if stderr is not None and not explicit_stderr:
             _append_unique(
                 resources,
                 seen,
