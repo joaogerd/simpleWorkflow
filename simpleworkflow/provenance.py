@@ -14,6 +14,28 @@ def _rendered_paths(paths: tuple[Path, ...]) -> list[str]:
     return [str(path.resolve(strict=False)) for path in paths]
 
 
+def build_artifact_metadata(artifacts: ResolvedArtifacts) -> dict[str, Any]:
+    """Serialize resolved artifact paths for running or completed attempts."""
+    return {
+        "inputs": {
+            "required": _rendered_paths(artifacts.required_inputs),
+            "optional": _rendered_paths(artifacts.optional_inputs),
+        },
+        "outputs": {
+            "required": _rendered_paths(artifacts.required_outputs),
+            "checks": [
+                {
+                    "path": str(check.path.resolve(strict=False)),
+                    "kind": check.kind,
+                    "nonempty": check.nonempty,
+                    "min_size": check.min_size,
+                }
+                for check in artifacts.output_checks
+            ],
+        },
+    }
+
+
 def build_attempt_metadata(
     *,
     argv: Sequence[str],
@@ -46,24 +68,7 @@ def build_attempt_metadata(
             "value": signature.value,
             "payload": signature.payload,
         },
-        "artifacts": {
-            "inputs": {
-                "required": _rendered_paths(artifacts.required_inputs),
-                "optional": _rendered_paths(artifacts.optional_inputs),
-            },
-            "outputs": {
-                "required": _rendered_paths(artifacts.required_outputs),
-                "checks": [
-                    {
-                        "path": str(check.path.resolve(strict=False)),
-                        "kind": check.kind,
-                        "nonempty": check.nonempty,
-                        "min_size": check.min_size,
-                    }
-                    for check in artifacts.output_checks
-                ],
-            },
-        },
+        "artifacts": build_artifact_metadata(artifacts),
     }
     if execution:
         metadata["execution"] = dict(execution)

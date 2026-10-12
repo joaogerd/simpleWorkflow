@@ -22,7 +22,7 @@ from .lifecycle import (
 )
 from .locking import WorkflowLock
 from .pbs import PbsExecutor
-from .provenance import build_attempt_metadata
+from .provenance import build_artifact_metadata, build_attempt_metadata
 from .runs import AttemptPaths, RunRecorder
 from .signature import (
     SIGNATURE_SCHEMA_VERSION,
@@ -619,6 +619,7 @@ class WorkflowEngine:
                         "status": RUNNING,
                         "command": {"argv": argv, "cwd": str(cwd) if cwd else None, "env": env},
                         "signature": signature.value,
+                        "artifacts": build_artifact_metadata(artifacts),
                     },
                 )
                 self.state.record_attempt_started(

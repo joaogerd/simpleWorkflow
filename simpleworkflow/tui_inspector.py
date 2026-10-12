@@ -15,7 +15,11 @@ from textual.message import Message
 from textual.widgets import Button, Collapsible, DataTable, Static
 
 from .monitor import AttemptSnapshot, TaskSnapshot
-from .tui_resources import InspectableResource, discover_attempt_resources
+from .tui_resources import (
+    InspectableResource,
+    discover_attempt_resources,
+    discover_structured_artifact_details,
+)
 
 _STATUS = {
     "pending": ("○", "PENDING", "dim"),
@@ -373,6 +377,9 @@ class TaskInspector(Vertical):
         pbs = _pbs_resources(self.config_task)
         if pbs:
             details["resources"] = pbs
+        if attempt is not None:
+            for key, value in discover_structured_artifact_details(attempt).items():
+                details.setdefault(key, value)
         return details
 
     def _refresh_attempt_controls(self) -> None:
@@ -426,10 +433,16 @@ class TaskInspector(Vertical):
     def _refresh_details(self) -> None:
         try:
             table = self.query_one("#inspector-details-table", DataTable)
+            collapsible = self.query_one("#inspector-details", Collapsible)
         except Exception:
             return
         table.clear(columns=False)
         self._detail_keys = []
+        collapsible.title = (
+            f"Details ({len(self.detail_values)})"
+            if self.detail_values
+            else "Details"
+        )
         for key, value in self.detail_values.items():
             self._detail_keys.append(key)
             table.add_row(key, value, key=key)
