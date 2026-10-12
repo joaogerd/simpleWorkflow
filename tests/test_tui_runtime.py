@@ -251,8 +251,15 @@ def test_tui_shows_initialization_in_existing_workflow_group(tmp_path: Path) -> 
             await pilot.pause()
             assert "bootstrap" in app.task_order
             assert "bootstrap" in app.task_map
-            assert (None, "bootstrap") in app.task_nodes
+            assert (None, "bootstrap") not in app.task_nodes
             assert ("c06", "analysis") in app.task_nodes
             assert [task.name for task in app.snapshot.tasks] == ["bootstrap"]
+
+            await pilot.press("3")
+            await pilot.pause()
+            summary = str(app.query_one("#campaign-summary").render())
+            assert "Initialization" in summary
+            assert "0/1 complete" in summary
+            assert "1 running" in summary
 
     asyncio.run(scenario())

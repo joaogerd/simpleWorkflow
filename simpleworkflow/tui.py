@@ -155,6 +155,20 @@ def _task_names(config: dict[str, Any]) -> list[str]:
     ]
 
 
+def _initialization_task_names(config: dict[str, Any]) -> set[str]:
+    initialization = config.get("initialization")
+    if not isinstance(initialization, dict):
+        return set()
+    raw_tasks = initialization.get("tasks", [])
+    if not isinstance(raw_tasks, list):
+        return set()
+    return {
+        str(task["name"])
+        for task in raw_tasks
+        if isinstance(task, dict) and isinstance(task.get("name"), str)
+    }
+
+
 def _task_label(name: str, cycle_id: str | None = None) -> str:
     """Return a compact display label without changing the internal task name."""
     display = name
@@ -438,6 +452,7 @@ class WorkflowTui(App[None]):
         self.color_enabled = bool(color) and not bool(os.environ.get("NO_COLOR"))
         self.completion_future = completion_future
         self.task_order = _task_names(config)
+        self.initialization_task_names = _initialization_task_names(config)
         self.task_map = {
             str(task["name"]): task
             for task in _task_configs(config)
@@ -830,7 +845,14 @@ class WorkflowTui(App[None]):
                 )
                 for cycle in self.snapshot.cycles
             ),
-            tuple(task_signature(task) for task in self.snapshot.tasks),
+            tuple(
+                task_signature(task)
+                for task in self.snapshot.tasks
+                if not (
+                    self.snapshot.cycles
+                    and task.name in self.initialization_task_names
+                )
+            ),
         )
 
     def _refresh_tree_labels(self) -> None:
@@ -884,6 +906,8 @@ class WorkflowTui(App[None]):
                         )
 
             for task in self.snapshot.tasks:
+                if task.name in self.initialization_task_names:
+                    continue
                 workflow_entries.append(task)
                 node = self.task_nodes.get((None, task.name))
                 if node is not None:
@@ -991,7 +1015,9 @@ class WorkflowTui(App[None]):
                         self.task_nodes[(cycle.cycle_id, task.name)] = leaf
 
             workflow_entries.extend(
-                (task, None, _task_label(task.name)) for task in self.snapshot.tasks
+                (task, None, _task_label(task.name))
+                for task in self.snapshot.tasks
+                if task.name not in self.initialization_task_names
             )
             workflow_visible = [
                 (task, cycle_id, label)
@@ -1672,8 +1698,35 @@ class WorkflowTui(App[None]):
         table = self.query_one("#campaign-table", DataTable)
         table.clear(columns=False)
         run = self.snapshot.current_run
+        initialization_tasks = [
+            task
+            for task in self.snapshot.tasks
+            if task.name in self.initialization_task_names
+        ]
+        initialization_line = ""
+        if initialization_tasks:
+            init_completed = sum(
+                task.status in COMPLETE_STATES for task in initialization_tasks
+            )
+            init_running = sum(
+                task.status == "running" for task in initialization_tasks
+            )
+            init_failed = sum(
+                task.status in ATTENTION_STATES for task in initialization_tasks
+            )
+            init_status = self._aggregate_status(
+                [task.status for task in initialization_tasks]
+            )
+            initialization_line = (
+                "Initialization  "
+                f"{init_completed}/{len(initialization_tasks)} complete · "
+                f"{init_running} running · {init_failed} failed · "
+                f"{_status_markup(init_status, color=self.color_enabled)}\n"
+            )
+
         summary.update(
             f"[bold]Campaign[/bold]  {escape(self.snapshot.workflow_name)}\n"
+            f"{initialization_line}"
             f"{len(self.snapshot.cycles)} cycles · {self.snapshot.completed_tasks}/"
             f"{self.snapshot.total_tasks} tasks complete · "
             f"{self.snapshot.running_tasks} running · {self.snapshot.failed_tasks} failed\n"
