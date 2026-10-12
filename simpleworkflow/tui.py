@@ -454,6 +454,7 @@ class WorkflowTui(App[None]):
         self.cycle_matrix_columns: list[str] = []
         self.cycle_matrix_cells: dict[tuple[int, int], str] = {}
         self.task_nodes: dict[tuple[str | None, str], Any] = {}
+        self.task_group_nodes: dict[tuple[str, str | None, str], Any] = {}
         self._tree_signature: tuple[Any, ...] | None = None
         self._choose_initial_selection()
 
@@ -745,18 +746,123 @@ class WorkflowTui(App[None]):
         self._select_date(dates[target])
 
     def _tree_state_signature(self) -> tuple[Any, ...]:
+        """Return only the state that can change the tree structure.
+
+        Runtime status changes normally affect labels, not membership. Keeping
+        them out of this signature prevents periodic refreshes from clearing the
+        Tree and consequently resetting the user's cursor and scroll position.
+
+        A non-empty task filter is status-sensitive because status text is one
+        of the searchable fields, so statuses remain structural in that case.
+        """
+        status_sensitive = bool(self.task_filter)
+
+        def task_signature(task: TaskSnapshot) -> tuple[str, str | None]:
+            return (
+                task.name,
+                task.status if status_sensitive else None,
+            )
+
         return (
             self.selected_cycle_id,
             self.task_filter,
             tuple(
                 (
                     cycle.cycle_id,
-                    tuple((task.name, task.status) for task in cycle.tasks),
+                    tuple(task_signature(task) for task in cycle.tasks),
                 )
                 for cycle in self.snapshot.cycles
             ),
-            tuple((task.name, task.status) for task in self.snapshot.tasks),
+            tuple(task_signature(task) for task in self.snapshot.tasks),
         )
+
+    def _refresh_tree_labels(self) -> None:
+        """Refresh task/group status labels without rebuilding the Tree."""
+        if self.snapshot.cycles:
+            cycle = self._selected_cycle()
+            workflow_entries: list[TaskSnapshot] = []
+
+            if cycle is not None:
+                process_groups: dict[str, list[TaskSnapshot]] = {}
+                for task in cycle.tasks:
+                    process_step = _task_process_step(task.name, cycle)
+                    if process_step is None:
+                        workflow_entries.append(task)
+                        node = self.task_nodes.get((cycle.cycle_id, task.name))
+                        if node is not None:
+                            node.set_label(
+                                _tree_status_text(
+                                    task.status,
+                                    _task_label(task.name, cycle.cycle_id),
+                                    color=self.color_enabled,
+                                )
+                            )
+                        continue
+
+                    process, step = process_step
+                    process_groups.setdefault(process, []).append(task)
+                    node = self.task_nodes.get((cycle.cycle_id, task.name))
+                    if node is not None:
+                        node.set_label(
+                            _tree_status_text(
+                                task.status,
+                                step,
+                                color=self.color_enabled,
+                            )
+                        )
+
+                for process, tasks in process_groups.items():
+                    node = self.task_group_nodes.get(
+                        ("process", cycle.cycle_id, process)
+                    )
+                    if node is not None:
+                        node.set_label(
+                            _tree_status_text(
+                                self._aggregate_status(
+                                    [task.status for task in tasks]
+                                ),
+                                process,
+                                color=self.color_enabled,
+                            )
+                        )
+
+            for task in self.snapshot.tasks:
+                workflow_entries.append(task)
+                node = self.task_nodes.get((None, task.name))
+                if node is not None:
+                    node.set_label(
+                        _tree_status_text(
+                            task.status,
+                            _task_label(task.name),
+                            color=self.color_enabled,
+                        )
+                    )
+
+            workflow_node = self.task_group_nodes.get(
+                ("workflow", None, "Workflow")
+            )
+            if workflow_node is not None and workflow_entries:
+                workflow_node.set_label(
+                    _tree_status_text(
+                        self._aggregate_status(
+                            [task.status for task in workflow_entries]
+                        ),
+                        "Workflow",
+                        color=self.color_enabled,
+                    )
+                )
+            return
+
+        for task in self.snapshot.tasks:
+            node = self.task_nodes.get((None, task.name))
+            if node is not None:
+                node.set_label(
+                    _tree_status_text(
+                        task.status,
+                        _task_label(task.name),
+                        color=self.color_enabled,
+                    )
+                )
 
     def _task_matches_filter(self, task: TaskSnapshot, cycle_id: str | None) -> bool:
         if not self.task_filter:
@@ -767,12 +873,14 @@ class WorkflowTui(App[None]):
 
     def _rebuild_tree(self, *, force: bool = False) -> None:
         signature = self._tree_state_signature()
-        if not force and signature == self._tree_signature:
+        if signature == self._tree_signature:
+            self._refresh_tree_labels()
             return
         self._tree_signature = signature
         tree = self.query_one("#task-tree", Tree)
         tree.clear()
         self.task_nodes.clear()
+        self.task_group_nodes.clear()
         tree.root.set_label(self.snapshot.workflow_name)
         tree.root.expand()
 
@@ -811,6 +919,9 @@ class WorkflowTui(App[None]):
                         ),
                         expand=True,
                     )
+                    self.task_group_nodes[("process", cycle.cycle_id, process)] = (
+                        process_node
+                    )
                     for task, step in visible:
                         leaf = process_node.add_leaf(
                             _tree_status_text(
@@ -842,6 +953,7 @@ class WorkflowTui(App[None]):
                     ),
                     expand=True,
                 )
+                self.task_group_nodes[("workflow", None, "Workflow")] = workflow_node
                 for task, cycle_id, label in workflow_visible:
                     leaf = workflow_node.add_leaf(
                         _tree_status_text(
