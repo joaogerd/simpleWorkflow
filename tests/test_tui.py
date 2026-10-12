@@ -76,6 +76,52 @@ def test_monitor_mounts_with_approved_five_views_and_inspector(tmp_path: Path) -
     asyncio.run(scenario())
 
 
+
+def test_status_refresh_preserves_workflow_tree_nodes_and_position(tmp_path: Path) -> None:
+    workflow = tmp_path / "workflow.yaml"
+    workflow.write_text("workflow:\n  name: MONAN-JEDI M3\n", encoding="utf-8")
+    workdir = tmp_path / ".simpleworkflow"
+    _persist_campaign(workflow, workdir)
+    app = WorkflowTui(
+        config=_config(workflow),
+        workflow_path=workflow,
+        workdir=workdir,
+        refresh_seconds=60.0,
+    )
+
+    async def scenario() -> None:
+        async with app.run_test(size=(120, 35)) as pilot:
+            await pilot.pause()
+            tree = app.query_one("#task-tree")
+            key = ("2018041506", "analysis")
+            selected_node = app.task_nodes[key]
+            workflow_group = app.task_group_nodes[("workflow", None, "Workflow")]
+            tree.select_node(selected_node)
+            app.selected_cycle_id = "2018041506"
+            app.selected_task = "analysis"
+
+            state = WorkflowState(
+                workdir / "state.sqlite3",
+                workflow_name="MONAN-JEDI M3",
+                source_path=workflow,
+            )
+            state.set_status("analysis", "success", 0, cycle_id="2018041506")
+            state.set_status("forecast", "running", None, cycle_id="2018041506")
+            state.close()
+
+            app.refresh_runtime()
+            await pilot.pause()
+
+            assert app.task_nodes[key] is selected_node
+            assert app.task_group_nodes[("workflow", None, "Workflow")] is workflow_group
+            assert app.selected_task == "analysis"
+            assert str(selected_node.label) == "✓ analysis"
+            selected = app._selected_task_snapshot()
+            assert selected is not None
+            assert selected.status == "success"
+
+    asyncio.run(scenario())
+
 def test_number_keys_select_exactly_five_operational_tabs(tmp_path: Path) -> None:
     workflow = tmp_path / "workflow.yaml"
     workflow.write_text("workflow:\n  name: MONAN-JEDI M3\n", encoding="utf-8")
