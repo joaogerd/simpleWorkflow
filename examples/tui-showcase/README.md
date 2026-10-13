@@ -236,5 +236,5 @@ http://localhost:8000/
 The documentation root is a landing page. The beginner tutorial is available at
 `/tutorial/` and the visual gallery at `/tutorial/showcase.html`. The HTML
 gallery is a stable versioned page; the generator refreshes its deterministic SVG
-images and Markdown companion. On `main`, the GitHub Pages workflow refreshes
+images and Markdown companion. On `develop`, the GitHub Pages workflow refreshes
 the screenshots before publishing the `docs/` tree automatically.

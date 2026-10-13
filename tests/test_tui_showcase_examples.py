@@ -11,7 +11,14 @@ SHOWCASE_ROOT = REPO_ROOT / "examples" / "tui-showcase"
 
 def _copy_case(tmp_path: Path, name: str) -> Path:
     target = tmp_path / name
-    shutil.copytree(SHOWCASE_ROOT / name, target)
+    shutil.copytree(
+        SHOWCASE_ROOT / name,
+        target,
+        ignore=shutil.ignore_patterns(
+            ".simpleworkflow", "demo-work", "campaign-work",
+            "problem-work", "invalid-output-work",
+        ),
+    )
     return target / "workflow.yaml"
 
 
@@ -42,3 +49,16 @@ def test_campaign_showcase_runs_all_cycles_end_to_end(tmp_path: Path) -> None:
         "result_2026100312.txt",
         "result_2026100318.txt",
     ]
+
+def test_copy_case_ignores_existing_runtime_state(tmp_path: Path, monkeypatch) -> None:
+    dirty = tmp_path / "dirty-source" / "03-artifacts"
+    shutil.copytree(SHOWCASE_ROOT / "03-artifacts", dirty, ignore=shutil.ignore_patterns(".simpleworkflow", "demo-work"))
+    (dirty / ".simpleworkflow").mkdir()
+    (dirty / ".simpleworkflow" / "state.sqlite3").write_text("stale")
+    (dirty / "demo-work").mkdir()
+    (dirty / "demo-work" / "output.txt").write_text("stale")
+    monkeypatch.setitem(_copy_case.__globals__, "SHOWCASE_ROOT", dirty.parent)
+    workflow = _copy_case(tmp_path / "copy-target", "03-artifacts")
+    assert workflow.is_file()
+    assert not (workflow.parent / ".simpleworkflow").exists()
+    assert not (workflow.parent / "demo-work").exists()
