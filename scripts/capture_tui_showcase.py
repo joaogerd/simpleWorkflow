@@ -61,7 +61,7 @@ def _prepare(case: str, workflow: Path) -> None:
         )
 
 
-def _capture(case: str, workflow: Path, view: str) -> Path:
+def _capture(case: str, workflow: Path, view: str, work_root: Path) -> Path:
     output = OUTPUT / f"{case}-{view}.svg"
     result = _swf(
         "capture-tui",
@@ -79,6 +79,10 @@ def _capture(case: str, workflow: Path, view: str) -> Path:
         raise RuntimeError(
             f"capture failed for {case}/{view}:\n{result.stderr}"
         )
+    # Keep published diagnostics deterministic across temporary workspaces.
+    svg = output.read_text(encoding="utf-8")
+    svg = svg.replace(str(work_root), "/showcase-workspace")
+    output.write_text(svg, encoding="utf-8")
     return output
 
 
@@ -130,7 +134,7 @@ def main() -> int:
             workflow = case_root / "workflow.yaml"
             _prepare(case, workflow)
             for view in views:
-                images.append((case, view, _capture(case, workflow, view)))
+                images.append((case, view, _capture(case, workflow, view, work_root)))
     _write_gallery(images)
     print(OUTPUT.parent / "showcase.html")
     return 0
