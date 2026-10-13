@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -114,11 +115,22 @@ def _write_gallery(images: list[tuple[str, str, Path]]) -> None:
 def main() -> int:
     OUTPUT.mkdir(parents=True, exist_ok=True)
     images: list[tuple[str, str, Path]] = []
-    for case, _title, _description, views in CASES:
-        workflow = SHOWCASE / case / "workflow.yaml"
-        _prepare(case, workflow)
-        for view in views:
-            images.append((case, view, _capture(case, workflow, view)))
+    with tempfile.TemporaryDirectory(prefix="simpleworkflow-showcase-") as temporary:
+        work_root = Path(temporary)
+        for case, _title, _description, views in CASES:
+            case_root = work_root / case
+            shutil.copytree(
+                SHOWCASE / case,
+                case_root,
+                ignore=shutil.ignore_patterns(
+                    ".simpleworkflow", "demo-work", "campaign-work",
+                    "problem-work", "invalid-output-work",
+                ),
+            )
+            workflow = case_root / "workflow.yaml"
+            _prepare(case, workflow)
+            for view in views:
+                images.append((case, view, _capture(case, workflow, view)))
     _write_gallery(images)
     print(OUTPUT.parent / "showcase.html")
     return 0
