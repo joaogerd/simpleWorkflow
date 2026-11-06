@@ -34,9 +34,9 @@ The focused proposed fix in [PR #71](https://github.com/joaogerd/simpleWorkflow/
 
 | Severity | Location | Evidence / impact | Status | Action and acceptance |
 |---|---|---|---|---|
-| P1 | `artifacts.py` vs `engine.py` | Artifact interpolation used direct `str.format`, while engine converted missing placeholders into `ValueError`; user-visible inconsistency | Fix proposed, PR #71 | CI green, malformed templates raise consistent configuration diagnostics |
-| P1 | `config.py` | `version != 1` accepts YAML boolean true and float 1.0 under Python equality | Fix proposed, PR #71 | Reject noninteger versions while accepting integer 1 |
-| P1 | `config.py`, `cli.py` | Malformed YAML and some expected OS/SQLite faults were not normalized to concise CLI errors | Fix proposed, PR #71 | Tests prove default concise output and `--debug` tracebacks |
+| P1 | `artifacts.py` vs `engine.py` | Artifact interpolation used direct `str.format`, while engine converted missing placeholders into `ValueError`; user-visible inconsistency | Fixed in `develop` (PR #71); not released on `main` | CI green, malformed templates raise consistent configuration diagnostics |
+| P1 | `config.py` | `version != 1` accepts YAML boolean true and float 1.0 under Python equality | Fixed in `develop` (PR #71); not released on `main` | Reject noninteger versions while accepting integer 1 |
+| P1 | `config.py`, `cli.py` | Malformed YAML and some expected OS/SQLite faults were not normalized to concise CLI errors | Fixed in `develop` (PR #71); not released on `main` | Tests prove default concise output and `--debug` tracebacks |
 | P1 | `config.py`, `artifacts.py`, `engine.py` | `outputs.checks` can require undeclared outputs, unlike planning dependency-product model | Open [#34](https://github.com/joaogerd/simpleWorkflow/issues/34) | Define single contract; migration notice for existing YAML; end-to-end tests |
 | P2 | state and inspector resource paths | Resources after moving workflow root need explicit portability guarantees | Open [#37](https://github.com/joaogerd/simpleWorkflow/issues/37) | Relocation tests of state, logs, attempts and viewer |
 | P2 | invalid-input persistence | Invalid-input reasons are not always inspectable from persisted monitoring state | Open [#36](https://github.com/joaogerd/simpleWorkflow/issues/36) | Persist actionable reason and test explain/monitor |
@@ -50,8 +50,9 @@ The focused proposed fix in [PR #71](https://github.com/joaogerd/simpleWorkflow/
 ## D. Changes actually made during this audit
 
 - [PR #71](https://github.com/joaogerd/simpleWorkflow/pull/71) (merged into `develop`; not in stable `main`): `templates.py`, `engine.py`, `artifacts.py`, `config.py`, `cli.py`, and `tests/test_config_error_boundary.py`. Do not call this merged or validated until workflow checks complete.
-- Documentation branch: `CONTRIBUTING.md`, `SUPPORT.md`, and this audit. These are proposals, not instructions already released to users.
+- [PR #72](https://github.com/joaogerd/simpleWorkflow/pull/72), merged into `develop` at `61017f6c`: `CONTRIBUTING.md`, `SUPPORT.md`, `README.md`, this audit, and an [AI-assistance log](ai-usage-audit.md). They are not yet part of stable `main`.
 - The pre-existing [PR #70](https://github.com/joaogerd/simpleWorkflow/pull/70) (draft; base `main`) contains `paper/paper.md`, `paper/paper.bib`, and `paper/JOSS_READINESS.md`. Revise and reconcile it after technical work; do not create a second conflicting paper.
+- [PR #73](https://github.com/joaogerd/simpleWorkflow/pull/73), merged into `develop` at `de229c2f`: a deterministic and scheduler-free [scientific software demonstration](../examples/reproducible-study/README.md), YAML DAG, source-code input signatures, isolated test fixture and end-to-end regression test. Automated review found two issues before merge; both were corrected and the discussions resolved.
 - No changes made to `main`, scheduler-specific runtime behavior or the SQLite schema in this audit.
 
 ## E. Testing baseline and validation boundaries
@@ -82,6 +83,14 @@ The exact PR #71 head commit `cf915d118cdbfd8edb1155cc601faeab6f3aa8f2` passed a
 
 These are independently executed CI results retrieved from completed job logs, not local claims or a scientific compute benchmark. PR #71 was reviewed against its diff and merged into `develop` as `14b2c3cc7383e774741544ce939fdd591232d27d`. This commit has not been promoted to stable `main`.
 
+### Verified independently reproducible example
+
+[PR #73](https://github.com/joaogerd/simpleWorkflow/pull/73) passed all five GitHub Actions jobs on the corrected head commit `979081784d0ed4a3b990f20a638149d1621cde3c`: **311 passed** on Python 3.10, 3.11 and 3.12, with **84.05% measured total coverage** in each environment. [CI run](https://github.com/joaogerd/simpleWorkflow/actions/runs/42234276681).
+
+The new `examples/reproducible-study/` uses only the standard library, explicitly declares `pipeline.py` as a required input for each task, generates deterministic synthetic monthly temperatures, computes anomalies and an ordinary least-squares trend, and tests that modifying the scientific implementation invalidates previous reusable results. Its integration test isolates generated `data/` and `.simpleworkflow/` directories. Automated review identified these two issues, and they were corrected before merge.
+
+**Scope limitation:** the existing `examples/monan_jedi_3dvar.yaml` and `examples/smna_gsi_bam.yaml` refer to external institutional scripts/configuration that are not bundled here; they document integration patterns but are not independently executable scientific demonstrations. The new synthetic case provides independent **software** reproducibility, not evidence of external research adoption and not the larger failure/restart/cycle validation still planned for study A.
+
 ### Direct-import architecture inventory
 
 A static scan of top-level relative imports in the 23 Python modules of the `develop` package identified no direct import cycle in the observed dependency list. The greatest direct importer is `engine.py` (10 dependencies: artifacts, console, executor, lifecycle, locking, pbs, provenance, runs, signature, state), followed by `cli.py` (6), `tui.py` (5) and `monitor.py` (3). This is evidence that coarse module boundaries are presently acyclic; it does **not** prove dependency inversion, dynamic imports, full SoC compliance or all functional paths. `engine.py` and `tui.py` deserve focused cohesion review, not arbitrary splitting.
@@ -98,7 +107,7 @@ A static scan of top-level relative imports in the 23 Python modules of the `dev
 | Sustained public development across >=6 months | **Not demonstrated** | Repo created Jan 2024, but main history has 2 Jan-2024 commits, 47 Jun-2026, 257 Sep-2026 and 56 Oct-2026 commits; July/Aug 2026 have no commits on this sampled main history. A repo age is not sustained activity |
 | Research use / demonstrated impact | **Not verifiable** | Atmospheric modeling examples and design motivation exist; reproducible research use, artifacts, adopter feedback or publications must be collected |
 | Generic scientific usefulness and scope | **Partially met** | Domain-neutral YAML engine; explicit reuse case and why not use Nextflow/Snakemake/ecFlow/Cylc still needed |
-| CONTRIBUTING and support | **Not met on audited refs** | Proposed files in documentation branch, merge/readme links pending |
+| CONTRIBUTING and support | **Partially met** | Both added and linked on `develop` in merged PR #72; stable `main` awaits release promotion |
 | Release and long-term archive | **Partially met** | Tagged release `v0.6.1` visible; `main` code version 0.6.2 but release publication and DOI not verified |
 | JOSS-format paper and bibliography | **Partially met** | Draft PR #70; full reference verification, build and review pending |
 | Research impact statement | **Partially met** | Section present as provisional text; evidence incomplete |
