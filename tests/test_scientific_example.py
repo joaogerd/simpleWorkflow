@@ -44,4 +44,16 @@ def test_synthetic_series_workflow_runs_and_reuses(tmp_path: Path) -> None:
     before = summary_path.read_bytes()
     assert main(["run", str(workflow), "--ui", "plain", "--color", "never"]) == 0
     assert summary_path.read_bytes() == before
+
+    # A changed scientific implementation must invalidate reuse, even when the
+    # executable (Python) and the existing data products are unchanged.
+    script_path = example / "pipeline.py"
+    script = script_path.read_text(encoding="utf-8")
+    assert "0.015 * index" in script
+    script_path.write_text(
+        script.replace("0.015 * index", "0.025 * index"),
+        encoding="utf-8",
+    )
+    assert main(["run", str(workflow), "--ui", "plain", "--color", "never"]) == 0
+    assert summary_path.read_bytes() != before
     assert main(["status", str(workflow), "--color", "never"]) == 0
