@@ -60,6 +60,15 @@ python -m pip install -e ".[dev]"
 A Python virtual environment is recommended. The complete beginner installation
 guide is available in `docs/tutorial/install.html`.
 
+## Reproducible scientific demonstration
+
+For a fully local, deterministic scientific workflow (synthetic monthly
+temperature series, monthly anomalies and trend estimate), see
+[the portable scientific example](examples/reproducible-study/README.md).
+It uses only Python's standard library, declares required outputs and is
+exercised end-to-end in the test suite. It is a software verification case,
+not a claim of scientific adoption or measured climate observations.
+
 ## Quick start
 
 ```bash
