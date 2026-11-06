@@ -12,7 +12,7 @@ simpleWorkflow is already a nontrivial scientific workflow runner: Python packag
 
 The main risk is **scientific/editorial evidence**, followed by compatibility-sensitive contract semantics. The tool is intentionally smaller than server-based workflow orchestrators. It does **not** provide a native SLURM backend, distributed execution, or a daemon. Do not advertise these.
 
-Historical GitHub Actions show successful test jobs on `develop` (13 October 2026). This is evidence of CI execution, not proof of a real PBS cluster run or complete portability. The development branch is 127 commits ahead of `main`; it must be audited independently rather than presumed equivalent to stable code.
+Historical GitHub Actions show successful test jobs on `develop` (13 October 2026). This is evidence of CI execution, not proof of a real PBS cluster run or complete portability. As of 6 November 2026, a GitHub API sample covering all 74 visible issue/PR records (24 issues and 50 PRs) showed their opening author as `joaogerd`. This does not rule out external comments or off-platform use, but no independent issue/PR author was evidenced in that sample. The development branch is 127 commits ahead of `main`; it must be audited independently rather than presumed equivalent to stable code.
 
 ## B. Architecture and separation of concerns
 
@@ -103,7 +103,7 @@ A static scan of top-level relative imports in the 23 Python modules of the `dev
 | OSI-approved LICENSE file | **Met** | MIT `LICENSE` in repo |
 | Installation/package infrastructure | **Partially met** | pyproject + CI build; independent install still required |
 | CI, tests and documented functionality | **Partially met** | Extensive tests and green CI snapshots; real-cluster and end-to-end audit pending |
-| Open development workflows | **Partially met** | Many PRs/issues; core contributor largely single account and public community feedback unclear |
+| Open development workflows | **Partially met** | 24 issues and 50 PRs sampled, all created by `joaogerd`; external feedback/adoption remains unverified |
 | Sustained public development across >=6 months | **Not demonstrated** | Repo created Jan 2024, but main history has 2 Jan-2024 commits, 47 Jun-2026, 257 Sep-2026 and 56 Oct-2026 commits; July/Aug 2026 have no commits on this sampled main history. A repo age is not sustained activity |
 | Research use / demonstrated impact | **Not verifiable** | Atmospheric modeling examples and design motivation exist; reproducible research use, artifacts, adopter feedback or publications must be collected |
 | Generic scientific usefulness and scope | **Partially met** | Domain-neutral YAML engine; explicit reuse case and why not use Nextflow/Snakemake/ecFlow/Cylc still needed |
