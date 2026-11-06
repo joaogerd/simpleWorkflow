@@ -68,6 +68,24 @@ Needed evidence before a release:
 6. Verify read-only TUI, narrow terminals, crash/restart and provenance consistency.
 7. Publish exact commands, environment/commit SHA, results and failure reports. Never claim HPC validation unless independently executed.
 
+### Verified CI outcomes for the audit change (6 November 2026)
+
+The exact PR #71 head commit `cf915d118cdbfd8edb1155cc601faeab6f3aa8f2` passed all five jobs on [GitHub Actions PR run 42230804864](https://github.com/joaogerd/simpleWorkflow/actions/runs/42230804864):
+
+| Environment | Result | Measured total coverage |
+|---|---|---|
+| Python 3.10 | 310 passed | 84.05% |
+| Python 3.11 | 310 passed | 84.05% |
+| Python 3.12 | 310 passed | 84.02% |
+| Quality checks | Ruff and mypy passed | mypy: no issues in 24 source files |
+| Packaging | Wheel, sdist, isolated core/TUI installation and render smoke tests passed | Not a real HPC scheduler test |
+
+These are independently executed CI results retrieved from completed job logs, not local claims or a scientific compute benchmark. The PR remains draft/unmerged until review and integration decision.
+
+### Direct-import architecture inventory
+
+A static scan of top-level relative imports in the 23 Python modules of the `develop` package identified no direct import cycle in the observed dependency list. The greatest direct importer is `engine.py` (10 dependencies: artifacts, console, executor, lifecycle, locking, pbs, provenance, runs, signature, state), followed by `cli.py` (6), `tui.py` (5) and `monitor.py` (3). This is evidence that coarse module boundaries are presently acyclic; it does **not** prove dependency inversion, dynamic imports, full SoC compliance or all functional paths. `engine.py` and `tui.py` deserve focused cohesion review, not arbitrary splitting.
+
 ## F. JOSS readiness matrix
 
 | Criterion | Rating | Evidence and needed action |
