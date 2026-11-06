@@ -13,7 +13,11 @@ from simpleworkflow.cli import main
 def test_synthetic_series_workflow_runs_and_reuses(tmp_path: Path) -> None:
     source = Path(__file__).resolve().parents[1] / "examples" / "reproducible-study"
     example = tmp_path / "reproducible-study"
-    shutil.copytree(source, example)
+    shutil.copytree(
+        source,
+        example,
+        ignore=shutil.ignore_patterns(".simpleworkflow", "data"),
+    )
     workflow = example / "workflow.yaml"
 
     assert main(["plan", str(workflow), "--color", "never"]) == 0
