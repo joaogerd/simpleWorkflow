@@ -10,6 +10,8 @@ tasks:
   - name: generate_synthetic_series
     cwd: "."
     argv: ["{python}", "pipeline.py", "generate", "--output", "data/monthly_temperature.csv"]
+    inputs:
+      required: ["pipeline.py"]
     outputs:
       required: ["data/monthly_temperature.csv"]
       checks:
@@ -22,7 +24,7 @@ tasks:
     argv: ["{python}", "pipeline.py", "anomalies", "--input", "data/monthly_temperature.csv", "--output", "data/monthly_anomalies.csv"]
     depends_on: [generate_synthetic_series]
     inputs:
-      required: ["data/monthly_temperature.csv"]
+      required: ["pipeline.py", "data/monthly_temperature.csv"]
     outputs:
       required: ["data/monthly_anomalies.csv"]
       checks:
@@ -35,7 +37,7 @@ tasks:
     argv: ["{python}", "pipeline.py", "summary", "--input", "data/monthly_anomalies.csv", "--output", "data/trend_summary.json"]
     depends_on: [compute_monthly_anomalies]
     inputs:
-      required: ["data/monthly_anomalies.csv"]
+      required: ["pipeline.py", "data/monthly_anomalies.csv"]
     outputs:
       required: ["data/trend_summary.json"]
       checks:
