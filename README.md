@@ -333,3 +333,11 @@ by new workflows. See [legacy notes](docs/legacy.md).
 ## License
 
 This project is licensed under the MIT License.
+
+## Contributing, support and publication readiness
+
+Contributions and bug reports are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md)
+for the development and review workflow and [SUPPORT.md](SUPPORT.md) for reporting
+guidance. An evidence-based [JOSS readiness audit](docs/joss-readiness-audit-2026-11.md)
+tracks technical work, open risks, editorial requirements and a conditional submission plan.
+This is a working audit, not a claim of journal eligibility.
