@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .templates import render_template
+
 
 @dataclass(frozen=True)
 class ResolvedArtifacts:
@@ -52,8 +54,14 @@ class OutputCheck:
     min_size: int | None = None
 
 
-def _render_path(value: str, context: dict[str, Any], source_dir: Path) -> Path:
-    rendered = Path(value.format(**context))
+def _render_path(
+    value: str,
+    context: dict[str, Any],
+    source_dir: Path,
+    *,
+    location: str,
+) -> Path:
+    rendered = Path(render_template(value, context, location=location))
     path = rendered if rendered.is_absolute() else source_dir / rendered
     return path.resolve(strict=False)
 
@@ -73,7 +81,7 @@ def _resolve_optional_paths(
 ) -> tuple[Path, ...]:
     matches: list[Path] = []
     for pattern in patterns:
-        rendered = pattern.format(**context)
+        rendered = render_template(pattern, context, location="inputs.optional")
         candidate = Path(rendered)
         full_pattern = candidate if candidate.is_absolute() else source_dir / candidate
         matches.extend(
@@ -90,20 +98,30 @@ def resolve_task_artifacts(
     inputs = task.get("inputs", {})
     outputs = task.get("outputs", {})
 
+    name = str(task.get("name", "<unnamed>"))
     required_inputs = tuple(
-        _render_path(value, context, source_dir)
+        _render_path(
+            value, context, source_dir, location=f"Task '{name}' inputs.required"
+        )
         for value in inputs.get("required", [])
     )
     optional_inputs = _resolve_optional_paths(
         inputs.get("optional", []), context, source_dir
     )
     required_outputs = tuple(
-        _render_path(value, context, source_dir)
+        _render_path(
+            value, context, source_dir, location=f"Task '{name}' outputs.required"
+        )
         for value in outputs.get("required", [])
     )
     output_checks = tuple(
         OutputCheck(
-            path=_render_path(check["path"], context, source_dir),
+            path=_render_path(
+                check["path"],
+                context,
+                source_dir,
+                location=f"Task '{name}' outputs.checks",
+            ),
             kind=check.get("kind", "any"),
             nonempty=check.get("nonempty", False),
             min_size=check.get("min_size"),
