@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sqlite3
 import sys
 import traceback
 from collections.abc import Iterable
@@ -636,7 +637,7 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
         return 130
-    except (FileNotFoundError, ValueError, RuntimeError, MigrationError) as error:
+    except (OSError, sqlite3.Error, ValueError, RuntimeError, MigrationError) as error:
         if debug:
             traceback.print_exc()
         else:
