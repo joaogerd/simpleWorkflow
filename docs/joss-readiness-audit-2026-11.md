@@ -164,6 +164,8 @@ Times are *planning estimates*, not measured work durations. W1 starts Monday 9 
 
 The DOI should be coordinated with the actual release/version and JOSS archival step; do not cite a nonexistent DOI.
 
+**AI provenance for this audit:** See [the AI assistance audit trail](ai-usage-audit.md) for the 6 November 2026 GPT-6 use in source changes, regression tests and documentation, CI evidence, and the explicitly pending human review. Do not assume earlier software development was free of AI assistance.
+
 ## J. Next actions by responsibility
 
 **Automatable now:** CI regression triage, static dependency scans, regression-test additions, source/docs consistency review, reference metadata verification, paper-format checks, release-package smoke tests, and reproducibility artifact capture.
