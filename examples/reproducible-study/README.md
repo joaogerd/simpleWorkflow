@@ -30,10 +30,11 @@ linear trend to those anomalies. Its products appear under
 - `monthly_anomalies.csv`: anomalies about each calendar-month climatology.
 - `trend_summary.json`: sample size, trend estimate and residual RMS.
 
-Every task declares its required inputs and outputs and validates that output
-files exist and are nonempty. Running the same workflow again with identical
-inputs demonstrates the conservative reuse path; changing inputs or applying
-`--force` tests rerun behavior. Runtime logs, attempt provenance and state
+Every task declares its required inputs and outputs, including `pipeline.py`
+as an implementation input, and validates that output files exist and are
+nonempty. Running the same workflow again with identical inputs demonstrates
+the conservative reuse path; changing the script or data (or applying `--force`)
+invalidates reuse and exercises rerun behavior. Runtime logs, attempt provenance and state
 are stored in `.simpleworkflow/` next to the workflow definition by default.
 
 The workflow explicitly sets `cwd: "."` so that its relative commands are
