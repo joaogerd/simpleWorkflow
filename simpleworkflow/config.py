@@ -296,8 +296,11 @@ def load_workflow(path: str | Path) -> dict[str, Any]:
     if not workflow_path.exists():
         raise FileNotFoundError(f"Workflow file not found: {workflow_path}")
 
-    with workflow_path.open("r", encoding="utf-8") as stream:
-        data = yaml.safe_load(stream) or {}
+    try:
+        with workflow_path.open("r", encoding="utf-8") as stream:
+            data = yaml.safe_load(stream) or {}
+    except yaml.YAMLError as error:
+        raise ValueError(f"Invalid YAML in {workflow_path}: {error}") from error
     if not isinstance(data, dict):
         raise ValueError("Workflow file must contain a YAML mapping at the top level.")
 
@@ -308,7 +311,7 @@ def load_workflow(path: str | Path) -> dict[str, Any]:
     )
     # Files created before versioning are interpreted as version 1 for compatibility.
     version = data.get("format_version", WORKFLOW_FORMAT_VERSION)
-    if version != WORKFLOW_FORMAT_VERSION:
+    if type(version) is not int or version != WORKFLOW_FORMAT_VERSION:
         raise ValueError(
             f"'format_version' must be {WORKFLOW_FORMAT_VERSION}; received {version!r}."
         )
