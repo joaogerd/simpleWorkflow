@@ -28,7 +28,7 @@ simpleWorkflow targets researchers who want explicit task dependencies and inspe
 
 # State of the field
 
-Established workflow engines address broader requirements. Cylc supports cycling workflows and long-running orchestration in operational and research environments [@oliver2018cylc]. Other systems, such as Snakemake [@molder2021snakemake], focus on scalable and reproducible data-analysis workflows with rich scheduling and execution capabilities. These are valuable choices when a scientific project needs their broader ecosystems, scheduling capabilities, or advanced workflow semantics.
+Established workflow engines address broader requirements. Cylc supports recurring workflows, cross-cycle dependencies and long-running orchestration in operational and research environments [@oliver2018cylc]. The ecFlow client/server architecture manages interdependent tasks and recovery in production suites [@ecflowDocumentation]. Snakemake emphasizes reproducible rule-based analysis with rich dependency semantics [@molder2021snakemake], Nextflow offers a dataflow model with portable execution backends [@ditommaso2017nextflow], and Parsl supports scalable Python-defined parallel computations [@babuji2019parsl]. These systems should be preferred when a project requires their parallelism, ecosystem, long-running operation or deployment flexibility.
 
 simpleWorkflow makes a narrower design trade-off: it manages one logical workflow instance through a local state directory, runs dependency-ordered tasks sequentially, and avoids a daemon, distributed controller, or generalized event service. The motivation for building a separate tool is not to replace established engines but to provide a small and inspectable execution model for research cases where maintaining a larger orchestration system would be unnecessary. This scope should not be mistaken for feature or performance superiority over existing systems.
 
@@ -48,7 +48,7 @@ For the final submission, this statement will be supplemented with a public, rep
 
 # AI usage disclosure
 
-Generative AI assistance was used to prepare an initial draft of this manuscript. The author is responsible for checking technical descriptions against the source code, validating references, and revising the text prior to submission. The extent of AI assistance used during software development and documentation, and the associated human verification procedures, must be reviewed and documented accurately before submission.
+Generative AI assistance was used in preparing this manuscript draft, and OpenAI ChatGPT (GPT-6) was used on 6 November 2026 for repository inspection, source refactoring, test scaffolding and technical documentation; a working audit trail records the precise files and automated verification in the development branch. The code changes were tested in CI across Python 3.10–3.12. Before submission, the human author(s) must independently review and validate all AI-assisted material, document any additional historic AI use, verify the bibliography and certify that the scientific framing and architectural decisions are theirs. This disclosure is provisional until those human checks are complete.
 
 # Acknowledgements
 
