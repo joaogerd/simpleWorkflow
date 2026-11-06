@@ -28,7 +28,7 @@ Historical GitHub Actions show successful test jobs on `develop` (13 October 202
 
 Indicative size on `develop`: `engine.py` ~867 lines, `state.py` ~953, `monitor.py` ~740, `cli.py` ~650 and `tui.py` ~2034. Large modules require targeted responsibility analysis, not automatic rewrites. A dependency-graph scan and critical-path tests remain necessary before declaring full architectural compliance.
 
-The focused proposed fix in [PR #71](https://github.com/joaogerd/simpleWorkflow/pull/71) introduces an infrastructure-neutral template renderer shared by orchestration and artifact handling, preserving `engine.render_template` as a compatibility alias. This is a *draft* against `develop`, not a released correction.
+The focused proposed fix in [PR #71](https://github.com/joaogerd/simpleWorkflow/pull/71) introduces an infrastructure-neutral template renderer shared by orchestration and artifact handling, preserving `engine.render_template` as a compatibility alias. This change was merged into `develop` as commit `14b2c3cc7383e774741544ce939fdd591232d27d` after green CI; it has not yet been promoted to stable `main`.
 
 ## C. Audited issues and disposition
 
@@ -49,7 +49,7 @@ The focused proposed fix in [PR #71](https://github.com/joaogerd/simpleWorkflow/
 
 ## D. Changes actually made during this audit
 
-- [PR #71](https://github.com/joaogerd/simpleWorkflow/pull/71) (draft; base `develop`): `templates.py`, `engine.py`, `artifacts.py`, `config.py`, `cli.py`, and `tests/test_config_error_boundary.py`. Do not call this merged or validated until workflow checks complete.
+- [PR #71](https://github.com/joaogerd/simpleWorkflow/pull/71) (merged into `develop`; not in stable `main`): `templates.py`, `engine.py`, `artifacts.py`, `config.py`, `cli.py`, and `tests/test_config_error_boundary.py`. Do not call this merged or validated until workflow checks complete.
 - Documentation branch: `CONTRIBUTING.md`, `SUPPORT.md`, and this audit. These are proposals, not instructions already released to users.
 - The pre-existing [PR #70](https://github.com/joaogerd/simpleWorkflow/pull/70) (draft; base `main`) contains `paper/paper.md`, `paper/paper.bib`, and `paper/JOSS_READINESS.md`. Revise and reconcile it after technical work; do not create a second conflicting paper.
 - No changes made to `main`, scheduler-specific runtime behavior or the SQLite schema in this audit.
@@ -80,7 +80,7 @@ The exact PR #71 head commit `cf915d118cdbfd8edb1155cc601faeab6f3aa8f2` passed a
 | Quality checks | Ruff and mypy passed | mypy: no issues in 24 source files |
 | Packaging | Wheel, sdist, isolated core/TUI installation and render smoke tests passed | Not a real HPC scheduler test |
 
-These are independently executed CI results retrieved from completed job logs, not local claims or a scientific compute benchmark. The PR remains draft/unmerged until review and integration decision.
+These are independently executed CI results retrieved from completed job logs, not local claims or a scientific compute benchmark. PR #71 was reviewed against its diff and merged into `develop` as `14b2c3cc7383e774741544ce939fdd591232d27d`. This commit has not been promoted to stable `main`.
 
 ### Direct-import architecture inventory
 
