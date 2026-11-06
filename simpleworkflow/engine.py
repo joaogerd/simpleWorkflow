@@ -31,22 +31,12 @@ from .signature import (
     legacy_signature_compatible,
 )
 from .state import WorkflowState
+from .templates import render_template
 
 INVALID_INPUT_EXIT_CODE = 2
 INVALID_OUTPUT_EXIT_CODE = 3
 BLOCKED_EXIT_CODE = 4
 UNKNOWN_EXIT_CODE = 5
-
-
-def render_template(text: str, context: dict[str, Any]) -> str:
-    """Render one string from the workflow context with a useful error."""
-    try:
-        return text.format(**context)
-    except KeyError as error:
-        missing = error.args[0]
-        raise ValueError(f"Unknown context placeholder {{{missing}}} in {text!r}.") from error
-    except ValueError as error:
-        raise ValueError(f"Invalid context template {text!r}: {error}") from error
 
 
 def render_argv(argv: list[str], context: dict[str, Any]) -> list[str]:
