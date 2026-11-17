@@ -251,7 +251,11 @@ def test_tui_shows_initialization_in_existing_workflow_group(tmp_path: Path) -> 
             await pilot.pause()
             assert "bootstrap" in app.task_order
             assert "bootstrap" in app.task_map
-            assert (None, "bootstrap") not in app.task_nodes
+            assert (None, "bootstrap") in app.task_nodes
+            assert ("initialization", None, "Inicialização") in app.task_group_nodes
+            assert app.task_nodes[(None, "bootstrap")].parent is app.task_group_nodes[
+                ("initialization", None, "Inicialização")
+            ]
             assert ("c06", "analysis") in app.task_nodes
             assert [task.name for task in app.snapshot.tasks] == ["bootstrap"]
 
