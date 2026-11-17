@@ -845,14 +845,7 @@ class WorkflowTui(App[None]):
                 )
                 for cycle in self.snapshot.cycles
             ),
-            tuple(
-                task_signature(task)
-                for task in self.snapshot.tasks
-                if not (
-                    self.snapshot.cycles
-                    and task.name in self.initialization_task_names
-                )
-            ),
+            tuple(task_signature(task) for task in self.snapshot.tasks),
         )
 
     def _refresh_tree_labels(self) -> None:
@@ -904,6 +897,34 @@ class WorkflowTui(App[None]):
                                 color=self.color_enabled,
                             )
                         )
+
+            initialization_entries = [
+                task for task in self.snapshot.tasks
+                if task.name in self.initialization_task_names
+            ]
+            for task in initialization_entries:
+                node = self.task_nodes.get((None, task.name))
+                if node is not None:
+                    node.set_label(
+                        _tree_status_text(
+                            task.status,
+                            _task_label(task.name),
+                            color=self.color_enabled,
+                        )
+                    )
+            initialization_node = self.task_group_nodes.get(
+                ("initialization", None, "Inicialização")
+            )
+            if initialization_node is not None and initialization_entries:
+                initialization_node.set_label(
+                    _tree_status_text(
+                        self._aggregate_status(
+                            [task.status for task in initialization_entries]
+                        ),
+                        "Inicialização",
+                        color=self.color_enabled,
+                    )
+                )
 
             for task in self.snapshot.tasks:
                 if task.name in self.initialization_task_names:
@@ -1013,6 +1034,39 @@ class WorkflowTui(App[None]):
                             data=(cycle.cycle_id, task.name),
                         )
                         self.task_nodes[(cycle.cycle_id, task.name)] = leaf
+
+            initialization_entries = [
+                task for task in self.snapshot.tasks
+                if task.name in self.initialization_task_names
+            ]
+            initialization_visible = [
+                task for task in initialization_entries
+                if self._task_matches_filter(task, None)
+            ]
+            if initialization_visible:
+                initialization_node = tree.root.add(
+                    _tree_status_text(
+                        self._aggregate_status(
+                            [task.status for task in initialization_entries]
+                        ),
+                        "Inicialização",
+                        color=self.color_enabled,
+                    ),
+                    expand=True,
+                )
+                self.task_group_nodes[
+                    ("initialization", None, "Inicialização")
+                ] = initialization_node
+                for task in initialization_visible:
+                    leaf = initialization_node.add_leaf(
+                        _tree_status_text(
+                            task.status,
+                            _task_label(task.name),
+                            color=self.color_enabled,
+                        ),
+                        data=(None, task.name),
+                    )
+                    self.task_nodes[(None, task.name)] = leaf
 
             workflow_entries.extend(
                 (task, None, _task_label(task.name))
